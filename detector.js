@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v28.3-sample-area-fixed';
+  const VERSION = 'v28.4-outer-geometry-priority';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -157,10 +157,15 @@
       const fill = Math.min(1, area / rectArea);
       const areaRatio = rectArea / imgArea;
       // 注意：edge-contour 的 contourArea 可能很小，所以面積用 rectArea，避免黑背景時 no-candidate。
-      if (areaRatio >= options.minAreaRatio*0.45 && areaRatio <= 0.72 && ratio >= options.ratioMin*0.82 && ratio <= options.ratioMax*1.22 && fill > 0.045) {
+      const edgeLike = method.includes('edge');
+      const minFill = edgeLike ? 0.010 : 0.045;
+      const methodAreaRelax = edgeLike ? 0.30 : 0.45;
+      if (areaRatio >= options.minAreaRatio*methodAreaRelax && areaRatio <= 0.72 && ratio >= options.ratioMin*0.82 && ratio <= options.ratioMax*1.22 && fill > minFill) {
         const pts = rectPointsToArray(rect);
         const centerPenalty = Math.min(1, Math.hypot(rect.center.x, rect.center.y) / 999999); // 不強迫在中心
-        const score = rectArea * (0.45 + fill) * (1.25 - centerPenalty) * (method.includes('white') ? 1.25 : 1.0);
+        const edgeBonus = edgeLike ? 1.45 : 1.0;
+        const whiteBonus = method.includes('white') ? 1.25 : 1.0;
+        const score = rectArea * (0.45 + fill) * (1.25 - centerPenalty) * whiteBonus * edgeBonus;
         out.push({ method, rect, pts, ratio, fill, areaRatio, rectArea, area, score });
       }
       cnt.delete();
@@ -443,6 +448,65 @@
     return finalF;
   }
 
+
+function outerGeometryScore(c, imgArea)
+{
+    const areaRatio = c.rectArea / Math.max(1, imgArea);
+
+    // 快篩卡匣在照片中通常不會只佔 2~3%。
+    // 這裡不是硬性刪除，而是讓真正完整外框優先。
+    let areaScore = 0;
+    if(areaRatio < 0.035)
+        areaScore = 0.02;
+    else if(areaRatio < 0.055)
+        areaScore = 0.22;
+    else if(areaRatio < 0.10)
+        areaScore = 0.58;
+    else if(areaRatio < 0.28)
+        areaScore = 1.00;
+    else if(areaRatio < 0.45)
+        areaScore = 0.72;
+    else
+        areaScore = 0.35;
+
+    const ratioScore =
+        1 - Math.min(
+            1,
+            Math.abs(c.ratio - 3.6) / 2.9
+        );
+
+    const fillTarget = c.method.includes('edge') ? 0.22 : 0.50;
+    const fillScore =
+        1 - Math.min(
+            1,
+            Math.abs(c.fill - fillTarget) / Math.max(0.18, fillTarget)
+        );
+
+    const methodBonus =
+        c.method.includes('edge') ? 1400 :
+        c.method.includes('white') ? 900 :
+        450;
+
+    const smallPenalty =
+        areaRatio < 0.050 ? 2400 : 0;
+
+    const score =
+        areaScore * 5200 +
+        ratioScore * 1700 +
+        fillScore * 850 +
+        methodBonus -
+        smallPenalty;
+
+    return {
+        score: Math.max(0, score),
+        areaScore,
+        ratioScore,
+        fillScore,
+        methodBonus,
+        smallPenalty
+    };
+}
+
 function candidateFeatureScore(srcCanvas, cand)
 {
     const tmp =
@@ -471,7 +535,7 @@ function candidateFeatureScore(srcCanvas, cand)
             !!f.sample;
 
         if(hasWindow)
-            score += 3000;
+            score += 2200;
 
         const realSample =
             hasSample &&
@@ -481,7 +545,7 @@ function candidateFeatureScore(srcCanvas, cand)
         if(realSample)
             score += 5000;
         else if(hasSample)
-            score += 600;
+            score += 0;
 
         let align = 0;
 
@@ -504,8 +568,9 @@ function candidateFeatureScore(srcCanvas, cand)
                     dx / (tmp.width * 0.35)
                 );
 
-            score +=
-                align * 1000;
+            // fallback 的 S Well 只是猜測，不可以靠 align 加分騙過外框。
+            if(realSample)
+                score += align * 900;
         }
 
         return {
@@ -534,14 +599,19 @@ function candidateFeatureScore(srcCanvas, cand)
     const scored=[];
     for(const c of rawCands.slice(0,8)){
       const fs=candidateFeatureScore(canvas,c);
-      const ratioScore = 1 - Math.min(1, Math.abs(c.ratio-3.4)/3.4);
+      const geo=outerGeometryScore(c,imgArea);
+      const hasRealSample = fs.f && fs.f.sample && fs.f.sample.source && !fs.f.sample.source.includes('fallback');
+      const noRealSamplePenalty = hasRealSample ? 0 : 900;
+      c.outerScore=geo.score;
+      c.outerDetail=geo;
       c.totalScore =
-      fs.score
-    + ratioScore * 100
-    + c.fill * 100;
+        geo.score +
+        fs.score -
+        noRealSamplePenalty;
       c.featureScore=fs.score;
       c.featureDetail=fs.f;
       c.featureAlign=fs.align;
+      c.noRealSamplePenalty=noRealSamplePenalty;
       scored.push(c);
     }
     scored.sort((a,b)=>b.totalScore-a.totalScore);
@@ -578,7 +648,9 @@ scored.forEach((c,i)=>
     `#${i+1}<br>
     Method=${c.method}<br>
     Candidate Score=${Math.round(c.totalScore)}<br>
+    Outer Score=${Math.round(c.outerScore||0)}<br>
     Feature Score=${Math.round(c.featureScore||0)}<br>
+    No Real S Penalty=${Math.round(c.noRealSamplePenalty||0)}<br>
     Window Score=${win ? 3000 : 0} / Source=${win ? win.source : '-'}<br>
     S Well Score=${realSample ? 5000 : (sample ? 600 : 0)} / Source=${sample ? sample.source : '-'}<br>
     Align Score=${Math.round((c.featureAlign||0)*1000)}<br>

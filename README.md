@@ -1,10 +1,12 @@
-# ASAP Check v28.3
+# ASAP Check v28.4
 
-- 修正 OpenCV.js `cv.inRange()` 在部分版本會出現 BindingError 的問題。
-- `app.js` 加入 try/catch，避免 OpenCV 例外造成整個分析停止。
-- S Well 偵測改為只在 Window 下方、同一中線附近搜尋。
-- 提高 circularity / fill 條件，避免把 C/T/S 文字或陰影當成 S Well。
-- Debug 顯示 Gray / White Mask / Edge / Bright Foreground。
-- Candidate Debug 顯示 Window Score、S Well Score、Align Score 與 Sample Candidates。
+本版修正外框候選排序：
 
-版本：v28.3-sample-area-fixed
+- 外框幾何分數提高權重
+- Edge-contour 完整長方形候選加分
+- 面積過小候選扣分
+- fallback S Well 不再加分
+- 沒有真正 S Well 時會扣分
+- Debug 顯示 Outer Score / Feature Score / Penalty
+
+版本：v28.4-outer-geometry-priority
