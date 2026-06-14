@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v7-autocrop-rotate';
+  const VERSION = 'v8-autocrop-rotate-limit5';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
 
@@ -115,7 +115,13 @@
     // 主軸若接近水平，轉成垂直方向角度
     if (Math.abs(Math.cos(angle)) > Math.abs(Math.sin(angle))) angle += Math.PI / 2;
     const deg = angle * 180 / Math.PI;
-    const rotateDeg = clamp(deg - 90, -25, 25);
+    let rotateDeg = clamp(deg - 90, -25, 25);
+
+    // v8 修正：自動旋轉不要太積極。
+    // 只允許 ±5° 以內的小角度校正；超過代表判斷可能被背景干擾，直接不旋轉。
+    if (Math.abs(rotateDeg) > 5) {
+      rotateDeg = 0;
+    }
 
     const padX = Math.round((maxX - minX) * 0.09);
     const padY = Math.round((maxY - minY) * 0.06);

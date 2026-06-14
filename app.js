@@ -24,7 +24,7 @@
   let lastImage = null;
 
   function unlock() {
-    if (passInput.value === ACCESS_CODE) {
+    if (passInput.value.trim() === ACCESS_CODE) {
       sessionStorage.setItem('asap_access', '1');
       lockPanel.classList.add('hidden');
       mainPanel.classList.remove('hidden');
