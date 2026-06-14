@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v30.0-internal-roi-debug';
+  const VERSION = 'v30.1-roi-only-view';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }

@@ -1,10 +1,5 @@
-# ASAP Check v30.0
+# ASAP Check v30.1
 
-- 外框流程沿用 v29.3 穩定版
-- 新增內部 ROI Debug
-- Window / 試紙區候選清單
-- S Well 候選清單
-- ROI Metrics: align / yGap / windowAboveS
-- 畫面顯示 Window search 與 S search 範圍
-
-版本：v30.0-internal-roi-debug
+- 基於 v30.0 內部 ROI Debug
+- 新增 ROI Only Canvas
+- ROI Only 只顯示外框、Window、S Well，移除其他卡匣內容干擾

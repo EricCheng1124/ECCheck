@@ -14,6 +14,7 @@
   const galleryInput = document.getElementById('galleryInput');
   const canvas = document.getElementById('canvas');
   const cropCanvas = document.getElementById('cropCanvas');
+  const roiCanvas = document.getElementById('roiCanvas');
   const resultEl = document.getElementById('result');
   const detailEl = document.getElementById('detail');
   const debugGray=document.getElementById('debugGray');
@@ -156,6 +157,65 @@
     }
   }
 
+
+  function clearRoiOnlyView() {
+    if (!roiCanvas) return;
+    const ctx = roiCanvas.getContext('2d');
+    roiCanvas.width = Math.max(1, cropCanvas && cropCanvas.width ? cropCanvas.width : 1);
+    roiCanvas.height = Math.max(1, cropCanvas && cropCanvas.height ? cropCanvas.height : 1);
+    ctx.clearRect(0, 0, roiCanvas.width, roiCanvas.height);
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, roiCanvas.width, roiCanvas.height);
+  }
+
+  function renderRoiOnlyView(r) {
+    if (!roiCanvas || !cropCanvas || !cropCanvas.width || !cropCanvas.height) return;
+
+    roiCanvas.width = cropCanvas.width;
+    roiCanvas.height = cropCanvas.height;
+
+    const ctx = roiCanvas.getContext('2d');
+    const W = roiCanvas.width;
+    const H = roiCanvas.height;
+    const lw = Math.max(2, W / 160);
+
+    ctx.clearRect(0, 0, W, H);
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, W, H);
+
+    // 外框：裁切後的整張卡匣邊界
+    ctx.save();
+    ctx.strokeStyle = 'rgba(34,197,94,0.98)';
+    ctx.lineWidth = Math.max(3, lw + 1);
+    ctx.strokeRect(lw, lw, W - lw * 2, H - lw * 2);
+    ctx.restore();
+
+    const f = r && r.features ? r.features : null;
+    if (!f) return;
+
+    // Window / 試紙區
+    if (f.window) {
+      ctx.save();
+      ctx.strokeStyle = 'rgba(37,99,235,0.98)';
+      ctx.lineWidth = lw;
+      ctx.strokeRect(f.window.x, f.window.y, f.window.w, f.window.h);
+      ctx.restore();
+    }
+
+    // S Well
+    if (f.sample) {
+      const rx = f.sample.rx || f.sample.r || W * 0.16;
+      const ry = f.sample.ry || f.sample.r || W * 0.16;
+      ctx.save();
+      ctx.strokeStyle = 'rgba(168,85,247,0.98)';
+      ctx.lineWidth = lw;
+      ctx.beginPath();
+      ctx.ellipse(f.sample.cx, f.sample.cy, rx, ry, 0, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+
   function formatFeatures(f) {
     if (!f) return '<br>內部特徵：未執行';
     let html = '<hr>';
@@ -186,6 +246,7 @@
     resultEl.className = 'result';
     // v29.3：不管成功或失敗，都先把 detector debug 印出來，避免失敗時 log 消失。
     if (debugText && r && r.debug) { debugText.innerHTML = r.debug; }
+    renderRoiOnlyView(r);
 
     // v29.2 防呆：如果 detector debug 已經顯示 Final Gate PASS，
     // 但 r.ok 因快取或舊邏輯變成 false，UI 仍以 PASS 顯示。
@@ -229,7 +290,7 @@
   }
 
   function analyze() {
-    if (!lastImage) return;
+    if (!lastImage) { clearRoiOnlyView(); return; }
     resizeAndDrawImage(lastImage);
     if (!cvReady) {
       resultEl.className = 'result neutral';
@@ -249,6 +310,7 @@
       detailEl.innerHTML =
         '<b>Exception</b><br>' +
         (ex && ex.message ? ex.message : String(ex));
+      clearRoiOnlyView();
       if (debugText) {
         debugText.innerHTML =
           '<b>Exception</b><br>' +
