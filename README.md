@@ -1,11 +1,7 @@
-# ASAP Check Demo
+# ASAP Check v11
 
-Rapid test image recognition demo for GitHub Pages.
-
-## Files
-- index.html
-- style.css
-- app.js
-- detector.js
-
-Default access code: ASAP2026
+- 先做快篩外框裁切，再進行 C/T 線分析。
+- 自動裁切採用亮度/低飽和白色塑膠 component 偵測，並盡量避免陰影干擾。
+- 不做自動旋轉，避免正確照片被誤轉。
+- 上傳 GitHub Pages 後建議網址加 `?v=11`。
+- 預設密碼：ASAP2026

@@ -4,8 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="robots" content="noindex,nofollow,noarchive" />
-  <title>ASAP Check Demo</title>
-  <link rel="stylesheet" href="style.css" />
+  <title>ASAP Check</title>
+  <link rel="stylesheet" href="style.css?v=11" />
 </head>
 <body>
   <div class="app">
@@ -26,7 +26,7 @@
     </section>
 
     <main id="mainPanel" class="hidden">
-      <section class="card">
+      <section class="card compactCard">
         <h2>影像來源</h2>
         <div class="row">
           <label class="fileBtn">
@@ -38,25 +38,19 @@
             <input id="galleryInput" type="file" accept="image/*" />
           </label>
         </div>
-        <p class="hint">建議：讓快篩卡平放、光線均勻、紅線方向接近垂直。v10：自動裁切快篩外框，不自動旋轉，也不強制拉伸比例。</p>
+        <p class="hint">v11：先做陰影補償，再找整支快篩外框；畫面只顯示裁切後快篩，再分析 C/T 線。</p>
       </section>
 
-      <section class="card">
+      <section class="card compactCard">
         <h2>參數</h2>
-        <label>紅色強度門檻 <span id="redText">38</span></label>
+        <label>紅線靈敏度 <span id="redText">38</span></label>
         <input id="redThreshold" type="range" min="10" max="100" value="38" />
 
-        <label>最小波峰寬度 <span id="widthText">3</span> px</label>
+        <label>最小線寬 <span id="widthText">3</span> px</label>
         <input id="minPeakWidth" type="range" min="1" max="20" value="3" />
 
-        <label>最小波峰距離 <span id="distText">25</span> px</label>
+        <label>最小線距 <span id="distText">25</span> px</label>
         <input id="minPeakDistance" type="range" min="10" max="120" value="25" />
-      </section>
-
-      <section class="card resultCard">
-        <h2>辨識結果</h2>
-        <div id="result" class="result neutral">尚未分析</div>
-        <div id="detail" class="detail">請先拍照或選擇照片。</div>
       </section>
 
       <section class="card canvasCard">
@@ -66,10 +60,16 @@
           <canvas id="chart"></canvas>
         </div>
       </section>
+
+      <section class="card resultCard">
+        <h2>辨識結果</h2>
+        <div id="result" class="result neutral">尚未分析</div>
+        <div id="detail" class="detail">請先拍照或選擇照片。</div>
+      </section>
     </main>
   </div>
 
-  <script src="detector.js?v=10"></script>
-  <script src="app.js?v=10"></script>
+  <script src="detector.js?v=11"></script>
+  <script src="app.js?v=11"></script>
 </body>
 </html>

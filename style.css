@@ -19,22 +19,22 @@ body {
 }
 
 .app {
-  max-width: 860px;
+  max-width: 740px;
   margin: 0 auto;
-  padding: 18px;
+  padding: 8px;
 }
 
 header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 16px;
+  margin-bottom: 6px;
 }
 
-h1 { margin: 0; font-size: 28px; }
-h2 { margin: 0 0 12px; font-size: 19px; }
+h1 { margin: 0; font-size: 21px; }
+h2 { margin: 0 0 8px; font-size: 16px; }
 p { margin: 6px 0; }
-header p, .hint { color: var(--muted); font-size: 14px; }
+header p, .hint { color: var(--muted); font-size: 13px; }
 
 .badge {
   padding: 7px 12px;
@@ -47,9 +47,9 @@ header p, .hint { color: var(--muted); font-size: 14px; }
 .card {
   background: var(--card);
   border: 1px solid var(--line);
-  border-radius: 18px;
-  padding: 16px;
-  margin-bottom: 14px;
+  border-radius: 14px;
+  padding: 10px;
+  margin-bottom: 8px;
   box-shadow: 0 8px 24px rgba(15, 23, 42, 0.06);
 }
 
@@ -69,11 +69,11 @@ button, .fileBtn {
   appearance: none;
   border: 0;
   border-radius: 14px;
-  padding: 14px 18px;
+  padding: 11px 16px;
   background: var(--primary);
   color: white;
   font-weight: 800;
-  font-size: 17px;
+  font-size: 16px;
   cursor: pointer;
   text-align: center;
   min-width: 130px;
@@ -83,14 +83,14 @@ button.primary { width: 100%; }
 .fileBtn.secondary { background: #475569; }
 .fileBtn input { display: none; }
 
-label { display: block; margin-top: 10px; font-weight: 700; }
-input[type="range"] { width: 100%; }
+label { display: block; margin-top: 8px; font-weight: 700; }
+input[type="range"] { width: 100%; margin: 0; }
 
 .msg { color: var(--danger); font-weight: 700; }
 .result {
-  font-size: 30px;
+  font-size: 24px;
   font-weight: 900;
-  padding: 14px;
+  padding: 9px;
   border-radius: 14px;
   text-align: center;
   background: #f3f4f6;
@@ -99,116 +99,43 @@ input[type="range"] { width: 100%; }
 .result.negative { background: #dcfce7; color: var(--ok); }
 .result.invalid { background: #fef3c7; color: var(--warn); }
 .result.neutral { background: #f3f4f6; color: var(--muted); }
-.detail { margin-top: 10px; color: var(--muted); line-height: 1.5; }
+.detail { margin-top: 8px; color: var(--muted); line-height: 1.42; font-size: 13px; }
+
+.analysisGrid {
+  display: flex;
+  flex-direction: row;
+  justify-content: center;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+}
 
 canvas {
-  width: 100%;
-  max-width: 100%;
   border-radius: 12px;
   border: 1px solid var(--line);
   background: #fff;
-  margin-top: 10px;
 }
 
-#canvas { display: block; }
-#chart { height: 180px; }
-
-/* v4 compact layout */
-.app { max-width: 760px; padding: 10px; }
-.card { padding: 12px; margin-bottom: 10px; border-radius: 14px; }
-h1 { font-size: 23px; }
-h2 { font-size: 17px; margin-bottom: 8px; }
-header { margin-bottom: 8px; }
-.result { font-size: 25px; padding: 10px; }
-.detail { font-size: 14px; line-height: 1.45; }
-.canvasCard { order: 1; }
-.resultCard { order: 2; }
-#mainPanel { display: flex; flex-direction: column; }
-#mainPanel.hidden { display: none; }
-#canvas { max-height: 520px; object-fit: contain; }
-#chart { height: 90px; }
-input[type="range"] { margin: 0; }
-button, .fileBtn { padding: 11px 16px; font-size: 16px; }
-
-/* v5: photo + rotated waveform side by side */
-.app { max-width: 720px; padding: 8px; }
-.card { padding: 10px; margin-bottom: 8px; }
-header { margin-bottom: 6px; }
-h1 { font-size: 21px; }
-h2 { font-size: 16px; }
-.result { font-size: 23px; padding: 8px; }
-.detail { font-size: 13px; line-height: 1.4; }
-.analysisGrid {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 132px;
-  gap: 8px;
-  align-items: start;
-}
 #canvas {
   display: block;
-  max-height: 520px;
-  width: 100%;
+  width: auto;
+  max-width: calc(100% - 120px);
+  max-height: 500px;
   object-fit: contain;
 }
+
 #chart {
   display: block;
-  width: 132px;
+  width: 110px;
+  max-width: 110px;
   height: auto;
-  max-height: 520px;
-  margin-top: 10px;
+  max-height: 500px;
 }
-@media (max-width: 640px) {
-  .analysisGrid { grid-template-columns: minmax(0, 1fr) 96px; gap: 6px; }
-  #chart { width: 96px; }
+
+@media (max-width: 560px) {
   .app { max-width: 100%; }
-}
-
-
-/* v6 force side-by-side compact analysis panel */
-.app { max-width: 700px !important; padding: 8px !important; }
-.canvasCard { padding: 8px !important; }
-.analysisGrid {
-  display: flex !important;
-  flex-direction: row !important;
-  align-items: flex-start !important;
-  justify-content: center !important;
-  gap: 8px !important;
-  width: 100% !important;
-}
-.analysisGrid #canvas {
-  flex: 0 1 auto !important;
-  width: auto !important;
-  max-width: calc(100% - 118px) !important;
-  max-height: 440px !important;
-  object-fit: contain !important;
-}
-.analysisGrid #chart {
-  flex: 0 0 110px !important;
-  width: 110px !important;
-  max-width: 110px !important;
-  height: auto !important;
-  max-height: 440px !important;
-  margin-top: 0 !important;
-}
-@media (max-width: 520px) {
-  .analysisGrid #canvas { max-width: calc(100% - 88px) !important; max-height: 390px !important; }
-  .analysisGrid #chart { flex-basis: 80px !important; width: 80px !important; max-width: 80px !important; max-height: 390px !important; }
-}
-
-/* v7: corrected cassette crop preview */
-.analysisGrid #canvas { max-height: 500px !important; }
-.analysisGrid #chart { max-height: 500px !important; }
-
-
-/* v10: keep cropped image ratio, smaller preview */
-.analysisGrid #canvas {
-  width: auto !important;
-  height: auto !important;
-  max-width: calc(100% - 118px) !important;
-  max-height: 460px !important;
-  object-fit: contain !important;
-}
-.analysisGrid #chart {
-  height: auto !important;
-  max-height: 460px !important;
+  .analysisGrid { gap: 6px; }
+  #canvas { max-width: calc(100% - 88px); max-height: 430px; }
+  #chart { width: 82px; max-width: 82px; max-height: 430px; }
+  button, .fileBtn { min-width: 115px; }
 }

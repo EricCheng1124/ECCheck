@@ -24,7 +24,7 @@
   let lastImage = null;
 
   function unlock() {
-    if (passInput.value.trim() === ACCESS_CODE) {
+    if ((passInput.value || '').trim() === ACCESS_CODE) {
       sessionStorage.setItem('asap_access', '1');
       lockPanel.classList.add('hidden');
       mainPanel.classList.remove('hidden');
@@ -35,7 +35,6 @@
   }
 
   function getOptions() {
-    // 保留拉桿相容舊版；v5主判斷用 detector.js 內建參數
     return {
       redThreshold: Number(redThreshold.value),
       minPeakWidth: Number(minPeakWidth.value),
@@ -50,13 +49,13 @@
   }
 
   function resizeAndDrawImage(img) {
-    const maxW = 620;
-    const maxH = 560;
+    const maxW = 760;
+    const maxH = 760;
     const scale = Math.min(1, maxW / img.naturalWidth, maxH / img.naturalHeight);
     canvas.width = Math.round(img.naturalWidth * scale);
     canvas.height = Math.round(img.naturalHeight * scale);
-
     const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
   }
 
@@ -72,7 +71,6 @@
     ctx.strokeStyle = 'rgba(255, 170, 0, 0.95)';
     ctx.strokeRect(roi.x1, roi.y1, roiW, roiH);
 
-    // C/T 偵測線
     ctx.strokeStyle = 'rgba(220, 38, 38, 0.95)';
     ctx.lineWidth = Math.max(2, canvas.width / 380);
     for (const p of analysis.peaks) {
@@ -92,13 +90,12 @@
 
   function drawChart(profile, peaks) {
     const ctx = chart.getContext('2d');
-    const w = 130;
+    const w = 110;
     const h = canvas.height || 420;
     chart.width = w;
     chart.height = h;
     ctx.clearRect(0, 0, w, h);
 
-    // 背景格線
     ctx.strokeStyle = '#e5e7eb';
     ctx.lineWidth = 1;
     for (let i = 0; i <= 4; i++) {
@@ -148,14 +145,23 @@
       resultEl.textContent = '無效';
     }
 
+    const cropText = analysis.preprocess
+      ? `快篩外框裁切: ${analysis.preprocess.ok ? '成功' : '失敗'}${analysis.preprocess.ok ? `, confidence=${analysis.preprocess.confidence}` : `, reason=${analysis.preprocess.reason}`}`
+      : '';
+
+    const allPeaks = (analysis.allPeaks || []).map((p, i) =>
+      `峰${i + 1}: y=${Math.round(p.y)}, area=${p.area.toFixed(1)}, height=${p.height.toFixed(1)}, width=${p.width}px`
+    ).join('<br>');
+
     detailEl.innerHTML = [
       `版本: ${analysis.version || 'unknown'}`,
       analysis.label,
-      analysis.preprocess ? `自動裁切: ${analysis.preprocess.ok ? '成功' : '失敗'}, 旋轉校正=${(analysis.preprocess.angle || 0).toFixed(1)}°` : '',
+      cropText,
       `C線: y=${Math.round(analysis.cLine.canvasY)}, area=${analysis.cLine.area.toFixed(1)}, height=${analysis.cLine.height.toFixed(1)}, width=${analysis.cLine.width}px`,
       `T線: y=${Math.round(analysis.tLine.canvasY)}, area=${analysis.tLine.area.toFixed(1)}, height=${analysis.tLine.height.toFixed(1)}, width=${analysis.tLine.width}px`,
-      `T/C Ratio=${analysis.ratio.toFixed(3)}`
-    ].join('<br>');
+      `T/C Ratio=${analysis.ratio.toFixed(3)}`,
+      allPeaks ? `<hr>${allPeaks}` : ''
+    ].filter(Boolean).join('<br>');
   }
 
   function analyze() {
