@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v30.2-dual-orientation-roi';
+  const VERSION = 'v30.3-slot-window-first';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -446,14 +446,28 @@
     };
   }
 
-  function fallbackWindowFromGeometry(W,H) {
-    return {x:Math.round(W*0.30), y:Math.round(H*0.24), w:Math.round(W*0.34), h:Math.round(H*0.32), cx:Math.round(W*0.47), cy:Math.round(H*0.40), source:'fallback-geometry'};
+  function fallbackWindowFromGeometry(W,H, orientation) {
+    // v30.3：Window 是內部小試紙槽，不是紅線外推的大框。
+    // normal：Window 在中上段；inverted：Window 在中下段。
+    const w = Math.round(W * 0.21);
+    const h = Math.round(H * 0.30);
+    const cx = Math.round(W * 0.50);
+    const cy = orientation === 'inverted' ? Math.round(H * 0.61) : Math.round(H * 0.39);
+    return {
+      x: clamp(cx - w/2, 0, W-1),
+      y: clamp(cy - h/2, 0, H-1),
+      w: clamp(w, 1, W),
+      h: clamp(h, 1, H),
+      cx, cy,
+      source:'fallback-slot-window-ratio'
+    };
   }
 
-  function fallbackSampleByWindow(W,H,win) {
+  function fallbackSampleByWindow(W,H,win, orientation) {
     const cx = win ? (win.x+win.w/2) : W*0.50;
-    const cy = win && win.cy > H*0.50 ? H*0.30 : H*0.68;
-    return {cx, cy, rx:W*0.18, ry:W*0.22, r:W*0.22, source:'fallback-sample-by-window-not-detected'};
+    // v30.3：S Well 往下，避免壓到 Window；反向時則在上方對稱位置。
+    const cy = orientation === 'inverted' ? H*0.32 : H*0.69;
+    return {cx, cy, rx:W*0.17, ry:W*0.20, r:W*0.20, source:'fallback-sample-ratio-not-detected'};
   }
 
   function drawRoiSearchBox(ctx, box, label, color) {
@@ -574,15 +588,15 @@
 
         let reject = '';
         if (!insideBox(cx, cy, box)) reject = 'outside-window-template';
-        if (!reject && br.width < W * 0.12) reject = 'too-narrow';
-        if (!reject && br.width > W * 0.38) reject = 'too-wide';
-        if (!reject && br.height < H * 0.14) reject = 'too-short';
-        if (!reject && br.height > H * 0.44) reject = 'too-tall';
-        if (!reject && (aspect < 1.70 || aspect > 8.50)) reject = 'bad-aspect';
-        if (!reject && (fill < 0.030 || fill > 0.985)) reject = 'bad-fill';
+        if (!reject && br.width < W * 0.13) reject = 'too-narrow';
+        if (!reject && br.width > W * 0.30) reject = 'too-wide';
+        if (!reject && br.height < H * 0.18) reject = 'too-short';
+        if (!reject && br.height > H * 0.40) reject = 'too-tall';
+        if (!reject && (aspect < 2.20 || aspect > 8.80)) reject = 'bad-aspect';
+        if (!reject && (fill < 0.020 || fill > 0.92)) reject = 'bad-fill';
 
-        const idealW = W * 0.23;
-        const idealH = H * 0.26;
+        const idealW = W * 0.21;
+        const idealH = H * 0.29;
         const sizeScore = 1 - Math.min(1, (Math.abs(br.width-idealW)/idealW + Math.abs(br.height-idealH)/idealH) / 2.2);
         const score = br.width * br.height * (0.35 + fill) * (0.50 + centerScore) * (0.50 + sizeScore) * Math.min(2.4, aspect);
 
@@ -719,12 +733,20 @@
 
     const rw = findRedWindowInBox(cropCanvas, windowBox, W, H);
     const wf = findWindowByRatioBox(norm, W, H, windowBox);
-    let win = rw || wf.win || null;
+
+    // v30.3：不能用紅線決定 Window 框。紅線只作為確認訊號。
+    let win = wf.win || fallbackWindowFromGeometry(W, H, name);
     if (win) win = makeWindowSafe(win, W, H);
 
     const sf = findSampleByRatioBox(norm, W, H, sampleBox, win);
     const sample = sf.sample || null;
     const ts = templateScore(name, win, sample, W, H);
+    if (rw) {
+      ts.score += 1600;
+      ts.hasRedWindow = true;
+    } else {
+      ts.hasRedWindow = false;
+    }
 
     return {
       name,
@@ -752,7 +774,7 @@
     ctx.strokeRect(1, 1, W-2, H-2);
     ctx.restore();
 
-    if (f.window) drawRect(ctx, f.window, 'rgba(37,99,235,0.95)', f.window.source && f.window.source.includes('red') ? 'Window/red' : 'Window');
+    if (f.window) drawRect(ctx, f.window, 'rgba(37,99,235,0.95)', f.window.source && f.window.source.includes('fallback') ? 'Window/slot' : 'Window/slot');
     if (f.sample) drawEllipseMark(ctx, f.sample, 'rgba(168,85,247,0.95)', 'S well');
   }
 
@@ -767,8 +789,8 @@
     const inverted = evaluateInternalTemplate(cropCanvas, norm, W, H, 'inverted');
     const chosen = normal.templateScore.score >= inverted.templateScore.score ? normal : inverted;
 
-    const win = chosen.window || fallbackWindowFromGeometry(W, H);
-    const sample = chosen.sample || fallbackSampleByWindow(W, H, win);
+    const win = chosen.window || fallbackWindowFromGeometry(W, H, chosen.name);
+    const sample = chosen.sample || fallbackSampleByWindow(W, H, win, chosen.name);
     const winCx = win ? win.x + win.w/2 : W*0.50;
     const winCy = win ? win.y + win.h/2 : H*0.40;
     const sampleCx = sample ? sample.cx : W*0.50;
