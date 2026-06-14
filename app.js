@@ -64,13 +64,13 @@
     ctx.lineWidth = Math.max(2, canvas.width / 350);
 
     ctx.strokeStyle = 'rgba(255, 170, 0, 0.9)';
-    ctx.strokeRect(0, analysis.roi.y1, canvas.width, analysis.roi.y2 - analysis.roi.y1);
+    ctx.strokeRect(analysis.roi.x1, analysis.roi.y1, analysis.roi.x2 - analysis.roi.x1, analysis.roi.y2 - analysis.roi.y1);
 
     ctx.strokeStyle = 'rgba(220, 38, 38, 0.95)';
     for (const p of analysis.peaks) {
       ctx.beginPath();
-      ctx.moveTo(p.x, analysis.roi.y1);
-      ctx.lineTo(p.x, analysis.roi.y2);
+      ctx.moveTo(analysis.roi.x1, p.canvasY);
+      ctx.lineTo(analysis.roi.x2, p.canvasY);
       ctx.stroke();
     }
     ctx.restore();
@@ -109,7 +109,7 @@
     ctx.strokeStyle = '#dc2626';
     ctx.lineWidth = 2;
     for (const p of peaks) {
-      const x = p.x / (profile.length - 1) * w;
+      const x = p.y / (profile.length - 1) * w;
       ctx.beginPath();
       ctx.moveTo(x, 8);
       ctx.lineTo(x, h - 8);
@@ -122,6 +122,9 @@
     if (analysis.result === 'POSITIVE') {
       resultEl.classList.add('positive');
       resultEl.textContent = '陽性';
+    } else if (analysis.result === 'WEAK_POSITIVE') {
+      resultEl.classList.add('positive');
+      resultEl.textContent = '弱陽性';
     } else if (analysis.result === 'NEGATIVE') {
       resultEl.classList.add('negative');
       resultEl.textContent = '陰性';
@@ -130,11 +133,13 @@
       resultEl.textContent = '無效';
     }
 
-    const peakText = analysis.peaks.map((p, i) =>
-      `線${i + 1}: x=${p.x}, 強度=${p.height.toFixed(1)}, 寬度=${p.width}px`
-    ).join('<br>');
+    const peakText = [
+      `C線: y=${analysis.cLine.canvasY}, area=${analysis.cLine.area.toFixed(1)}, height=${analysis.cLine.height.toFixed(1)}, width=${analysis.cLine.width}px`,
+      `T線: y=${analysis.tLine.canvasY}, area=${analysis.tLine.area.toFixed(1)}, height=${analysis.tLine.height.toFixed(1)}, width=${analysis.tLine.width}px`,
+      `T/C Ratio=${analysis.ratio.toFixed(3)}`
+    ].join('<br>');
 
-    detailEl.innerHTML = `${analysis.label}<br>${peakText || '未找到有效紅線'}`;
+    detailEl.innerHTML = `${analysis.label}<br>${peakText}`;
   }
 
   function analyze() {
