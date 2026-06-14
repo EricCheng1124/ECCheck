@@ -198,3 +198,17 @@ h2 { font-size: 16px; }
 /* v7: corrected cassette crop preview */
 .analysisGrid #canvas { max-height: 500px !important; }
 .analysisGrid #chart { max-height: 500px !important; }
+
+
+/* v10: keep cropped image ratio, smaller preview */
+.analysisGrid #canvas {
+  width: auto !important;
+  height: auto !important;
+  max-width: calc(100% - 118px) !important;
+  max-height: 460px !important;
+  object-fit: contain !important;
+}
+.analysisGrid #chart {
+  height: auto !important;
+  max-height: 460px !important;
+}

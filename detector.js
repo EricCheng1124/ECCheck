@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v8-autocrop-rotate-limit5';
+  const VERSION = 'v10-autocrop-no-stretch';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
 
@@ -71,94 +71,123 @@
   }
 
   function isCassettePixel(r, g, b) {
-    // 白色/米白塑膠卡匣：亮、低飽和。背景灰桌面會比較暗或偏色。
     const max = Math.max(r, g, b), min = Math.min(r, g, b);
     const sat = max - min;
     const avg = (r + g + b) / 3;
-    return avg > 135 && sat < 62 && r > 125 && g > 115 && b > 95;
+    // v10: stricter white-plastic mask. 先避免把桌面整片吃進來。
+    return avg > 145 && sat < 48 && r > 135 && g > 130 && b > 115;
   }
 
   function findCassetteBox(canvas) {
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
     const w = canvas.width, h = canvas.height;
     const img = ctx.getImageData(0, 0, w, h).data;
+    const step = Math.max(2, Math.round(Math.max(w, h) / 520));
 
-    const step = Math.max(2, Math.round(Math.max(w, h) / 420));
-    let minX = w, minY = h, maxX = 0, maxY = 0, n = 0;
-    let sx = 0, sy = 0, sxx = 0, syy = 0, sxy = 0;
+    const col = new Array(w).fill(0);
+    const row = new Array(h).fill(0);
 
-    // 只看中間 80%，避免白色網頁邊框或桌面亮區干擾
-    const marginX = Math.floor(w * 0.08);
-    const marginY = Math.floor(h * 0.04);
-
-    for (let y = marginY; y < h - marginY; y += step) {
-      for (let x = marginX; x < w - marginX; x += step) {
+    // 先建立投影，不做旋轉。自動旋轉很容易誤判，v10 只裁切不拉伸。
+    for (let y = 0; y < h; y += step) {
+      for (let x = 0; x < w; x += step) {
         const idx = (y * w + x) * 4;
         const r = img[idx], g = img[idx + 1], b = img[idx + 2];
         if (isCassettePixel(r, g, b)) {
-          minX = Math.min(minX, x); maxX = Math.max(maxX, x);
-          minY = Math.min(minY, y); maxY = Math.max(maxY, y);
-          n++; sx += x; sy += y; sxx += x * x; syy += y * y; sxy += x * y;
+          col[x] += step;
+          row[y] += step;
         }
       }
     }
 
-    if (n < 80) {
-      return { ok: false, x: 0, y: 0, w, h, angle: 0, confidence: 0 };
+    function smoothProjection(a, radius) {
+      const out = new Array(a.length).fill(0);
+      for (let i = 0; i < a.length; i++) {
+        let sum = 0, count = 0;
+        for (let j = -radius; j <= radius; j++) {
+          const k = i + j;
+          if (k >= 0 && k < a.length) { sum += a[k]; count++; }
+        }
+        out[i] = count ? sum / count : 0;
+      }
+      return out;
     }
 
-    const mx = sx / n, my = sy / n;
-    const covXX = sxx / n - mx * mx;
-    const covYY = syy / n - my * my;
-    const covXY = sxy / n - mx * my;
-    let angle = 0.5 * Math.atan2(2 * covXY, covXX - covYY);
-    // 主軸若接近水平，轉成垂直方向角度
-    if (Math.abs(Math.cos(angle)) > Math.abs(Math.sin(angle))) angle += Math.PI / 2;
-    const deg = angle * 180 / Math.PI;
-    let rotateDeg = clamp(deg - 90, -25, 25);
-
-    // v8 修正：自動旋轉不要太積極。
-    // 只允許 ±5° 以內的小角度校正；超過代表判斷可能被背景干擾，直接不旋轉。
-    if (Math.abs(rotateDeg) > 5) {
-      rotateDeg = 0;
+    function segmentsFromProjection(proj, threshold, minLen) {
+      const segs = [];
+      let start = -1;
+      for (let i = 0; i < proj.length; i++) {
+        if (proj[i] >= threshold && start < 0) start = i;
+        if ((proj[i] < threshold || i === proj.length - 1) && start >= 0) {
+          const end = (proj[i] < threshold) ? i - 1 : i;
+          if (end - start + 1 >= minLen) segs.push({ start, end, len: end - start + 1 });
+          start = -1;
+        }
+      }
+      return segs;
     }
 
-    const padX = Math.round((maxX - minX) * 0.09);
-    const padY = Math.round((maxY - minY) * 0.06);
-    return {
-      ok: true,
-      x: clamp(minX - padX, 0, w - 1),
-      y: clamp(minY - padY, 0, h - 1),
-      w: clamp(maxX - minX + 1 + padX * 2, 1, w),
-      h: clamp(maxY - minY + 1 + padY * 2, 1, h),
-      angle: rotateDeg,
-      confidence: n
-    };
+    const scol = smoothProjection(col, Math.max(3, Math.round(w / 160)));
+    const srow = smoothProjection(row, Math.max(3, Math.round(h / 160)));
+
+    // threshold 用相對最大值，桌面太亮時也不會直接全吃。
+    const colMax = Math.max(1, ...scol);
+    const rowMax = Math.max(1, ...srow);
+    const xSegs = segmentsFromProjection(scol, colMax * 0.42, Math.round(w * 0.045));
+    const ySegs = segmentsFromProjection(srow, rowMax * 0.32, Math.round(h * 0.20));
+
+    let best = null;
+    for (const xs of xSegs) {
+      for (const ys of ySegs) {
+        const bw = xs.end - xs.start + 1;
+        const bh = ys.end - ys.start + 1;
+        const ar = bw / Math.max(1, bh);
+        const cx = (xs.start + xs.end) / 2;
+        const cy = (ys.start + ys.end) / 2;
+
+        // 快篩卡通常是直長條；排除整片桌面與太小區塊。
+        if (ar < 0.18 || ar > 0.70) continue;
+        if (bh < h * 0.35 || bh > h * 0.98) continue;
+        if (bw < w * 0.06 || bw > w * 0.55) continue;
+
+        // 中央優先，但不強制。
+        const centerPenalty = Math.abs(cx - w * 0.5) / w + Math.abs(cy - h * 0.52) / h;
+        const sizeScore = bh * 1.6 - bw * 0.2;
+        const score = sizeScore - centerPenalty * 600;
+        if (!best || score > best.score) best = { xs, ys, score, ar };
+      }
+    }
+
+    if (!best) {
+      return { ok: false, x: 0, y: 0, w, h, angle: 0, confidence: 0, reason: 'no-cassette-segment' };
+    }
+
+    const xs = best.xs, ys = best.ys;
+    const bw = xs.end - xs.start + 1;
+    const bh = ys.end - ys.start + 1;
+    const padX = Math.round(bw * 0.10);
+    const padY = Math.round(bh * 0.06);
+    const x = clamp(xs.start - padX, 0, w - 1);
+    const y = clamp(ys.start - padY, 0, h - 1);
+    const ww = clamp(bw + padX * 2, 1, w - x);
+    const hh = clamp(bh + padY * 2, 1, h - y);
+
+    return { ok: true, x, y, w: ww, h: hh, angle: 0, confidence: Math.round(best.score), aspect: best.ar };
   }
 
   function makeCroppedCanvas(sourceCanvas, box) {
-    // 先旋轉校正，再重新找一次卡匣 box，再裁切成統一尺寸。
-    const w = sourceCanvas.width, h = sourceCanvas.height;
-    const tmp = document.createElement('canvas');
-    tmp.width = w; tmp.height = h;
-    const tctx = tmp.getContext('2d');
-    tctx.fillStyle = '#ffffff';
-    tctx.fillRect(0, 0, w, h);
-    tctx.translate(w / 2, h / 2);
-    tctx.rotate(-box.angle * Math.PI / 180);
-    tctx.drawImage(sourceCanvas, -w / 2, -h / 2);
-
-    const box2 = findCassetteBox(tmp);
-    const b = box2.ok ? box2 : box;
-
+    // v10：裁切後保留原比例，不再強制壓成 360x760，避免畫面被拉長。
+    const maxH = 760;
+    const scale = Math.min(1, maxH / box.h);
+    const cw = Math.max(1, Math.round(box.w * scale));
+    const ch = Math.max(1, Math.round(box.h * scale));
     const crop = document.createElement('canvas');
-    crop.width = 360;
-    crop.height = 760;
+    crop.width = cw;
+    crop.height = ch;
     const cctx = crop.getContext('2d');
     cctx.fillStyle = '#ffffff';
-    cctx.fillRect(0, 0, crop.width, crop.height);
-    cctx.drawImage(tmp, b.x, b.y, b.w, b.h, 0, 0, crop.width, crop.height);
-    return { canvas: crop, box: b, angle: box.angle };
+    cctx.fillRect(0, 0, cw, ch);
+    cctx.drawImage(sourceCanvas, box.x, box.y, box.w, box.h, 0, 0, cw, ch);
+    return { canvas: crop, box, angle: 0 };
   }
 
   function measureLine(profile, expectedRatio, options) {
@@ -187,10 +216,10 @@
   function analyzeCanvas(canvas, options) {
     options = Object.assign({
       autoCrop: true,
-      roiX1: 0.36,
-      roiX2: 0.53,
-      roiY1: 0.11,
-      roiY2: 0.58,
+      roiX1: 0.35,
+      roiX2: 0.58,
+      roiY1: 0.10,
+      roiY2: 0.62,
       cPosition: 0.225,
       tPosition: 0.335,
       positionTolerance: 0.05,
@@ -258,7 +287,7 @@
     const tValid = tLine.area >= options.tMinArea && tLine.height >= options.tMinHeight;
 
     let result, label;
-    if (!preprocess.ok && options.autoCrop) { result = 'INVALID'; label = '無效 / 未能自動裁切快篩外框'; }
+    if (!preprocess.ok && options.autoCrop) { result = 'INVALID'; label = '無效 / 未能自動裁切快篩外框，請靠近一點拍或放深色背景'; }
     else if (!cValid) { result = 'INVALID'; label = '無效 / C線不足或未出現'; }
     else if (!tValid || ratio < options.negativeRatio) { result = 'NEGATIVE'; label = '陰性 / C線有效，T線未達門檻'; }
     else if (ratio < options.weakPositiveRatio) { result = 'WEAK_POSITIVE'; label = '弱陽性 / T線訊號偏弱'; }
