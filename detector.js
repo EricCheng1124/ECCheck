@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v27-debug';
+  const VERSION = 'v28.1-window-sample-score';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -16,10 +16,35 @@
     return out;
   }
 
-  function rectPointsToArray(rect) {
-    const vertices = cv.RotatedRect.points(rect);
-    return vertices.map(p => ({ x: p.x, y: p.y }));
-  }
+  function rectPointsToArray(rect)
+{
+    const cx = rect.center.x;
+    const cy = rect.center.y;
+
+    const w = rect.size.width;
+    const h = rect.size.height;
+
+    const angle =
+        rect.angle * Math.PI / 180;
+
+    const cosA = Math.cos(angle);
+    const sinA = Math.sin(angle);
+
+    const hw = w / 2;
+    const hh = h / 2;
+
+    const pts = [
+        {x:-hw,y:-hh},
+        {x: hw,y:-hh},
+        {x: hw,y: hh},
+        {x:-hw,y: hh}
+    ];
+
+    return pts.map(p => ({
+        x: cx + p.x*cosA - p.y*sinA,
+        y: cy + p.x*sinA + p.y*cosA
+    }));
+}
 
   function drawPolygon(ctx, pts, color, lineWidth) {
     const p = orderPoints(pts);
@@ -247,7 +272,10 @@
     const norm = makeNormalizedGray(src);
     const wf = findWindowByContours(norm,W,H);
     const redWin = findRedWindowFromCanvas(cropCanvas);
-    let win = redWin || wf.win || fallbackWindowFromGeometry(W,H);
+    let win =
+    wf.win ||
+    redWin ||
+    fallbackWindowFromGeometry(W,H);
     win = makeWindowSafe(win,W,H);
     const sf = findSampleByContours(norm,W,H,win);
     let sample = sf.sample || fallbackSampleByWindow(W,H,win);
@@ -270,20 +298,81 @@
     return finalF;
   }
 
-  function candidateFeatureScore(srcCanvas, cand) {
-    // 候選外框使用內部 Window/S 同軸特徵加分，但不把它當唯一條件。
-    const tmp=document.createElement('canvas');
-    try{
-      warpCropToCanvas(srcCanvas,tmp,cand.pts);
-      const f=findInternalFeaturesOnCrop(tmp,false);
-      if(!f.window || !f.sample) return {score:0, f};
-      const wx=f.window.x+f.window.w/2, sx=f.sample.cx;
-      const align = 1-Math.min(1,Math.abs(wx-sx)/(tmp.width*0.42));
-      const sep = Math.abs(f.sample.cy-(f.window.y+f.window.h/2))/tmp.height;
-      const sepScore = sep>0.15 ? 1 : 0.25;
-      return {score: 500000*(0.25+align)*(0.4+sepScore), f};
-    } catch(e){ return {score:0, f:null}; }
-  }
+function candidateFeatureScore(srcCanvas, cand)
+{
+    const tmp =
+        document.createElement('canvas');
+
+    try
+    {
+        warpCropToCanvas(
+            srcCanvas,
+            tmp,
+            cand.pts
+        );
+
+        const f =
+            findInternalFeaturesOnCrop(
+                tmp,
+                false
+            );
+
+        let score = 0;
+
+        const hasWindow =
+            !!f.window;
+
+        const hasSample =
+            !!f.sample;
+
+        if(hasWindow)
+            score += 2000;
+
+        if(hasSample)
+            score += 2000;
+
+        let align = 0;
+
+        if(hasWindow && hasSample)
+        {
+            const wx =
+                f.window.x +
+                f.window.w / 2;
+
+            const sx =
+                f.sample.cx;
+
+            const dx =
+                Math.abs(wx - sx);
+
+            align =
+                1 -
+                Math.min(
+                    1,
+                    dx / (tmp.width * 0.35)
+                );
+
+            score +=
+                align * 1000;
+        }
+
+        return {
+            score,
+            align,
+            f
+        };
+    }
+    catch(e)
+    {
+        return {
+            score:0,
+            align:0,
+            f:null
+        };
+    }
+}
+
+
 
   function detectOuterFrame(canvas, cropCanvas, options) {
     if (typeof cv === 'undefined' || !cv.Mat) return {version:VERSION,ok:false,reason:'opencv-not-ready'};
@@ -294,7 +383,10 @@
     for(const c of rawCands.slice(0,8)){
       const fs=candidateFeatureScore(canvas,c);
       const ratioScore = 1 - Math.min(1, Math.abs(c.ratio-3.4)/3.4);
-      c.totalScore = c.score*(0.7+ratioScore) + fs.score;
+      c.totalScore =
+      fs.score
+    + ratioScore * 100
+    + c.fill * 100;
       c.featureScore=fs.score;
       scored.push(c);
     }
@@ -310,7 +402,44 @@
     if(best){
       let features=null;
       try{ warpCropToCanvas(canvas,cropCanvas,best.pts); features=detectInternalFeatures(cropCanvas); } catch(e){ console.error(e); }
-      result={version:VERSION,ok:true,reason:best.method+'+feature-score',ratio:best.ratio,areaRatio:best.rectArea/imgArea,fill:best.fill,candidates:scored.length,rect:{cx:best.rect.center.x,cy:best.rect.center.y,w:best.rect.size.width,h:best.rect.size.height,angle:best.rect.angle},features,debug:'Candidates:'+scored.length+'<br>Method:'+best.method+'<br>FeatureScore:'+Math.round(best.featureScore||0)};
+      
+
+let dbg='';
+
+scored.forEach((c,i)=>
+{
+    dbg +=
+    `
+    #${i+1}<br>
+    Method=${c.method}<br>
+    Score=${Math.round(c.totalScore)}<br>
+    Feature=${Math.round(c.featureScore||0)}<br>
+    Ratio=${c.ratio.toFixed(2)}<br>
+    Fill=${c.fill.toFixed(2)}<br>
+    <hr>
+    `;
+});
+
+result={
+    version:VERSION,
+    ok:true,
+    reason:best.method+'+feature-score',
+    ratio:best.ratio,
+    areaRatio:best.rectArea/imgArea,
+    fill:best.fill,
+    candidates:scored.length,
+    rect:{
+        cx:best.rect.center.x,
+        cy:best.rect.center.y,
+        w:best.rect.size.width,
+        h:best.rect.size.height,
+        angle:best.rect.angle
+    },
+    features,
+    debug:dbg
+};
+
+
     } else {
       cropCanvas.width=1; cropCanvas.height=1; result={version:VERSION,ok:false,reason:'no-candidate',candidates:rawCands.length};
     }
