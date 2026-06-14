@@ -162,3 +162,35 @@ h2 { font-size: 16px; }
   #chart { width: 96px; }
   .app { max-width: 100%; }
 }
+
+
+/* v6 force side-by-side compact analysis panel */
+.app { max-width: 700px !important; padding: 8px !important; }
+.canvasCard { padding: 8px !important; }
+.analysisGrid {
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: flex-start !important;
+  justify-content: center !important;
+  gap: 8px !important;
+  width: 100% !important;
+}
+.analysisGrid #canvas {
+  flex: 0 1 auto !important;
+  width: auto !important;
+  max-width: calc(100% - 118px) !important;
+  max-height: 440px !important;
+  object-fit: contain !important;
+}
+.analysisGrid #chart {
+  flex: 0 0 110px !important;
+  width: 110px !important;
+  max-width: 110px !important;
+  height: auto !important;
+  max-height: 440px !important;
+  margin-top: 0 !important;
+}
+@media (max-width: 520px) {
+  .analysisGrid #canvas { max-width: calc(100% - 88px) !important; max-height: 390px !important; }
+  .analysisGrid #chart { flex-basis: 80px !important; width: 80px !important; max-width: 80px !important; max-height: 390px !important; }
+}

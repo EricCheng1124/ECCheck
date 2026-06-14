@@ -50,8 +50,8 @@
   }
 
   function resizeAndDrawImage(img) {
-    const maxW = 520;
-    const maxH = 520;
+    const maxW = 430;
+    const maxH = 440;
     const scale = Math.min(1, maxW / img.naturalWidth, maxH / img.naturalHeight);
     canvas.width = Math.round(img.naturalWidth * scale);
     canvas.height = Math.round(img.naturalHeight * scale);
@@ -92,7 +92,7 @@
 
   function drawChart(profile, peaks) {
     const ctx = chart.getContext('2d');
-    const w = 130;
+    const w = 110;
     const h = canvas.height || 420;
     chart.width = w;
     chart.height = h;
@@ -149,6 +149,7 @@
     }
 
     detailEl.innerHTML = [
+      '版本: v6-sidewave',
       analysis.label,
       `C線: y=${Math.round(analysis.cLine.canvasY)}, area=${analysis.cLine.area.toFixed(1)}, height=${analysis.cLine.height.toFixed(1)}, width=${analysis.cLine.width}px`,
       `T線: y=${Math.round(analysis.tLine.canvasY)}, area=${analysis.tLine.area.toFixed(1)}, height=${analysis.tLine.height.toFixed(1)}, width=${analysis.tLine.width}px`,
