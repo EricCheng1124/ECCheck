@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v28.7-real-feature-gate';
+  const VERSION = 'v28.9-center-priority';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -474,7 +474,7 @@ function longAxisVerticalScore(c)
     };
 }
 
-function outerGeometryScore(c, imgArea)
+function outerGeometryScore(c, imgArea, imgW, imgH)
 {
     const areaRatio = c.rectArea / Math.max(1, imgArea);
 
@@ -546,17 +546,33 @@ function outerGeometryScore(c, imgArea)
     const openEdgePenalty =
         edgeLike && c.fill < 0.10 ? 4200 : 0;
 
+    // v28.9：加入照片中央優先。
+    // 手機與滑鼠墊常出現在邊緣；使用者拍快篩時，卡匣通常會靠近中央。
+    const imgCx = Math.max(1, imgW || 1) / 2;
+    const imgCy = Math.max(1, imgH || 1) / 2;
+    const dx = Math.abs(c.rect.center.x - imgCx) / Math.max(1, imgW || 1);
+    const dy = Math.abs(c.rect.center.y - imgCy) / Math.max(1, imgH || 1);
+    const centerDist = Math.sqrt(dx * dx + dy * dy);
+    const centerScore = 1 - Math.min(1, centerDist / 0.45);
+    const edgePenalty =
+        centerScore < 0.22 ? 6200 :
+        centerScore < 0.38 ? 3200 :
+        centerScore < 0.52 ? 1200 :
+        0;
+
     const score =
         areaScore * 4200 +
         ratioScore * 1300 +
         fillScore * 750 +
         vertical.score * 3000 +
         closedEdgeScore * 2300 +
+        centerScore * 3600 +
         methodBonus -
         smallPenalty -
         horizontalPenalty -
         lowRatioPenalty -
-        openEdgePenalty;
+        openEdgePenalty -
+        edgePenalty;
 
     return {
         score: Math.max(0, score),
@@ -566,12 +582,85 @@ function outerGeometryScore(c, imgArea)
         verticalScore: vertical.score,
         verticalAngle: vertical.angle,
         verticalDiff: vertical.diff,
+        centerScore,
+        centerDist,
+        edgePenalty,
         methodBonus,
         smallPenalty,
         horizontalPenalty,
         closedEdgeScore,
         lowRatioPenalty,
         openEdgePenalty
+    };
+}
+
+
+function candidateAppearanceScore(canvas)
+{
+    const ctx = canvas.getContext('2d', {willReadFrequently:true});
+    const W = canvas.width;
+    const H = canvas.height;
+    const data = ctx.getImageData(0,0,W,H).data;
+
+    let light = 0;
+    let midLight = 0;
+    let dark = 0;
+    let veryDark = 0;
+    let lowSatLight = 0;
+    const total = Math.max(1, W * H);
+
+    for(let i=0; i<data.length; i+=4)
+    {
+        const r = data[i];
+        const g = data[i+1];
+        const b = data[i+2];
+        const y = 0.299*r + 0.587*g + 0.114*b;
+        const mx = Math.max(r,g,b);
+        const mn = Math.min(r,g,b);
+        const sat = mx - mn;
+
+        if(y > 170) light++;
+        if(y > 135) midLight++;
+        if(y < 90) dark++;
+        if(y < 55) veryDark++;
+        if(y > 135 && sat < 55) lowSatLight++;
+    }
+
+    const lightRatio = light / total;
+    const midLightRatio = midLight / total;
+    const darkRatio = dark / total;
+    const veryDarkRatio = veryDark / total;
+    const lowSatLightRatio = lowSatLight / total;
+
+    // 快篩卡本體通常是低飽和、偏亮的塑膠面。
+    // 手機螢幕 / 滑鼠墊 / 黑色物件即使有封閉邊緣，也會有過高 darkRatio。
+    let bonus = 0;
+    let penalty = 0;
+
+    if(lowSatLightRatio > 0.55) bonus += 2600;
+    else if(lowSatLightRatio > 0.42) bonus += 1300;
+    else if(lowSatLightRatio < 0.28) penalty += 5200;
+
+    if(midLightRatio < 0.45) penalty += 3600;
+    if(darkRatio > 0.35) penalty += 5200;
+    if(veryDarkRatio > 0.22) penalty += 3800;
+
+    const trustedBrightCard =
+        lowSatLightRatio >= 0.38 &&
+        midLightRatio >= 0.48 &&
+        darkRatio <= 0.34 &&
+        veryDarkRatio <= 0.22;
+
+    return {
+        score: bonus - penalty,
+        bonus,
+        penalty,
+        lightRatio,
+        midLightRatio,
+        darkRatio,
+        veryDarkRatio,
+        lowSatLightRatio,
+        trustedBrightCard
     };
 }
 
@@ -588,19 +677,24 @@ function candidateFeatureScore(srcCanvas, cand)
             cand.pts
         );
 
+        const appearance = candidateAppearanceScore(tmp);
+
         const f =
             findInternalFeaturesOnCrop(
                 tmp,
                 false
             );
 
-        let score = 0;
+        let score = appearance.score;
 
         const win = f && f.window;
         const sample = f && f.sample;
 
-        const hasRedWindow =
+        const rawRedWindow =
             !!(win && win.source === 'red-line-window');
+
+        const hasRedWindow =
+            !!(rawRedWindow && appearance.trustedBrightCard);
 
         const hasRealWindow =
             !!(win && win.source && !win.source.includes('fallback'));
@@ -612,7 +706,7 @@ function candidateFeatureScore(srcCanvas, cand)
         // 紅線判讀窗比一般 opencv-window-contour 可信，因為手機/滑鼠墊也可能產生假矩形。
         if(hasRedWindow)
             score += 6200;
-        else if(hasRealWindow)
+        else if(hasRealWindow && appearance.trustedBrightCard)
             score += 1200;
 
         if(hasRealSample)
@@ -647,6 +741,8 @@ function candidateFeatureScore(srcCanvas, cand)
             score,
             align,
             f,
+            appearance,
+            rawRedWindow,
             hasRedWindow,
             hasRealWindow,
             hasRealSample
@@ -658,6 +754,8 @@ function candidateFeatureScore(srcCanvas, cand)
             score:0,
             align:0,
             f:null,
+            appearance:null,
+            rawRedWindow:false,
             hasRedWindow:false,
             hasRealWindow:false,
             hasRealSample:false
@@ -676,7 +774,7 @@ function candidateFeatureScore(srcCanvas, cand)
     const scored=[];
     for(const c of rawCands.slice(0,8)){
       const fs=candidateFeatureScore(canvas,c);
-      const geo=outerGeometryScore(c,imgArea);
+      const geo=outerGeometryScore(c,imgArea,src.cols,src.rows);
       const hasRedWindow = !!fs.hasRedWindow;
       const hasRealWindow = !!fs.hasRealWindow;
       const hasRealSample = !!fs.hasRealSample;
@@ -692,6 +790,8 @@ function candidateFeatureScore(srcCanvas, cand)
       c.featureScore=fs.score;
       c.featureDetail=fs.f;
       c.featureAlign=fs.align;
+      c.appearanceDetail=fs.appearance || null;
+      c.rawRedWindow=!!fs.rawRedWindow;
       c.noRealSamplePenalty=noRealSamplePenalty;
       c.noTrustedFeaturePenalty=noTrustedFeaturePenalty;
       c.hasRedWindow=hasRedWindow;
@@ -738,7 +838,8 @@ scored.forEach((c,i)=>
     Feature Score=${Math.round(c.featureScore||0)}<br>
     No Real S Penalty=${Math.round(c.noRealSamplePenalty||0)}<br>
     No Trusted Feature Penalty=${Math.round(c.noTrustedFeaturePenalty||0)}<br>
-    Red Window=${c.hasRedWindow ? 'YES' : 'NO'} / Real Sample=${c.hasRealSample ? 'YES' : 'NO'}<br>
+    Red Window=${c.hasRedWindow ? 'YES' : 'NO'} / Raw Red=${c.rawRedWindow ? 'YES' : 'NO'} / Real Sample=${c.hasRealSample ? 'YES' : 'NO'}<br>
+    Appearance=${c.appearanceDetail ? (c.appearanceDetail.trustedBrightCard ? 'PASS' : 'FAIL') : '-'} / LowSatLight=${c.appearanceDetail ? c.appearanceDetail.lowSatLightRatio.toFixed(2) : '-'} / MidLight=${c.appearanceDetail ? c.appearanceDetail.midLightRatio.toFixed(2) : '-'} / Dark=${c.appearanceDetail ? c.appearanceDetail.darkRatio.toFixed(2) : '-'} / Penalty=${c.appearanceDetail ? Math.round(c.appearanceDetail.penalty) : '-'}<br>
     Window Score=${win ? 3000 : 0} / Source=${win ? win.source : '-'}<br>
     S Well Score=${realSample ? 5000 : (sample ? 600 : 0)} / Source=${sample ? sample.source : '-'}<br>
     Align Score=${Math.round((c.featureAlign||0)*1000)}<br>
@@ -746,7 +847,8 @@ scored.forEach((c,i)=>
     Fill=${c.fill.toFixed(2)}<br>
     AreaRatio=${(c.areaRatio*100).toFixed(2)}%<br>
     Vertical Score=${c.outerDetail ? c.outerDetail.verticalScore.toFixed(2) : '-'} / Angle=${c.outerDetail ? c.outerDetail.verticalAngle.toFixed(1) : '-'} / H-Penalty=${c.outerDetail ? Math.round(c.outerDetail.horizontalPenalty) : '-'}<br>
-    Closed Edge=${c.outerDetail ? c.outerDetail.closedEdgeScore.toFixed(2) : '-'} / LowRatioPenalty=${c.outerDetail ? Math.round(c.outerDetail.lowRatioPenalty) : '-'} / OpenEdgePenalty=${c.outerDetail ? Math.round(c.outerDetail.openEdgePenalty) : '-'}<br>`;
+    Closed Edge=${c.outerDetail ? c.outerDetail.closedEdgeScore.toFixed(2) : '-'} / LowRatioPenalty=${c.outerDetail ? Math.round(c.outerDetail.lowRatioPenalty) : '-'} / OpenEdgePenalty=${c.outerDetail ? Math.round(c.outerDetail.openEdgePenalty) : '-'}<br>
+    Center Score=${c.outerDetail ? c.outerDetail.centerScore.toFixed(2) : '-'} / CenterDist=${c.outerDetail ? c.outerDetail.centerDist.toFixed(2) : '-'} / EdgePenalty=${c.outerDetail ? Math.round(c.outerDetail.edgePenalty) : '-'}<br>`;
 
     if (f && f.sampleSearch) {
       dbg +=
