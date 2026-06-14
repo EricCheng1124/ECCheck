@@ -38,7 +38,7 @@
             <input id="galleryInput" type="file" accept="image/*" />
           </label>
         </div>
-        <p class="hint">建議：讓快篩卡平放、光線均勻、紅線方向接近垂直。</p>
+        <p class="hint">建議：讓快篩卡平放、光線均勻、紅線方向接近垂直。v5：右側直立波形圖對應照片高度。</p>
       </section>
 
       <section class="card">
@@ -61,8 +61,10 @@
 
       <section class="card canvasCard">
         <h2>影像與分析</h2>
-        <canvas id="canvas"></canvas>
-        <canvas id="chart"></canvas>
+        <div class="analysisGrid">
+          <canvas id="canvas"></canvas>
+          <canvas id="chart"></canvas>
+        </div>
       </section>
     </main>
   </div>
