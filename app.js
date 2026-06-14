@@ -51,7 +51,7 @@
 
   function onCvReady() {
     cvReady = true;
-    cvStatus.textContent = 'OpenCV.js 已載入，可開始外框＋Window/S Well辨識。';
+    cvStatus.textContent = 'OpenCV.js 已載入，可開始外框＋內部 ROI Debug。';
     if (lastImage) analyze();
   }
 
@@ -166,6 +166,9 @@
     }
     html += `方向：${f.orientation}<br>`;
     html += `180度校正：${f.orientationCorrected ? '有' : '無'}<br>`;
+    if (f.roiMetrics) {
+      html += `ROI對位：align=${f.roiMetrics.alignScore.toFixed(2)}, dx=${f.roiMetrics.alignDx.toFixed(0)}, yGap=${f.roiMetrics.yGap.toFixed(0)}, Window在S上方=${f.roiMetrics.windowAboveSample ? 'YES' : 'NO'}<br>`;
+    }
     if (f.window) {
       html += `判讀窗：x=${f.window.x.toFixed(0)}, y=${f.window.y.toFixed(0)}, w=${f.window.w.toFixed(0)}, h=${f.window.h.toFixed(0)}<br>`;
     } else {

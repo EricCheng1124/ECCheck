@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v29.3-debug-outer-accept';
+  const VERSION = 'v30.0-internal-roi-debug';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -231,28 +231,91 @@
   }
 
   function findWindowByContours(norm, W, H) {
-    const blur = new cv.Mat(); cv.GaussianBlur(norm, blur, new cv.Size(5,5), 0);
-    const bin = new cv.Mat(); cv.adaptiveThreshold(blur, bin, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 31, 4);
+    const blur = new cv.Mat();
+    cv.GaussianBlur(norm, blur, new cv.Size(5,5), 0);
+
+    const bin = new cv.Mat();
+    cv.adaptiveThreshold(
+      blur,
+      bin,
+      255,
+      cv.ADAPTIVE_THRESH_GAUSSIAN_C,
+      cv.THRESH_BINARY_INV,
+      31,
+      4
+    );
+
     const k1 = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(3,9));
+    const k2 = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(3,3));
     cv.morphologyEx(bin, bin, cv.MORPH_CLOSE, k1);
-    cv.morphologyEx(bin, bin, cv.MORPH_OPEN, cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(3,3)));
-    const contours = new cv.MatVector(); const hierarchy = new cv.Mat();
+    cv.morphologyEx(bin, bin, cv.MORPH_OPEN, k2);
+
+    const contours = new cv.MatVector();
+    const hierarchy = new cv.Mat();
     cv.findContours(bin, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
-    const candidates=[];
+
+    const candidates = [];
+    const debug = [];
+
     for(let i=0;i<contours.size();i++){
-      const cnt=contours.get(i); const area=cv.contourArea(cnt); const br=cv.boundingRect(cnt);
-      const cx=br.x+br.width/2, cy=br.y+br.height/2; const aspect=br.height/Math.max(1,br.width); const fill=area/Math.max(1,br.width*br.height);
-      // 不限制上下，因為倒放時 Window 會在下半部
-      if(cx>W*0.16 && cx<W*0.84 && cy>H*0.08 && cy<H*0.92 && br.width>W*0.11 && br.width<W*0.48 && br.height>H*0.11 && br.height<H*0.48 && aspect>1.15 && aspect<6.0 && fill>0.06 && fill<0.98){
-        const centerScore=1-Math.min(1,Math.abs(cx-W*0.50)/(W*0.45));
-        const score=br.width*br.height*(0.45+fill)*(0.45+centerScore)*Math.min(2,aspect);
-        candidates.push({x:br.x,y:br.y,w:br.width,h:br.height,cx,cy,aspect,fill,source:'opencv-window-contour',score});
+      const cnt = contours.get(i);
+      const area = cv.contourArea(cnt);
+      const br = cv.boundingRect(cnt);
+      const cx = br.x + br.width / 2;
+      const cy = br.y + br.height / 2;
+      const aspect = br.height / Math.max(1, br.width);
+      const fill = area / Math.max(1, br.width * br.height);
+      const centerScore = 1 - Math.min(1, Math.abs(cx - W * 0.50) / (W * 0.45));
+
+      let reject = '';
+
+      // v30.0：外框已經裁正後，Window/試紙區應該位於卡匣中線附近，且是細長直向區域。
+      if (!reject && cx < W * 0.16) reject = 'too-left';
+      if (!reject && cx > W * 0.84) reject = 'too-right';
+      if (!reject && cy < H * 0.08) reject = 'too-high';
+      if (!reject && cy > H * 0.92) reject = 'too-low';
+      if (!reject && br.width < W * 0.10) reject = 'too-narrow';
+      if (!reject && br.width > W * 0.52) reject = 'too-wide';
+      if (!reject && br.height < H * 0.10) reject = 'too-short';
+      if (!reject && br.height > H * 0.58) reject = 'too-tall';
+      if (!reject && (aspect < 1.15 || aspect > 7.5)) reject = 'bad-aspect';
+      if (!reject && (fill < 0.035 || fill > 0.985)) reject = 'bad-fill';
+
+      const score = br.width * br.height * (0.45 + fill) * (0.45 + centerScore) * Math.min(2.2, aspect);
+
+      debug.push({
+        x: br.x, y: br.y, w: br.width, h: br.height,
+        cx, cy, aspect, fill, centerScore, score,
+        reject: reject || 'PASS'
+      });
+
+      if (!reject) {
+        candidates.push({
+          x: br.x, y: br.y, w: br.width, h: br.height,
+          cx, cy, aspect, fill,
+          source: 'opencv-window-contour',
+          score
+        });
       }
+
       cnt.delete();
     }
+
     candidates.sort((a,b)=>b.score-a.score);
-    blur.delete(); bin.delete(); k1.delete(); contours.delete(); hierarchy.delete();
-    return { win:candidates[0]||null, count:candidates.length };
+    debug.sort((a,b)=>b.score-a.score);
+
+    blur.delete();
+    bin.delete();
+    k1.delete();
+    k2.delete();
+    contours.delete();
+    hierarchy.delete();
+
+    return {
+      win: candidates[0] || null,
+      count: candidates.length,
+      debug: debug.slice(0, 10)
+    };
   }
 
   function makeWindowSafe(win, W, H) {
@@ -393,46 +456,98 @@
     return {cx, cy, rx:W*0.18, ry:W*0.22, r:W*0.22, source:'fallback-sample-by-window-not-detected'};
   }
 
+  function drawRoiSearchBox(ctx, box, label, color) {
+    if (!box) return;
+    ctx.save();
+    ctx.strokeStyle = color;
+    ctx.fillStyle = color;
+    ctx.lineWidth = Math.max(1, ctx.canvas.width / 260);
+    ctx.setLineDash([6,4]);
+    ctx.strokeRect(box.x, box.y, box.w, box.h);
+    ctx.setLineDash([]);
+    ctx.font = `${Math.max(10, Math.round(ctx.canvas.width / 38))}px sans-serif`;
+    ctx.fillText(label, box.x + 3, Math.max(14, box.y - 4));
+    ctx.restore();
+  }
+
   function findInternalFeaturesOnCrop(cropCanvas, draw) {
-    const src = cv.imread(cropCanvas); const W=src.cols, H=src.rows; const ctx=cropCanvas.getContext('2d');
+    const src = cv.imread(cropCanvas);
+    const W = src.cols;
+    const H = src.rows;
+    const ctx = cropCanvas.getContext('2d');
     const norm = makeNormalizedGray(src);
-    const wf = findWindowByContours(norm,W,H);
+
+    const wf = findWindowByContours(norm, W, H);
     const redWin = findRedWindowFromCanvas(cropCanvas);
-    let win =
-    wf.win ||
-    redWin ||
-    fallbackWindowFromGeometry(W,H);
-    win = makeWindowSafe(win,W,H);
-    const sf = findSampleByContours(norm,W,H,win);
-    let sample = sf.sample || fallbackSampleByWindow(W,H,win);
-    if(draw){
-      if (sf.search) {
-        ctx.save();
-        ctx.strokeStyle = 'rgba(245,158,11,0.85)';
-        ctx.lineWidth = Math.max(1, cropCanvas.width / 260);
-        ctx.setLineDash([6,4]);
-        ctx.strokeRect(
-          Math.max(0, sf.search.winCx - sf.search.maxDx),
-          Math.max(0, sf.search.top),
-          Math.min(W, sf.search.maxDx * 2),
-          Math.max(1, sf.search.bottom - sf.search.top)
-        );
-        ctx.restore();
-      }
-      drawRect(ctx, win, 'rgba(37,99,235,0.95)', 'Window');
+
+    // v30.0：Window/試紙區優先順序
+    // 1. red-line-window：已經看到 C/T 紅線時最可靠
+    // 2. opencv-window-contour：沒有明顯紅線時，用凹槽/窗框輪廓
+    // 3. fallback：只做畫面輔助，不視為真正辨識成功
+    let win = redWin || wf.win || fallbackWindowFromGeometry(W, H);
+    win = makeWindowSafe(win, W, H);
+
+    const sf = findSampleByContours(norm, W, H, win);
+    let sample = sf.sample || fallbackSampleByWindow(W, H, win);
+
+    const winCx = win ? win.x + win.w / 2 : W * 0.50;
+    const winCy = win ? win.y + win.h / 2 : H * 0.40;
+    const sampleCx = sample ? sample.cx : W * 0.50;
+    const sampleCy = sample ? sample.cy : H * 0.68;
+    const alignDx = Math.abs(winCx - sampleCx);
+    const alignScore = 1 - Math.min(1, alignDx / Math.max(1, W * 0.35));
+    const windowAboveSample = !!(win && sample && winCy < sampleCy);
+    const yGap = sampleCy - winCy;
+
+    const windowSearchBox = {
+      x: Math.round(W * 0.16),
+      y: Math.round(H * 0.08),
+      w: Math.round(W * 0.68),
+      h: Math.round(H * 0.84)
+    };
+
+    const sampleSearchBox = sf.search ? {
+      x: Math.max(0, sf.search.winCx - sf.search.maxDx),
+      y: Math.max(0, sf.search.top),
+      w: Math.min(W, sf.search.maxDx * 2),
+      h: Math.max(1, sf.search.bottom - sf.search.top)
+    } : null;
+
+    if (draw) {
+      drawRoiSearchBox(ctx, windowSearchBox, 'Window search', 'rgba(59,130,246,0.55)');
+      drawRoiSearchBox(ctx, sampleSearchBox, 'S search', 'rgba(245,158,11,0.85)');
+      drawRect(ctx, win, 'rgba(37,99,235,0.95)', win.source === 'red-line-window' ? 'Window/red' : 'Window');
       drawEllipseMark(ctx, sample, 'rgba(168,85,247,0.95)', sample.source.includes('fallback') ? 'S fallback' : 'S well');
     }
-    const out={
-      window:win,
+
+    const out = {
+      window: win,
       sample,
-      windowSource:win.source,
-      sampleSource:sample.source,
-      windowCandidates:wf.count+(redWin?1:0),
-      sampleCandidates:sf.count,
-      sampleDebug:sf.debug || [],
-      sampleSearch:sf.search || null
+      windowSource: win.source,
+      sampleSource: sample.source,
+      windowCandidates: wf.count + (redWin ? 1 : 0),
+      sampleCandidates: sf.count,
+      windowDebug: wf.debug || [],
+      redWindow: redWin || null,
+      sampleDebug: sf.debug || [],
+      sampleSearch: sf.search || null,
+      roiMetrics: {
+        winCx,
+        winCy,
+        sampleCx,
+        sampleCy,
+        alignDx,
+        alignScore,
+        yGap,
+        windowAboveSample,
+        windowSearchBox,
+        sampleSearchBox
+      }
     };
-    src.delete(); norm.delete(); return out;
+
+    src.delete();
+    norm.delete();
+    return out;
   }
 
   function detectInternalFeatures(cropCanvas) {
@@ -924,6 +1039,27 @@ scored.forEach((c,i)=>
     Closed Edge=${c.outerDetail ? c.outerDetail.closedEdgeScore.toFixed(2) : '-'} / LowRatioPenalty=${c.outerDetail ? Math.round(c.outerDetail.lowRatioPenalty) : '-'} / OpenEdgePenalty=${c.outerDetail ? Math.round(c.outerDetail.openEdgePenalty) : '-'}<br>
     Center Score=${c.outerDetail ? c.outerDetail.centerScore.toFixed(2) : '-'} / CenterDist=${c.outerDetail ? c.outerDetail.centerDist.toFixed(2) : '-'} / EdgePenalty=${c.outerDetail ? Math.round(c.outerDetail.edgePenalty) : '-'}<br>
     SmallOuterPenalty=${c.outerDetail ? Math.round(c.outerDetail.smallOuterPenalty||0) : '-'} / InnerWindowPenalty=${c.outerDetail ? Math.round(c.outerDetail.innerWindowPenalty||0) : '-'} / SmallTotalPenalty=${Math.round(c.smallOuterTotalPenalty||0)}<br>`;
+
+    if (f && f.roiMetrics) {
+      dbg +=
+      `ROI Metrics：align=${f.roiMetrics.alignScore.toFixed(2)}, dx=${f.roiMetrics.alignDx.toFixed(0)}, yGap=${f.roiMetrics.yGap.toFixed(0)}, windowAboveS=${f.roiMetrics.windowAboveSample ? 'YES' : 'NO'}<br>`;
+    }
+
+    if (f && f.redWindow) {
+      dbg +=
+      `Red Window ROI：x=${f.redWindow.x.toFixed(0)}, y=${f.redWindow.y.toFixed(0)}, w=${f.redWindow.w.toFixed(0)}, h=${f.redWindow.h.toFixed(0)}, redCount=${f.redWindow.count || 0}<br>`;
+    } else {
+      dbg += 'Red Window ROI：未找到<br>';
+    }
+
+    if (f && f.windowDebug && f.windowDebug.length) {
+      dbg += '<b>Window Candidates</b><br>';
+      f.windowDebug.forEach((w,j)=>{
+        dbg += `${j+1}. ${w.reject} | x=${w.x}, y=${w.y}, w=${w.w}, h=${w.h}, aspect=${w.aspect.toFixed(2)}, fill=${w.fill.toFixed(2)}, center=${w.centerScore.toFixed(2)}, score=${Math.round(w.score)}<br>`;
+      });
+    } else {
+      dbg += 'Window Candidates：無<br>';
+    }
 
     if (f && f.sampleSearch) {
       dbg +=
