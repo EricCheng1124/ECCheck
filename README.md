@@ -1,6 +1,7 @@
-# ASAP Check v20
+# ASAP Check v22
 
-- OpenCV outer frame detection
-- Window contour + dark-profile fallback
-- Sample Well uses inner-hole center first, with visual ellipse overlay
-- Debug display only; no C/T positive-negative judgement yet
+- OpenCV outer frame detection: edge + white-mask dual path
+- Background/shadow normalization before internal detection
+- Window detection: contour + dark-profile
+- Sample detection: inner-hole first, then stable visual S well ellipse
+- Orientation correction uses Window and S only; no C/T line is used.
