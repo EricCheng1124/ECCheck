@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v28.9-center-priority';
+  const VERSION = 'v29.0-outer-size-guard';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -560,6 +560,22 @@ function outerGeometryScore(c, imgArea, imgW, imgH)
         centerScore < 0.52 ? 1200 :
         0;
 
+    // v29.0：外框尺寸保護。
+    // 判讀窗/試紙區本身也可能有紅線與橢圓形特徵，
+    // 但它在整張照片中的面積會明顯小於真正卡匣外框。
+    // 因此候選太小時即使有 Window/S Well，也不能當成外框。
+    const smallOuterPenalty =
+        areaRatio < 0.020 ? 24000 :
+        areaRatio < 0.030 ? 18000 :
+        areaRatio < 0.050 ? 9000 :
+        0;
+
+    // 面積極小但比例又很像 3~4 的候選，常是判讀窗本身。
+    const innerWindowPenalty =
+        areaRatio < 0.020 && c.ratio > 2.4 && c.ratio < 5.2 ? 12000 :
+        areaRatio < 0.030 && c.ratio > 2.4 && c.ratio < 5.2 ? 6000 :
+        0;
+
     const score =
         areaScore * 4200 +
         ratioScore * 1300 +
@@ -572,7 +588,9 @@ function outerGeometryScore(c, imgArea, imgW, imgH)
         horizontalPenalty -
         lowRatioPenalty -
         openEdgePenalty -
-        edgePenalty;
+        edgePenalty -
+        smallOuterPenalty -
+        innerWindowPenalty;
 
     return {
         score: Math.max(0, score),
@@ -585,6 +603,8 @@ function outerGeometryScore(c, imgArea, imgW, imgH)
         centerScore,
         centerDist,
         edgePenalty,
+        smallOuterPenalty,
+        innerWindowPenalty,
         methodBonus,
         smallPenalty,
         horizontalPenalty,
@@ -782,11 +802,14 @@ function candidateFeatureScore(srcCanvas, cand)
       const noTrustedFeaturePenalty = (hasRedWindow || hasRealSample) ? 0 : 8200;
       c.outerScore=geo.score;
       c.outerDetail=geo;
+      const smallOuterTotalPenalty = (geo.smallOuterPenalty || 0) + (geo.innerWindowPenalty || 0);
       c.totalScore =
         geo.score +
         fs.score -
         noRealSamplePenalty -
-        noTrustedFeaturePenalty;
+        noTrustedFeaturePenalty -
+        smallOuterTotalPenalty;
+      c.smallOuterTotalPenalty = smallOuterTotalPenalty;
       c.featureScore=fs.score;
       c.featureDetail=fs.f;
       c.featureAlign=fs.align;
@@ -848,7 +871,8 @@ scored.forEach((c,i)=>
     AreaRatio=${(c.areaRatio*100).toFixed(2)}%<br>
     Vertical Score=${c.outerDetail ? c.outerDetail.verticalScore.toFixed(2) : '-'} / Angle=${c.outerDetail ? c.outerDetail.verticalAngle.toFixed(1) : '-'} / H-Penalty=${c.outerDetail ? Math.round(c.outerDetail.horizontalPenalty) : '-'}<br>
     Closed Edge=${c.outerDetail ? c.outerDetail.closedEdgeScore.toFixed(2) : '-'} / LowRatioPenalty=${c.outerDetail ? Math.round(c.outerDetail.lowRatioPenalty) : '-'} / OpenEdgePenalty=${c.outerDetail ? Math.round(c.outerDetail.openEdgePenalty) : '-'}<br>
-    Center Score=${c.outerDetail ? c.outerDetail.centerScore.toFixed(2) : '-'} / CenterDist=${c.outerDetail ? c.outerDetail.centerDist.toFixed(2) : '-'} / EdgePenalty=${c.outerDetail ? Math.round(c.outerDetail.edgePenalty) : '-'}<br>`;
+    Center Score=${c.outerDetail ? c.outerDetail.centerScore.toFixed(2) : '-'} / CenterDist=${c.outerDetail ? c.outerDetail.centerDist.toFixed(2) : '-'} / EdgePenalty=${c.outerDetail ? Math.round(c.outerDetail.edgePenalty) : '-'}<br>
+    SmallOuterPenalty=${c.outerDetail ? Math.round(c.outerDetail.smallOuterPenalty||0) : '-'} / InnerWindowPenalty=${c.outerDetail ? Math.round(c.outerDetail.innerWindowPenalty||0) : '-'} / SmallTotalPenalty=${Math.round(c.smallOuterTotalPenalty||0)}<br>`;
 
     if (f && f.sampleSearch) {
       dbg +=

@@ -1,11 +1,10 @@
-# ASAP Check v28.9
+# ASAP Check v29.0
 
-本版加入「照片中央優先」評分：
+本版新增外框尺寸保護：
 
-- 候選越靠近照片中央分數越高
-- 靠近左右/上下邊緣的手機、滑鼠墊、桌面物件會被扣分
-- 保留 v28.8 的亮色卡匣外觀判斷
-- 保留封閉邊緣、長寬比、直向外框、Window/S Well 輔助判斷
-- Debug 新增 Center Score / CenterDist / EdgePenalty
+- 避免把試紙判讀窗/內部紅線區當成整支卡匣外框
+- 面積過小候選會被 SmallOuterPenalty 扣分
+- 面積過小且比例像判讀窗者會被 InnerWindowPenalty 再扣分
+- 保留中央優先、亮色卡匣外觀、封閉邊緣與 Window/S Well 判斷
 
-版本：v28.9-center-priority
+版本：v29.0-outer-size-guard
