@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v15-opencv-frame-window-sample';
+  const VERSION = 'v16-window-sample-hybrid';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
 
@@ -183,6 +183,8 @@
 
     let resultWindow = windowCandidates[0] || null;
     let sampleHole = null;
+    let windowSource = resultWindow ? 'opencv-contour' : 'none';
+    let sampleSource = 'none';
 
     // S孔不可選到判讀窗本身；盡量選在判讀窗下方
     for (const s of sampleCandidates) {
@@ -193,7 +195,38 @@
         if (overlap > Math.min(s.w*s.h, resultWindow.w*resultWindow.h) * 0.25) continue;
       }
       sampleHole = s;
+      sampleSource = 'opencv-contour';
       break;
+    }
+
+    // V16 fallback：外框已正確裁切後，內部結構會落在相對固定位置。
+    // OpenCV找不到低對比凹槽時，先用幾何區域補上，避免整個流程卡住。
+    if (!resultWindow) {
+      resultWindow = {
+        x: Math.round(W * 0.28),
+        y: Math.round(H * 0.26),
+        w: Math.round(W * 0.30),
+        h: Math.round(H * 0.30),
+        cx: Math.round(W * 0.43),
+        cy: Math.round(H * 0.41),
+        area: 0, fill: 0, aspect: 0, score: 0
+      };
+      windowSource = 'fallback-geometry';
+    }
+
+    if (!sampleHole) {
+      sampleHole = {
+        cx: Math.round(W * 0.42),
+        cy: Math.round(H * 0.68),
+        rx: Math.round(W * 0.16),
+        ry: Math.round(W * 0.18),
+        x: Math.round(W * 0.42 - W * 0.16),
+        y: Math.round(H * 0.68 - W * 0.18),
+        w: Math.round(W * 0.32),
+        h: Math.round(W * 0.36),
+        area: 0, circularity: 0, score: 0
+      };
+      sampleSource = 'fallback-geometry';
     }
 
     if (draw) {
@@ -206,6 +239,8 @@
     return {
       window: resultWindow,
       sample: sampleHole,
+      windowSource,
+      sampleSource,
       windowCandidates: windowCandidates.length,
       sampleCandidates: sampleCandidates.length
     };

@@ -77,8 +77,8 @@
   function formatFeatures(f) {
     if (!f) return '<br>內部特徵：未執行';
     let html = '<hr>';
-    html += `判讀窗候選：${f.windowCandidates}<br>`;
-    html += `S孔候選：${f.sampleCandidates}<br>`;
+    html += `判讀窗候選：${f.windowCandidates}，來源：${f.windowSource || '-'}<br>`;
+    html += `S孔候選：${f.sampleCandidates}，來源：${f.sampleSource || '-'}<br>`;
     html += `方向：${f.orientation}<br>`;
     html += `180度校正：${f.orientationCorrected ? '有' : '無'}<br>`;
     if (f.window) {
