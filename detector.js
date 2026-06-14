@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v28.5-vertical-edge-rect';
+  const VERSION = 'v28.6-closed-edge-priority';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -543,7 +543,10 @@ function outerGeometryScore(c, imgArea)
         verticalDiff: vertical.diff,
         methodBonus,
         smallPenalty,
-        horizontalPenalty
+        horizontalPenalty,
+        closedEdgeScore,
+        lowRatioPenalty,
+        openEdgePenalty
     };
 }
 
@@ -697,7 +700,8 @@ scored.forEach((c,i)=>
     Ratio=${c.ratio.toFixed(2)}<br>
     Fill=${c.fill.toFixed(2)}<br>
     AreaRatio=${(c.areaRatio*100).toFixed(2)}%<br>
-    Vertical Score=${c.outerDetail ? c.outerDetail.verticalScore.toFixed(2) : '-'} / Angle=${c.outerDetail ? c.outerDetail.verticalAngle.toFixed(1) : '-'} / H-Penalty=${c.outerDetail ? Math.round(c.outerDetail.horizontalPenalty) : '-'}<br>`;
+    Vertical Score=${c.outerDetail ? c.outerDetail.verticalScore.toFixed(2) : '-'} / Angle=${c.outerDetail ? c.outerDetail.verticalAngle.toFixed(1) : '-'} / H-Penalty=${c.outerDetail ? Math.round(c.outerDetail.horizontalPenalty) : '-'}<br>
+    Closed Edge=${c.outerDetail ? c.outerDetail.closedEdgeScore.toFixed(2) : '-'} / LowRatioPenalty=${c.outerDetail ? Math.round(c.outerDetail.lowRatioPenalty) : '-'} / OpenEdgePenalty=${c.outerDetail ? Math.round(c.outerDetail.openEdgePenalty) : '-'}<br>`;
 
     if (f && f.sampleSearch) {
       dbg +=
