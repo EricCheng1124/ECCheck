@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v30.1-roi-only-view';
+  const VERSION = 'v30.2-dual-orientation-roi';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -470,6 +470,292 @@
     ctx.restore();
   }
 
+  function makeRatioBox(W, H, x0, y0, x1, y1) {
+    return {
+      x: Math.round(W * x0),
+      y: Math.round(H * y0),
+      w: Math.round(W * (x1 - x0)),
+      h: Math.round(H * (y1 - y0)),
+      cx: W * (x0 + x1) / 2,
+      cy: H * (y0 + y1) / 2
+    };
+  }
+
+  function insideBox(cx, cy, box) {
+    return cx >= box.x && cx <= box.x + box.w && cy >= box.y && cy <= box.y + box.h;
+  }
+
+  function overlapArea(a, b) {
+    if (!a || !b) return 0;
+    const ax2 = a.x + a.w;
+    const ay2 = a.y + a.h;
+    const bx2 = b.x + b.w;
+    const by2 = b.y + b.h;
+    const ox = Math.max(0, Math.min(ax2, bx2) - Math.max(a.x, b.x));
+    const oy = Math.max(0, Math.min(ay2, by2) - Math.max(a.y, b.y));
+    return ox * oy;
+  }
+
+  function findRedWindowInBox(canvas, box, W, H) {
+    const ctx = canvas.getContext('2d', {willReadFrequently:true});
+    const data = ctx.getImageData(0, 0, W, H).data;
+    const xs = [];
+    const ys = [];
+    const x0 = clamp(Math.floor(box.x), 0, W - 1);
+    const x1 = clamp(Math.ceil(box.x + box.w), 0, W);
+    const y0 = clamp(Math.floor(box.y), 0, H - 1);
+    const y1 = clamp(Math.ceil(box.y + box.h), 0, H);
+
+    for (let y = y0; y < y1; y++) {
+      for (let x = x0; x < x1; x++) {
+        const idx = (y * W + x) * 4;
+        const r = data[idx], g = data[idx+1], b = data[idx+2];
+        const redScore = r - Math.max(g,b)*0.72 + (r-g)*0.18 + (r-b)*0.10;
+        if (r > 105 && redScore > 20 && r > g*1.03 && r > b*1.03) {
+          xs.push(x); ys.push(y);
+        }
+      }
+    }
+
+    const minCount = Math.max(8, W * H * 0.000035);
+    if (xs.length < minCount) return null;
+
+    xs.sort((a,b)=>a-b); ys.sort((a,b)=>a-b);
+    const q = (arr,p)=>arr[Math.max(0, Math.min(arr.length-1, Math.floor(arr.length*p)))];
+    const minX = q(xs, 0.04), maxX = q(xs, 0.96);
+    const minY = q(ys, 0.04), maxY = q(ys, 0.96);
+    const cx = (minX + maxX) / 2;
+    const cy = (minY + maxY) / 2;
+
+    // v30.2：這裡抓「小 Window/試紙區」，不要再把整個紅線區放太大。
+    const w = clamp((maxX - minX) * 2.4 + W * 0.11, W * 0.16, W * 0.34);
+    const h = clamp((maxY - minY) * 2.8 + H * 0.08, H * 0.16, H * 0.36);
+
+    return {
+      x: clamp(cx - w/2, 0, W - 1),
+      y: clamp(cy - h/2, 0, H - 1),
+      w: clamp(w, 1, W),
+      h: clamp(h, 1, H),
+      cx, cy,
+      source: 'red-line-window-ratio-roi',
+      count: xs.length,
+      redBox: {x:minX, y:minY, w:maxX-minX, h:maxY-minY}
+    };
+  }
+
+  function findWindowByRatioBox(norm, W, H, box) {
+    const blur = new cv.Mat();
+    const bin = new cv.Mat();
+    const k1 = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(3,9));
+    const k2 = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(3,3));
+    const contours = new cv.MatVector();
+    const hierarchy = new cv.Mat();
+    const candidates = [];
+    const debug = [];
+
+    try {
+      cv.GaussianBlur(norm, blur, new cv.Size(5,5), 0);
+      cv.adaptiveThreshold(blur, bin, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 31, 4);
+      cv.morphologyEx(bin, bin, cv.MORPH_CLOSE, k1);
+      cv.morphologyEx(bin, bin, cv.MORPH_OPEN, k2);
+      cv.findContours(bin, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+
+      for (let i=0; i<contours.size(); i++) {
+        const cnt = contours.get(i);
+        const area = cv.contourArea(cnt);
+        const br = cv.boundingRect(cnt);
+        const cx = br.x + br.width / 2;
+        const cy = br.y + br.height / 2;
+        const aspect = br.height / Math.max(1, br.width);
+        const fill = area / Math.max(1, br.width * br.height);
+        const centerDx = Math.abs(cx - box.cx) / Math.max(1, box.w/2);
+        const centerDy = Math.abs(cy - box.cy) / Math.max(1, box.h/2);
+        const centerScore = 1 - Math.min(1, Math.hypot(centerDx, centerDy) / 1.35);
+
+        let reject = '';
+        if (!insideBox(cx, cy, box)) reject = 'outside-window-template';
+        if (!reject && br.width < W * 0.12) reject = 'too-narrow';
+        if (!reject && br.width > W * 0.38) reject = 'too-wide';
+        if (!reject && br.height < H * 0.14) reject = 'too-short';
+        if (!reject && br.height > H * 0.44) reject = 'too-tall';
+        if (!reject && (aspect < 1.70 || aspect > 8.50)) reject = 'bad-aspect';
+        if (!reject && (fill < 0.030 || fill > 0.985)) reject = 'bad-fill';
+
+        const idealW = W * 0.23;
+        const idealH = H * 0.26;
+        const sizeScore = 1 - Math.min(1, (Math.abs(br.width-idealW)/idealW + Math.abs(br.height-idealH)/idealH) / 2.2);
+        const score = br.width * br.height * (0.35 + fill) * (0.50 + centerScore) * (0.50 + sizeScore) * Math.min(2.4, aspect);
+
+        const item = {x:br.x,y:br.y,w:br.width,h:br.height,cx,cy,aspect,fill,centerScore,sizeScore,score,reject:reject||'PASS'};
+        debug.push(item);
+        if (!reject) candidates.push(Object.assign({}, item, {source:'opencv-window-ratio-roi'}));
+        cnt.delete();
+      }
+    }
+    finally {
+      blur.delete(); bin.delete(); k1.delete(); k2.delete(); contours.delete(); hierarchy.delete();
+    }
+
+    candidates.sort((a,b)=>b.score-a.score);
+    debug.sort((a,b)=>b.score-a.score);
+    return {win:candidates[0] || null, count:candidates.length, debug:debug.slice(0,10), box};
+  }
+
+  function findSampleByRatioBox(norm, W, H, box, win) {
+    const blur = new cv.Mat();
+    const bin = new cv.Mat();
+    const kClose = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(9,9));
+    const kOpen = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(3,3));
+    const contours = new cv.MatVector();
+    const hierarchy = new cv.Mat();
+    const candidates = [];
+    const debug = [];
+    const winCx = win ? win.x + win.w/2 : box.cx;
+
+    try {
+      cv.GaussianBlur(norm, blur, new cv.Size(7,7), 0);
+      cv.adaptiveThreshold(blur, bin, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 51, 3);
+      cv.morphologyEx(bin, bin, cv.MORPH_CLOSE, kClose);
+      cv.morphologyEx(bin, bin, cv.MORPH_OPEN, kOpen);
+      cv.findContours(bin, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+
+      for (let i=0; i<contours.size(); i++) {
+        const cnt = contours.get(i);
+        const area = cv.contourArea(cnt);
+        const br = cv.boundingRect(cnt);
+        const cx = br.x + br.width / 2;
+        const cy = br.y + br.height / 2;
+        const rectArea = Math.max(1, br.width * br.height);
+        const wh = br.width / Math.max(1, br.height);
+        const peri = cv.arcLength(cnt, true);
+        const circ = peri > 0 ? 4 * Math.PI * area / (peri * peri) : 0;
+        const fill = area / rectArea;
+        const dx = Math.abs(cx - winCx);
+        const align = 1 - Math.min(1, dx / Math.max(1, W * 0.28));
+        const centerDx = Math.abs(cx - box.cx) / Math.max(1, box.w/2);
+        const centerDy = Math.abs(cy - box.cy) / Math.max(1, box.h/2);
+        const centerScore = 1 - Math.min(1, Math.hypot(centerDx, centerDy) / 1.25);
+        const r = {x:br.x,y:br.y,w:br.width,h:br.height};
+
+        let reject = '';
+        if (!insideBox(cx, cy, box)) reject = 'outside-s-template';
+        if (!reject && win && overlapArea(r, win) > rectArea * 0.05) reject = 'overlap-window';
+        if (!reject && br.width < W * 0.16) reject = 'too-narrow';
+        if (!reject && br.width > W * 0.58) reject = 'too-wide';
+        if (!reject && br.height < W * 0.16) reject = 'too-short';
+        if (!reject && br.height > W * 0.68) reject = 'too-tall';
+        if (!reject && (wh < 0.42 || wh > 1.95)) reject = 'bad-aspect';
+        if (!reject && circ < 0.20) reject = 'low-circularity';
+        if (!reject && (fill < 0.08 || fill > 0.92)) reject = 'bad-fill';
+
+        const ideal = W * 0.32;
+        const sizeScore = 1 - Math.min(1, (Math.abs(br.width-ideal)/ideal + Math.abs(br.height-ideal*1.12)/(ideal*1.12)) / 2.0);
+        const score = rectArea * (0.55 + circ * 1.8) * (0.40 + fill) * (0.65 + align * 1.6) * (0.55 + centerScore) * (0.55 + sizeScore);
+
+        const item = {x:br.x,y:br.y,w:br.width,h:br.height,cx,cy,circ,fill,align,centerScore,sizeScore,score,reject:reject||'PASS'};
+        debug.push(item);
+        if (!reject) {
+          candidates.push({cx,cy,rx:br.width/2,ry:br.height/2,r:Math.max(br.width,br.height)/2,x:br.x,y:br.y,w:br.width,h:br.height,source:'sample-contour-ratio-roi',circ,fill,align,centerScore,score});
+        }
+        cnt.delete();
+      }
+    }
+    finally {
+      blur.delete(); bin.delete(); kClose.delete(); kOpen.delete(); contours.delete(); hierarchy.delete();
+    }
+
+    candidates.sort((a,b)=>b.score-a.score);
+    debug.sort((a,b)=>b.score-a.score);
+    return {sample:candidates[0] || null, count:candidates.length, debug:debug.slice(0,10), search:{top:box.y,bottom:box.y+box.h,winCx,maxDx:W*0.28, box}};
+  }
+
+  function templateScore(name, win, sample, W, H) {
+    const hasWin = !!win;
+    const hasSample = !!sample && sample.source && !sample.source.includes('fallback');
+    let score = 0;
+    let alignScore = 0;
+    let gapScore = 0;
+    let relationOk = false;
+    let yGap = 0;
+
+    if (hasWin) score += win.source && win.source.includes('red-line') ? 5200 : 3400;
+    if (hasSample) score += 5200;
+
+    if (hasWin && hasSample) {
+      const wx = win.x + win.w/2;
+      const wy = win.y + win.h/2;
+      const sx = sample.cx;
+      const sy = sample.cy;
+      alignScore = 1 - Math.min(1, Math.abs(wx - sx) / Math.max(1, W * 0.28));
+      score += alignScore * 2300;
+
+      if (name === 'normal') {
+        yGap = sample.cy - (win.y + win.h);
+        relationOk = sample.cy > wy;
+      } else {
+        yGap = win.y - (sample.cy + sample.ry);
+        relationOk = win.y + win.h/2 > sample.cy;
+      }
+
+      const minGap = H * 0.035;
+      const maxGap = H * 0.23;
+      if (relationOk && yGap > minGap && yGap < maxGap) {
+        gapScore = 1 - Math.min(1, Math.abs(yGap - H*0.10) / (H*0.16));
+        score += 2600 + gapScore * 1000;
+      } else if (relationOk) {
+        score += 600;
+      } else {
+        score -= 4200;
+      }
+    }
+
+    return {score, hasWin, hasSample, alignScore, gapScore, relationOk, yGap};
+  }
+
+  function evaluateInternalTemplate(cropCanvas, norm, W, H, name) {
+    const isNormal = name === 'normal';
+    const windowBox = isNormal ? makeRatioBox(W,H,0.20,0.20,0.72,0.58) : makeRatioBox(W,H,0.20,0.42,0.72,0.80);
+    const sampleBox = isNormal ? makeRatioBox(W,H,0.16,0.48,0.76,0.86) : makeRatioBox(W,H,0.16,0.14,0.76,0.52);
+
+    const rw = findRedWindowInBox(cropCanvas, windowBox, W, H);
+    const wf = findWindowByRatioBox(norm, W, H, windowBox);
+    let win = rw || wf.win || null;
+    if (win) win = makeWindowSafe(win, W, H);
+
+    const sf = findSampleByRatioBox(norm, W, H, sampleBox, win);
+    const sample = sf.sample || null;
+    const ts = templateScore(name, win, sample, W, H);
+
+    return {
+      name,
+      window: win,
+      sample,
+      windowSource: win ? win.source : '-',
+      sampleSource: sample ? sample.source : '-',
+      windowCandidates: wf.count + (rw ? 1 : 0),
+      sampleCandidates: sf.count,
+      windowDebug: wf.debug || [],
+      redWindow: rw || null,
+      sampleDebug: sf.debug || [],
+      sampleSearch: sf.search || null,
+      windowSearchBox: windowBox,
+      sampleSearchBox: sampleBox,
+      templateScore: ts
+    };
+  }
+
+  function drawInternalFeatures(ctx, W, H, f) {
+    // v30.2：裁切圖只畫外框、Window、S Well，不再畫黑底 ROI Only 或大範圍搜尋框。
+    ctx.save();
+    ctx.strokeStyle = 'rgba(34,197,94,0.98)';
+    ctx.lineWidth = Math.max(3, W/160);
+    ctx.strokeRect(1, 1, W-2, H-2);
+    ctx.restore();
+
+    if (f.window) drawRect(ctx, f.window, 'rgba(37,99,235,0.95)', f.window.source && f.window.source.includes('red') ? 'Window/red' : 'Window');
+    if (f.sample) drawEllipseMark(ctx, f.sample, 'rgba(168,85,247,0.95)', 'S well');
+  }
+
   function findInternalFeaturesOnCrop(cropCanvas, draw) {
     const src = cv.imread(cropCanvas);
     const W = src.cols;
@@ -477,93 +763,67 @@
     const ctx = cropCanvas.getContext('2d');
     const norm = makeNormalizedGray(src);
 
-    const wf = findWindowByContours(norm, W, H);
-    const redWin = findRedWindowFromCanvas(cropCanvas);
+    const normal = evaluateInternalTemplate(cropCanvas, norm, W, H, 'normal');
+    const inverted = evaluateInternalTemplate(cropCanvas, norm, W, H, 'inverted');
+    const chosen = normal.templateScore.score >= inverted.templateScore.score ? normal : inverted;
 
-    // v30.0：Window/試紙區優先順序
-    // 1. red-line-window：已經看到 C/T 紅線時最可靠
-    // 2. opencv-window-contour：沒有明顯紅線時，用凹槽/窗框輪廓
-    // 3. fallback：只做畫面輔助，不視為真正辨識成功
-    let win = redWin || wf.win || fallbackWindowFromGeometry(W, H);
-    win = makeWindowSafe(win, W, H);
-
-    const sf = findSampleByContours(norm, W, H, win);
-    let sample = sf.sample || fallbackSampleByWindow(W, H, win);
-
-    const winCx = win ? win.x + win.w / 2 : W * 0.50;
-    const winCy = win ? win.y + win.h / 2 : H * 0.40;
-    const sampleCx = sample ? sample.cx : W * 0.50;
-    const sampleCy = sample ? sample.cy : H * 0.68;
+    const win = chosen.window || fallbackWindowFromGeometry(W, H);
+    const sample = chosen.sample || fallbackSampleByWindow(W, H, win);
+    const winCx = win ? win.x + win.w/2 : W*0.50;
+    const winCy = win ? win.y + win.h/2 : H*0.40;
+    const sampleCx = sample ? sample.cx : W*0.50;
+    const sampleCy = sample ? sample.cy : H*0.68;
     const alignDx = Math.abs(winCx - sampleCx);
-    const alignScore = 1 - Math.min(1, alignDx / Math.max(1, W * 0.35));
+    const alignScore = 1 - Math.min(1, alignDx / Math.max(1, W*0.35));
     const windowAboveSample = !!(win && sample && winCy < sampleCy);
     const yGap = sampleCy - winCy;
-
-    const windowSearchBox = {
-      x: Math.round(W * 0.16),
-      y: Math.round(H * 0.08),
-      w: Math.round(W * 0.68),
-      h: Math.round(H * 0.84)
-    };
-
-    const sampleSearchBox = sf.search ? {
-      x: Math.max(0, sf.search.winCx - sf.search.maxDx),
-      y: Math.max(0, sf.search.top),
-      w: Math.min(W, sf.search.maxDx * 2),
-      h: Math.max(1, sf.search.bottom - sf.search.top)
-    } : null;
-
-    if (draw) {
-      drawRoiSearchBox(ctx, windowSearchBox, 'Window search', 'rgba(59,130,246,0.55)');
-      drawRoiSearchBox(ctx, sampleSearchBox, 'S search', 'rgba(245,158,11,0.85)');
-      drawRect(ctx, win, 'rgba(37,99,235,0.95)', win.source === 'red-line-window' ? 'Window/red' : 'Window');
-      drawEllipseMark(ctx, sample, 'rgba(168,85,247,0.95)', sample.source.includes('fallback') ? 'S fallback' : 'S well');
-    }
 
     const out = {
       window: win,
       sample,
       windowSource: win.source,
       sampleSource: sample.source,
-      windowCandidates: wf.count + (redWin ? 1 : 0),
-      sampleCandidates: sf.count,
-      windowDebug: wf.debug || [],
-      redWindow: redWin || null,
-      sampleDebug: sf.debug || [],
-      sampleSearch: sf.search || null,
+      windowCandidates: chosen.windowCandidates,
+      sampleCandidates: chosen.sampleCandidates,
+      windowDebug: chosen.windowDebug || [],
+      redWindow: chosen.redWindow || null,
+      sampleDebug: chosen.sampleDebug || [],
+      sampleSearch: chosen.sampleSearch || null,
+      normalTemplate: normal,
+      invertedTemplate: inverted,
+      chosenTemplate: chosen.name,
+      needsRotation180: chosen.name === 'inverted',
       roiMetrics: {
-        winCx,
-        winCy,
-        sampleCx,
-        sampleCy,
-        alignDx,
-        alignScore,
-        yGap,
-        windowAboveSample,
-        windowSearchBox,
-        sampleSearchBox
+        winCx, winCy, sampleCx, sampleCy, alignDx, alignScore, yGap, windowAboveSample,
+        windowSearchBox: chosen.windowSearchBox,
+        sampleSearchBox: chosen.sampleSearchBox,
+        normalScore: normal.templateScore.score,
+        invertedScore: inverted.templateScore.score
       }
     };
 
-    src.delete();
-    norm.delete();
+    if (draw) drawInternalFeatures(ctx, W, H, out);
+    src.delete(); norm.delete();
     return out;
   }
 
   function detectInternalFeatures(cropCanvas) {
     let f = findInternalFeaturesOnCrop(cropCanvas,false);
-    let orientationCorrected=false;
-    // 核心：只用 Window + S Well 方向判斷，不使用 C/T 線。
-    if(f.window && f.sample && f.sample.cy < (f.window.y + f.window.h/2)){
-      rotateCanvas180(cropCanvas); orientationCorrected=true;
+    let orientationCorrected = false;
+
+    // v30.2：不再用單一「S 是否在 Window 上方」直接翻轉。
+    // 先跑 normal / inverted 兩套比例模板，只有 inverted 分數比較高才旋轉。
+    if (f.needsRotation180) {
+      rotateCanvas180(cropCanvas);
+      orientationCorrected = true;
       f = findInternalFeaturesOnCrop(cropCanvas,false);
     }
+
     const finalF = findInternalFeaturesOnCrop(cropCanvas,true);
-    finalF.orientationCorrected=orientationCorrected;
-    finalF.orientation=(finalF.window&&finalF.sample) ? (finalF.sample.cy > (finalF.window.y+finalF.window.h/2) ? 'window-above-sample' : 'maybe-upside-down') : 'unknown';
+    finalF.orientationCorrected = orientationCorrected;
+    finalF.orientation = finalF.chosenTemplate === 'normal' ? 'window-above-sample' : 'sample-above-window';
     return finalF;
   }
-
 
 
 function longAxisVerticalScore(c)
@@ -826,7 +1086,7 @@ function candidateFeatureScore(srcCanvas, cand)
         const sample = f && f.sample;
 
         const rawRedWindow =
-            !!(win && win.source === 'red-line-window');
+            !!(win && win.source && win.source.includes('red-line-window'));
 
         const hasRedWindow =
             !!(rawRedWindow && appearance.trustedBrightCard);
@@ -1043,6 +1303,9 @@ scored.forEach((c,i)=>
     if (f && f.roiMetrics) {
       dbg +=
       `ROI Metrics：align=${f.roiMetrics.alignScore.toFixed(2)}, dx=${f.roiMetrics.alignDx.toFixed(0)}, yGap=${f.roiMetrics.yGap.toFixed(0)}, windowAboveS=${f.roiMetrics.windowAboveSample ? 'YES' : 'NO'}<br>`;
+      if (f.chosenTemplate) {
+        dbg += `ROI Template：chosen=${f.chosenTemplate} / normal=${f.roiMetrics.normalScore.toFixed(0)} / inverted=${f.roiMetrics.invertedScore.toFixed(0)} / rotate180=${f.orientationCorrected ? 'YES' : 'NO'}<br>`;
+      }
     }
 
     if (f && f.redWindow) {
