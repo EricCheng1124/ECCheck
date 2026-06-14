@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v28.1-window-sample-score';
+  const VERSION = 'v28.2-inrange-safe-debug';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -113,13 +113,31 @@
     const rgb = new cv.Mat(); cv.cvtColor(src, rgb, cv.COLOR_RGBA2RGB);
     const hsv = new cv.Mat(); cv.cvtColor(rgb, hsv, cv.COLOR_RGB2HSV);
     const mask = new cv.Mat();
-    // 低飽和 + 中高亮度：黑底、灰底、米色桌面都可先抓出白色卡匣候選
-    cv.inRange(hsv, new cv.Scalar(0, 0, 118), new cv.Scalar(180, 92, 255), mask);
+    let lower = null;
+    let upper = null;
+
+    try {
+      // OpenCV.js 某些版本不接受 new cv.Scalar(...) 傳入 inRange，必須用 Mat。
+      lower = new cv.Mat(hsv.rows, hsv.cols, hsv.type(), [0, 0, 118, 0]);
+      upper = new cv.Mat(hsv.rows, hsv.cols, hsv.type(), [180, 92, 255, 255]);
+      cv.inRange(hsv, lower, upper, mask);
+    } finally {
+      if (lower) lower.delete();
+      if (upper) upper.delete();
+    }
+
     const k1 = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(5,5));
     const k2 = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(13,13));
     cv.morphologyEx(mask, mask, cv.MORPH_OPEN, k1);
     cv.morphologyEx(mask, mask, cv.MORPH_CLOSE, k2);
     rgb.delete(); hsv.delete(); k1.delete(); k2.delete(); return mask;
+  }
+
+  function showDebugMat(targetCanvas, mat) {
+    if (!targetCanvas || !mat || mat.empty()) return;
+    targetCanvas.width = mat.cols;
+    targetCanvas.height = mat.rows;
+    cv.imshow(targetCanvas, mat);
   }
 
   function addCandidatesFromBinary(bin, imgArea, options, out, method) {
@@ -147,29 +165,35 @@
     contours.delete(); hierarchy.delete();
   }
 
-  function collectOuterCandidates(src, options) {
+  function collectOuterCandidates(src, options, debugTargets) {
     const imgArea = src.cols * src.rows;
     const all = [];
 
     // A. 白色物件分割：主力，黑底尤其穩
     const white = makeWhiteMask(src);
     addCandidatesFromBinary(white, imgArea, options, all, 'white-mask');
+    showDebugMat(debugTargets && debugTargets.mask, white);
 
     // B. 邊緣輪廓：輔助，處理白底或桌面接近白色
     const norm = makeNormalizedGray(src);
+    showDebugMat(debugTargets && debugTargets.gray, norm);
     const blur = new cv.Mat(); cv.GaussianBlur(norm, blur, new cv.Size(5,5), 0);
     const edges = new cv.Mat(); cv.Canny(blur, edges, 28, 90);
     const k = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(9,9));
     cv.morphologyEx(edges, edges, cv.MORPH_CLOSE, k); cv.dilate(edges, edges, k, new cv.Point(-1,-1), 1);
     addCandidatesFromBinary(edges, imgArea, options, all, 'edge-contour');
+    showDebugMat(debugTargets && debugTargets.edge, edges);
 
     // C. 高亮前景：比整體背景亮的區塊
     const fg = new cv.Mat(); cv.threshold(norm, fg, 145, 255, cv.THRESH_BINARY);
-    cv.morphologyEx(fg, fg, cv.MORPH_OPEN, cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(5,5)));
-    cv.morphologyEx(fg, fg, cv.MORPH_CLOSE, cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(11,11)));
+    const fgOpenK = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(5,5));
+    const fgCloseK = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(11,11));
+    cv.morphologyEx(fg, fg, cv.MORPH_OPEN, fgOpenK);
+    cv.morphologyEx(fg, fg, cv.MORPH_CLOSE, fgCloseK);
     addCandidatesFromBinary(fg, imgArea, options, all, 'bright-foreground');
+    showDebugMat(debugTargets && debugTargets.fg, fg);
 
-    white.delete(); norm.delete(); blur.delete(); edges.delete(); k.delete(); fg.delete();
+    white.delete(); norm.delete(); blur.delete(); edges.delete(); k.delete(); fg.delete(); fgOpenK.delete(); fgCloseK.delete();
 
     // 去重
     const unique = [];
@@ -319,53 +343,34 @@ function candidateFeatureScore(srcCanvas, cand)
 
         let score = 0;
 
-        const hasWindow =
-            !!f.window;
-
-        const hasSample =
-            !!f.sample;
-
-        if(hasWindow)
-            score += 2000;
-
-        if(hasSample)
-            score += 2000;
+        const hasWindow = !!f.window;
+        const hasSample = !!f.sample;
+        const windowScore = hasWindow ? 2000 : 0;
+        const sampleScore = hasSample ? 2000 : 0;
+        score += windowScore + sampleScore;
 
         let align = 0;
+        let alignScore = 0;
 
         if(hasWindow && hasSample)
         {
-            const wx =
-                f.window.x +
-                f.window.w / 2;
-
-            const sx =
-                f.sample.cx;
-
-            const dx =
-                Math.abs(wx - sx);
-
-            align =
-                1 -
-                Math.min(
-                    1,
-                    dx / (tmp.width * 0.35)
-                );
-
-            score +=
-                align * 1000;
+            const wx = f.window.x + f.window.w / 2;
+            const sx = f.sample.cx;
+            const dx = Math.abs(wx - sx);
+            align = 1 - Math.min(1, dx / (tmp.width * 0.35));
+            alignScore = align * 1000;
+            score += alignScore;
         }
 
-        return {
-            score,
-            align,
-            f
-        };
+        return { score, windowScore, sampleScore, alignScore, align, f };
     }
     catch(e)
     {
         return {
             score:0,
+            windowScore:0,
+            sampleScore:0,
+            alignScore:0,
             align:0,
             f:null
         };
@@ -374,11 +379,11 @@ function candidateFeatureScore(srcCanvas, cand)
 
 
 
-  function detectOuterFrame(canvas, cropCanvas, options) {
+  function detectOuterFrame(canvas, cropCanvas, options, debugTargets) {
     if (typeof cv === 'undefined' || !cv.Mat) return {version:VERSION,ok:false,reason:'opencv-not-ready'};
     options = Object.assign({ minAreaRatio:0.01, ratioMin:2.2, ratioMax:6.5 }, options||{});
     const ctx=canvas.getContext('2d'); const src=cv.imread(canvas); const imgArea=src.cols*src.rows;
-    const rawCands=collectOuterCandidates(src, options);
+    const rawCands=collectOuterCandidates(src, options, debugTargets);
     const scored=[];
     for(const c of rawCands.slice(0,8)){
       const fs=candidateFeatureScore(canvas,c);
@@ -388,6 +393,10 @@ function candidateFeatureScore(srcCanvas, cand)
     + ratioScore * 100
     + c.fill * 100;
       c.featureScore=fs.score;
+      c.windowScore=fs.windowScore || 0;
+      c.sampleScore=fs.sampleScore || 0;
+      c.alignScore=fs.alignScore || 0;
+      c.featureInfo=fs.f;
       scored.push(c);
     }
     scored.sort((a,b)=>b.totalScore-a.totalScore);
@@ -406,16 +415,29 @@ function candidateFeatureScore(srcCanvas, cand)
 
 let dbg='';
 
+dbg +=
+`<b>Debug Summary</b><br>
+White Mask：已產生<br>
+Edge：已產生<br>
+Bright Foreground：已納入候選來源<br>
+Raw Candidates：${rawCands.length}<br>
+Scored Candidates：${scored.length}<hr>`;
+
 scored.forEach((c,i)=>
 {
+    const fi = c.featureInfo || {};
     dbg +=
     `
-    #${i+1}<br>
+    <b>#${i+1}</b><br>
     Method=${c.method}<br>
-    Score=${Math.round(c.totalScore)}<br>
-    Feature=${Math.round(c.featureScore||0)}<br>
+    Candidate Score=${Math.round(c.totalScore)}<br>
+    Feature Score=${Math.round(c.featureScore||0)}<br>
+    Window Score=${Math.round(c.windowScore||0)} / Source=${fi.windowSource || '-'}<br>
+    S Well Score=${Math.round(c.sampleScore||0)} / Source=${fi.sampleSource || '-'}<br>
+    Align Score=${Math.round(c.alignScore||0)}<br>
     Ratio=${c.ratio.toFixed(2)}<br>
     Fill=${c.fill.toFixed(2)}<br>
+    AreaRatio=${(c.areaRatio*100).toFixed(2)}%<br>
     <hr>
     `;
 });

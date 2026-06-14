@@ -19,6 +19,7 @@
   const debugGray=document.getElementById('debugGray');
   const debugMask=document.getElementById('debugMask');
   const debugEdge=document.getElementById('debugEdge');
+  const debugFg=document.getElementById('debugFg');
   const debugText=document.getElementById('debugText');
 
 
@@ -114,14 +115,16 @@
         `中心：x=${r.rect.cx.toFixed(0)}, y=${r.rect.cy.toFixed(0)}<br>` +
         `尺寸：w=${r.rect.w.toFixed(0)}, h=${r.rect.h.toFixed(0)}, angle=${r.rect.angle.toFixed(1)}°<br>` +
         formatFeatures(r.features);
-      if(r.debug){debugText.innerHTML=r.debug;}
+      debugText.innerHTML = r.debug || '';
     } else {
       resultEl.classList.add('invalid');
       resultEl.textContent = '外框辨識失敗';
       detailEl.innerHTML =
         `版本：${r.version}<br>` +
         `失敗原因：${r.reason}<br>` +
+        `候選數：${r.candidates || 0}<br>` +
         `建議：降低「最小面積比例」，或把「長寬比下限」調到 1.8。`;
+      debugText.innerHTML = r.debug || '';
     }
   }
 
@@ -134,8 +137,31 @@
       detailEl.textContent = '請等 OpenCV.js 載入完成。';
       return;
     }
-    const r = window.AsapOuterDetector.detectOuterFrame(canvas, cropCanvas, getOptions());
-    setResult(r);
+    try {
+      debugText.innerHTML = '';
+      const r = window.AsapOuterDetector.detectOuterFrame(
+        canvas,
+        cropCanvas,
+        getOptions(),
+        {
+          gray: debugGray,
+          mask: debugMask,
+          edge: debugEdge,
+          fg: debugFg
+        }
+      );
+      setResult(r);
+    } catch (ex) {
+      console.error(ex);
+      resultEl.className = 'result invalid';
+      resultEl.textContent = '分析失敗';
+      detailEl.innerHTML =
+        '<b>Exception</b><br>' +
+        (ex && ex.message ? ex.message : String(ex));
+      debugText.innerHTML =
+        '<b>Exception</b><br>' +
+        (ex && ex.stack ? ex.stack.replace(/\n/g, '<br>') : (ex && ex.message ? ex.message : String(ex)));
+    }
   }
 
   function loadFile(file) {
