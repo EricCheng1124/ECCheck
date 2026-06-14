@@ -1,7 +1,8 @@
-# ASAP Check v29.2
+# ASAP Check v29.3
 
-- 修正 Debug 顯示 Final Gate PASS 但結果仍顯示失敗的問題
-- Final Gate 通過時強制 ok=true
-- UI 增加防呆：Debug PASS 時也顯示成功
+- 失敗時也完整顯示 Debug Summary
+- Final Gate 新增 outerOnlyOk
+- 正確外框已成立但 Window/S Well 未確認時，顯示「外框辨識成功，Window/S Well 尚未確認」
+- Debug 新增 Final Force outerOnly 與 Best Gate Detail
 
-版本：v29.2-final-gate-force-pass
+版本：v29.3-debug-outer-accept

@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v29.2-final-gate-force-pass';
+  const VERSION = 'v29.3-debug-outer-accept';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -853,9 +853,9 @@ function candidateFeatureScore(srcCanvas, cand)
       const bestHasRealSample = !!best.hasRealSample;
       const bestHasTrustedFeature = !!(bestHasTrustedRedWindow || bestHasRealSample);
 
-      // v29.2：這裡改成最終唯一 gate。
-      // 只要外框幾何通過，而且有 red-line-window 或真正 S Well，就一定回傳 ok=true。
-      // 避免 Debug 顯示 Final Gate PASS，但結果區仍顯示失敗的狀況。
+      // v29.3：Final Gate 再放寬一層：
+      // 若外框幾何本身已明確成立（大面積、亮色、直向、中心、比例），即使 Window/S Well 沒被確認，也先判外框成功。
+      // 這避免正確外框被框到，但因紅線太淡或 S Well 找不到而顯示失敗。
       const forceOkByFinalGate = !!(bestOuterGeometryOk && bestHasTrustedFeature);
       const forceOkByStrongCandidate = !!(
         best.totalScore > 18000 &&
@@ -864,14 +864,24 @@ function candidateFeatureScore(srcCanvas, cand)
         best.appearanceDetail.trustedBrightCard &&
         (bestHasTrustedRedWindow || bestHasRealSample)
       );
-      const bestOk = !!(forceOkByFinalGate || forceOkByStrongCandidate);
+      const outerOnlyOk = !!(
+        bestOuterGeometryOk &&
+        best.outerScore >= 9000 &&
+        bestAreaRatio >= 0.075 &&
+        best.ratio >= 2.5 &&
+        best.ratio <= 5.2 &&
+        best.appearanceDetail &&
+        best.appearanceDetail.trustedBrightCard &&
+        (!best.outerDetail || best.outerDetail.centerScore >= 0.45)
+      );
+      const bestOk = !!(forceOkByFinalGate || forceOkByStrongCandidate || outerOnlyOk);
 
       let failReason = '';
       if(!bestOuterGeometryOk) failReason = 'bad-outer-geometry';
-      else if(!bestHasTrustedFeature) failReason = 'no-trusted-window-or-sample';
+      else if(!bestHasTrustedFeature && !outerOnlyOk) failReason = 'no-trusted-window-or-sample';
       else failReason = '';
 
-      const partialMessage = bestHasTrustedRedWindow && !bestHasRealSample;
+      const partialMessage = (bestHasTrustedRedWindow && !bestHasRealSample) || outerOnlyOk;
       
 
 let dbg='';
@@ -883,8 +893,9 @@ dbg += 'Bright Foreground：已納入候選來源<br>';
 dbg += 'Raw Candidates：' + rawCands.length + '<br>';
 dbg += 'Scored Candidates：' + scored.length + '<br>';
 dbg += 'Final Gate：outer=' + (bestOuterGeometryOk ? 'PASS' : 'FAIL') + ' / trustedFeature=' + (bestHasTrustedFeature ? 'PASS' : 'FAIL') + ' / redWindow=' + (bestHasTrustedRedWindow ? 'YES' : 'NO') + ' / realSample=' + (bestHasRealSample ? 'YES' : 'NO') + '<br>';
-dbg += 'Final Reason：' + (bestOk ? (partialMessage ? 'outer+red-window-ok，S Well 尚未確認' : 'outer+real-feature-ok') : failReason) + '<br>';
-dbg += 'Final Force：finalGate=' + (forceOkByFinalGate ? 'YES' : 'NO') + ' / strongCandidate=' + (forceOkByStrongCandidate ? 'YES' : 'NO') + '<br><hr>';
+dbg += 'Final Reason：' + (bestOk ? (outerOnlyOk ? 'outer-only-ok，Window/S Well 尚未確認' : (partialMessage ? 'outer+red-window-ok，S Well 尚未確認' : 'outer+real-feature-ok')) : failReason) + '<br>';
+dbg += 'Final Force：finalGate=' + (forceOkByFinalGate ? 'YES' : 'NO') + ' / strongCandidate=' + (forceOkByStrongCandidate ? 'YES' : 'NO') + ' / outerOnly=' + (outerOnlyOk ? 'YES' : 'NO') + '<br>';
+dbg += 'Best Gate Detail：areaRatio=' + (bestAreaRatio*100).toFixed(2) + '% / ratio=' + best.ratio.toFixed(2) + ' / outerScore=' + Math.round(best.outerScore||0) + ' / appearance=' + (bestAppearanceOk ? 'PASS':'FAIL') + ' / center=' + (bestCenterOk ? 'PASS':'FAIL') + '<br><hr>';
 
 scored.forEach((c,i)=>
 {
@@ -934,7 +945,7 @@ scored.forEach((c,i)=>
 result={
     version:VERSION,
     ok:bestOk,
-    reason:bestOk ? (partialMessage ? best.method+'+red-window-outer-pass' : best.method+'+real-feature-gate') : failReason,
+    reason:bestOk ? (outerOnlyOk ? best.method+'+outer-only-pass' : (partialMessage ? best.method+'+red-window-outer-pass' : best.method+'+real-feature-gate')) : failReason,
     ratio:best.ratio,
     areaRatio:best.rectArea/imgArea,
     fill:best.fill,
@@ -953,6 +964,7 @@ result={
     appearanceOk:bestAppearanceOk,
     centerOk:bestCenterOk,
     partialMessage,
+    outerOnlyOk,
     debug:dbg
 };
 

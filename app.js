@@ -181,6 +181,8 @@
 
   function setResult(r) {
     resultEl.className = 'result';
+    // v29.3：不管成功或失敗，都先把 detector debug 印出來，避免失敗時 log 消失。
+    if (debugText && r && r.debug) { debugText.innerHTML = r.debug; }
 
     // v29.2 防呆：如果 detector debug 已經顯示 Final Gate PASS，
     // 但 r.ok 因快取或舊邏輯變成 false，UI 仍以 PASS 顯示。
@@ -194,7 +196,9 @@
     if (uiOk) {
       resultEl.classList.add('ok');
       const sampleFallback = r.features && r.features.sampleSource && r.features.sampleSource.indexOf('fallback') >= 0;
-      if (r.partialMessage || sampleFallback) {
+      if (r.outerOnlyOk) {
+        resultEl.textContent = '外框辨識成功，Window/S Well 尚未確認';
+      } else if (r.partialMessage || sampleFallback) {
         resultEl.textContent = '外框＋Window辨識成功，S Well 尚未確認';
       } else {
         resultEl.textContent = '外框＋Window＋S Well辨識成功';
@@ -209,14 +213,15 @@
         `中心：x=${r.rect.cx.toFixed(0)}, y=${r.rect.cy.toFixed(0)}<br>` +
         `尺寸：w=${r.rect.w.toFixed(0)}, h=${r.rect.h.toFixed(0)}, angle=${r.rect.angle.toFixed(1)}°<br>` +
         formatFeatures(r.features);
-      if(r.debug){debugText.innerHTML=r.debug;}
     } else {
       resultEl.classList.add('invalid');
       resultEl.textContent = '外框辨識失敗';
       detailEl.innerHTML =
         `版本：${r.version}<br>` +
         `失敗原因：${r.reason}<br>` +
-        `建議：降低「最小面積比例」，或把「長寬比下限」調到 1.8。`;
+        `候選數：${r.candidates || 0}<br>` +
+        `建議：請直接看下方 Debug Summary 的 Final Gate 與 #1 候選。`;
+      if (debugText && r && r.debug) { debugText.innerHTML = r.debug; }
     }
   }
 
