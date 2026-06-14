@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v22-stable-frame-window-sample-orientation';
+  const VERSION = 'v23-stable-bg-window-sample-orientation';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -172,9 +172,10 @@
       const cx = rect.center.x;
       const cy = rect.center.y;
       const centerScore = 1 - Math.min(1, Math.hypot(cx - mask.cols/2, cy - mask.rows/2) / Math.hypot(mask.cols/2, mask.rows/2));
-      if (ratio >= options.ratioMin && ratio <= options.ratioMax && fill > 0.16 && notFullImage) {
-        let score = area * (0.45 + fill) * (0.65 + centerScore);
-        if (sourceName === 'white-mask') score *= 1.25;
+      if (ratio >= options.ratioMin && ratio <= options.ratioMax && fill > 0.10 && notFullImage) {
+        let score = area * (0.45 + fill) * (0.35 + centerScore);
+        if (sourceName === 'white-mask') score *= 1.20;
+        if (sourceName === 'foreground-light-mask') score *= 1.35;
         list.push({ area, rectArea, fill, ratio, rect, pts, score, source: sourceName });
       }
       cnt.delete();
@@ -217,6 +218,22 @@
     cv.morphologyEx(whiteMask, whiteMask, cv.MORPH_CLOSE, kWhite);
     cv.morphologyEx(whiteMask, whiteMask, cv.MORPH_OPEN, cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5,5)));
     addOuterCandidatesFromMask(whiteMask, imgArea, options, 'white-mask', candidates);
+
+    // 路徑C：前景亮物件遮罩。處理黑色背景、深色桌墊、或背景亮暗不均。
+    // 不只看絕對白色，而是找「低飽和且比周邊亮」的長條物件。
+    let fg = new cv.Mat();
+    cv.threshold(norm, fg, 112, 255, cv.THRESH_BINARY);
+    let lowSat = new cv.Mat();
+    const lowSatLow = new cv.Mat(hsv.rows, hsv.cols, hsv.type(), [0, 0, 0, 0]);
+    const lowSatHigh = new cv.Mat(hsv.rows, hsv.cols, hsv.type(), [179, 135, 255, 255]);
+    cv.inRange(hsv, lowSatLow, lowSatHigh, lowSat);
+    cv.bitwise_and(fg, lowSat, fg);
+    let kFg = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(11,11));
+    cv.morphologyEx(fg, fg, cv.MORPH_CLOSE, kFg);
+    cv.morphologyEx(fg, fg, cv.MORPH_OPEN, cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5,5)));
+    addOuterCandidatesFromMask(fg, imgArea, Object.assign({}, options, {minAreaRatio: Math.min(options.minAreaRatio, 0.004)}), 'foreground-light-mask', candidates);
+
+    fg.delete(); lowSat.delete(); lowSatLow.delete(); lowSatHigh.delete(); kFg.delete();
 
     gray.delete(); blurBig.delete(); norm.delete(); blur.delete(); edges.delete(); kEdge.delete();
     hsv.delete(); whiteMask.delete(); low.delete(); high.delete(); kWhite.delete();
@@ -324,12 +341,10 @@
   }
 
   function findSampleInnerHole(norm, W, H, win) {
-    let x0 = Math.round(W * 0.10), x1 = Math.round(W * 0.90);
-    let y0 = Math.round(H * 0.38), y1 = Math.round(H * 0.94);
-    if (win) {
-      // 只限定不要壓到 Window，但不限定一定在下半部，這樣倒放時也能抓到 S 孔
-      y0 = Math.max(Math.round(H*0.08), Math.round(Math.min(win.y + win.h*0.8, H*0.42)));
-    }
+    // V23：S孔搜尋範圍改成幾乎整張卡匣，不再假設一定在下半部。
+    // 這樣倒放照片時，S孔在上方也能被找到，才能用 S孔 + Window 做 180 度判斷。
+    let x0 = Math.round(W * 0.08), x1 = Math.round(W * 0.92);
+    let y0 = Math.round(H * 0.06), y1 = Math.round(H * 0.94);
     let roi = norm.roi(new cv.Rect(x0, y0, x1-x0, y1-y0));
     let blur = new cv.Mat();
     cv.GaussianBlur(roi, blur, new cv.Size(5,5), 0);
@@ -360,14 +375,64 @@
           if (overlapX*overlapY > br.width*br.height*0.10) { cnt.delete(); continue; }
         }
         const expectedX = win ? (win.x + win.w/2) : W*0.47;
-        const centerScore = 1 - Math.min(1, Math.abs(cx-expectedX)/(W*0.40));
-        const score = area * (0.5+circularity) * (0.5+centerScore) * (0.5+fill);
-        candidates.push({cx,cy,r:Math.max(br.width,br.height)/2,rx:br.width/2,ry:br.height/2,x:br.x,y:br.y,w:br.width,h:br.height,source:'inner-hole',circularity,fill,score});
+        const centerScore = 1 - Math.min(1, Math.abs(cx-expectedX)/(W*0.42));
+        // S內孔通常不是極大或極小，太長條的線條/文字要降權
+        const shapeScore = Math.max(0.15, 1 - Math.min(1, Math.abs(wh - 0.70) / 1.20));
+        const score = area * (0.5+circularity) * (0.5+centerScore) * (0.5+fill) * shapeScore;
+        candidates.push({cx,cy,r:Math.max(br.width,br.height)/2,rx:br.width/2,ry:br.height/2,x:br.x,y:br.y,w:br.width,h:br.height,source:'inner-hole-full-card',circularity,fill,score});
       }
       cnt.delete();
     }
     candidates.sort((a,b)=>b.score-a.score);
     roi.delete(); blur.delete(); bin.delete(); contours.delete(); hierarchy.delete();
+    return {sample:candidates[0] || null, count:candidates.length};
+  }
+
+
+  function findSampleWellByAllContours(norm, W, H, win) {
+    // V23：找整個 Sample Well 視覺橢圓，搜尋全卡匣，排除 Window 區。
+    let blur = new cv.Mat();
+    cv.GaussianBlur(norm, blur, new cv.Size(7,7), 0);
+    let bin = new cv.Mat();
+    cv.adaptiveThreshold(blur, bin, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 41, 3);
+    const k = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(7,7));
+    cv.morphologyEx(bin, bin, cv.MORPH_CLOSE, k);
+    cv.morphologyEx(bin, bin, cv.MORPH_OPEN, cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(3,3)));
+    let contours = new cv.MatVector();
+    let hierarchy = new cv.Mat();
+    cv.findContours(bin, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+    const candidates = [];
+    for (let i=0;i<contours.size();i++) {
+      const cnt = contours.get(i);
+      const area = cv.contourArea(cnt);
+      const br = cv.boundingRect(cnt);
+      const cx = br.x + br.width/2, cy = br.y + br.height/2;
+      const peri = cv.arcLength(cnt,true);
+      const circularity = peri>0 ? 4*Math.PI*area/(peri*peri) : 0;
+      const wh = br.width/Math.max(1,br.height);
+      const fill = area/Math.max(1,br.width*br.height);
+      const rectArea = br.width*br.height;
+      let overlapsWindow = false;
+      if (win) {
+        const overlapX = Math.max(0, Math.min(br.x+br.width, win.x+win.w) - Math.max(br.x, win.x));
+        const overlapY = Math.max(0, Math.min(br.y+br.height, win.y+win.h) - Math.max(br.y, win.y));
+        overlapsWindow = overlapX*overlapY > rectArea*0.08;
+      }
+      if (!overlapsWindow &&
+          cx > W*0.10 && cx < W*0.90 && cy > H*0.05 && cy < H*0.95 &&
+          br.width > W*0.18 && br.width < W*0.70 &&
+          br.height > W*0.16 && br.height < W*0.80 &&
+          wh > 0.45 && wh < 2.35 && fill > 0.08 && circularity > 0.08) {
+        const expectedX = win ? (win.x + win.w/2) : W*0.47;
+        const centerScore = 1 - Math.min(1, Math.abs(cx-expectedX)/(W*0.45));
+        const roundScore = Math.max(0.15, 1 - Math.min(1, Math.abs(wh-1.15)/1.60));
+        const score = rectArea * (0.45+circularity) * (0.45+centerScore) * (0.45+fill) * roundScore;
+        candidates.push({cx,cy,rx:br.width/2,ry:br.height/2,r:Math.max(br.width,br.height)/2,x:br.x,y:br.y,w:br.width,h:br.height,source:'sample-well-full-card',circularity,fill,score});
+      }
+      cnt.delete();
+    }
+    candidates.sort((a,b)=>b.score-a.score);
+    blur.delete(); bin.delete(); k.delete(); contours.delete(); hierarchy.delete();
     return {sample:candidates[0] || null, count:candidates.length};
   }
 
@@ -402,13 +467,19 @@
     if (!win) win = fallbackWindow(W,H);
 
     const inner = findSampleInnerHole(norm,W,H,win);
-    let well = findSampleWellAroundInner(norm,W,H,inner.sample,win);
-    let sample = well.sample || fallbackSample(W,H,win);
+    const allWell = findSampleWellByAllContours(norm,W,H,win);
+    let well = allWell.sample ? allWell : findSampleWellAroundInner(norm,W,H,inner.sample,win);
+    let sample = well.sample || (inner.sample ? findSampleWellAroundInner(norm,W,H,inner.sample,win).sample : null);
+    let sampleReliable = !!sample;
+    if (!sample) {
+      sample = fallbackSample(W,H,win);
+      sampleReliable = false;
+    }
     let sampleSource = sample.source;
 
     if (draw) {
       drawRect(ctx, win, 'rgba(37,99,235,0.95)', 'Window');
-      drawEllipseMark(ctx, sample, 'rgba(168,85,247,0.95)', 'S well');
+      drawEllipseMark(ctx, sample, sampleReliable ? 'rgba(168,85,247,0.95)' : 'rgba(168,85,247,0.35)', sampleReliable ? 'S well' : 'S fallback');
       if (inner.sample) drawCross(ctx, inner.sample, 'rgba(217,70,239,0.85)', 'inner');
       drawCross(ctx, {cx:win.x+win.w/2, cy:win.y+win.h/2}, 'rgba(239,68,68,0.85)', 'W center');
     }
@@ -420,7 +491,8 @@
       windowSource,
       sampleSource,
       windowCandidates: wc.count + (wp ? 1 : 0),
-      sampleCandidates: inner.count + well.count
+      sampleCandidates: inner.count + allWell.count + well.count,
+      sampleReliable
     };
   }
 
@@ -428,7 +500,7 @@
     // 先找一次 Window + S，若 S 在 Window 上方，才做 180 度校正；不使用 C/T 線判斷方向
     let f1 = findInternalFeaturesOnCrop(cropCanvas, false);
     let orientationCorrected = false;
-    if (f1.window && f1.sample && f1.sample.cy < (f1.window.y + f1.window.h/2)) {
+    if (f1.window && f1.sample && f1.sampleReliable && f1.sample.cy < (f1.window.y + f1.window.h/2)) {
       rotateCanvas180(cropCanvas);
       orientationCorrected = true;
     }
@@ -442,7 +514,7 @@
 
   function detectOuterFrame(canvas, cropCanvas, options) {
     if (typeof cv === 'undefined' || !cv.Mat) return {version:VERSION,ok:false,reason:'opencv-not-ready'};
-    options = Object.assign({minAreaRatio:0.006,ratioMin:1.7,ratioMax:7.5}, options || {});
+    options = Object.assign({minAreaRatio:0.004,ratioMin:1.45,ratioMax:8.5}, options || {});
     const ctx = canvas.getContext('2d');
     const src = cv.imread(canvas);
     const imgArea = src.cols * src.rows;

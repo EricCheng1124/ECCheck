@@ -1,7 +1,6 @@
-# ASAP Check v22
+# ASAP Check v23
 
-- OpenCV outer frame detection: edge + white-mask dual path
-- Background/shadow normalization before internal detection
-- Window detection: contour + dark-profile
-- Sample detection: inner-hole first, then stable visual S well ellipse
-- Orientation correction uses Window and S only; no C/T line is used.
+- OpenCV outer frame detection with edge + white + foreground-light masks
+- Window + Sample Well orientation only
+- Full-card S hole search for upside-down cassette
+- No C/T line used for orientation
