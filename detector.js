@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v28.4-outer-geometry-priority';
+  const VERSION = 'v28.5-vertical-edge-rect';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -145,7 +145,8 @@
 
   function addCandidatesFromBinary(bin, imgArea, options, out, method) {
     const contours = new cv.MatVector(); const hierarchy = new cv.Mat();
-    cv.findContours(bin, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+    const retrieveMode = method.includes('edge') ? cv.RETR_LIST : cv.RETR_EXTERNAL;
+    cv.findContours(bin, contours, hierarchy, retrieveMode, cv.CHAIN_APPROX_SIMPLE);
     for (let i=0;i<contours.size();i++) {
       const cnt = contours.get(i);
       const rect = cv.minAreaRect(cnt);
@@ -449,6 +450,30 @@
   }
 
 
+
+function longAxisVerticalScore(c)
+{
+    let angle = c.rect.angle || 0;
+    if(c.rect.size.width < c.rect.size.height)
+        angle += 90;
+
+    angle = ((angle % 180) + 180) % 180;
+
+    const diff = Math.min(
+        Math.abs(angle - 90),
+        Math.abs(angle + 90),
+        Math.abs(angle - 270)
+    );
+
+    const score = 1 - Math.min(1, diff / 38);
+
+    return {
+        score,
+        angle,
+        diff
+    };
+}
+
 function outerGeometryScore(c, imgArea)
 {
     const areaRatio = c.rectArea / Math.max(1, imgArea);
@@ -483,9 +508,18 @@ function outerGeometryScore(c, imgArea)
         );
 
     const methodBonus =
-        c.method.includes('edge') ? 1400 :
+        c.method.includes('edge') ? 1900 :
         c.method.includes('white') ? 900 :
-        450;
+        250;
+
+    const vertical = longAxisVerticalScore(c);
+
+    // 這次的錯誤就是把桌面上的橫向亮帶當成外框。
+    // 快篩卡在拍照流程中應該是直向，所以長軸不夠直立就大幅扣分。
+    const horizontalPenalty =
+        vertical.score < 0.25 ? 5600 :
+        vertical.score < 0.45 ? 2600 :
+        0;
 
     const smallPenalty =
         areaRatio < 0.050 ? 2400 : 0;
@@ -494,16 +528,22 @@ function outerGeometryScore(c, imgArea)
         areaScore * 5200 +
         ratioScore * 1700 +
         fillScore * 850 +
+        vertical.score * 3600 +
         methodBonus -
-        smallPenalty;
+        smallPenalty -
+        horizontalPenalty;
 
     return {
         score: Math.max(0, score),
         areaScore,
         ratioScore,
         fillScore,
+        verticalScore: vertical.score,
+        verticalAngle: vertical.angle,
+        verticalDiff: vertical.diff,
         methodBonus,
-        smallPenalty
+        smallPenalty,
+        horizontalPenalty
     };
 }
 
@@ -656,7 +696,8 @@ scored.forEach((c,i)=>
     Align Score=${Math.round((c.featureAlign||0)*1000)}<br>
     Ratio=${c.ratio.toFixed(2)}<br>
     Fill=${c.fill.toFixed(2)}<br>
-    AreaRatio=${(c.areaRatio*100).toFixed(2)}%<br>`;
+    AreaRatio=${(c.areaRatio*100).toFixed(2)}%<br>
+    Vertical Score=${c.outerDetail ? c.outerDetail.verticalScore.toFixed(2) : '-'} / Angle=${c.outerDetail ? c.outerDetail.verticalAngle.toFixed(1) : '-'} / H-Penalty=${c.outerDetail ? Math.round(c.outerDetail.horizontalPenalty) : '-'}<br>`;
 
     if (f && f.sampleSearch) {
       dbg +=
