@@ -1,6 +1,5 @@
-# ASAP Check v23
+# ASAP Check v24
 
-- OpenCV outer frame detection with edge + white + foreground-light masks
-- Window + Sample Well orientation only
-- Full-card S hole search for upside-down cassette
-- No C/T line used for orientation
+- 修正 edge contour 面積判斷：用 rectArea 而不是 contourArea
+- 黑色背景/深色桌墊更不容易 no-candidate
+- 方向仍只用 Window + S 孔，不用 C/T 線

@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v23-stable-bg-window-sample-orientation';
+  const VERSION = 'v24-outer-rectarea-window-sample-orientation';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -160,23 +160,30 @@
     for (let i = 0; i < contours.size(); i++) {
       const cnt = contours.get(i);
       const area = cv.contourArea(cnt);
-      if (area < imgArea * options.minAreaRatio) { cnt.delete(); continue; }
       const rect = cv.minAreaRect(cnt);
       const rw = rect.size.width, rh = rect.size.height;
       const shortSide = Math.min(rw, rh), longSide = Math.max(rw, rh);
       const ratio = longSide / Math.max(1, shortSide);
       const rectArea = rw * rh;
       const fill = area / Math.max(1, rectArea);
-      const notFullImage = rectArea < imgArea * 0.78;
+      const notFullImage = rectArea < imgArea * 0.92;
       const pts = rectPointsToArray(rect);
       const cx = rect.center.x;
       const cy = rect.center.y;
       const centerScore = 1 - Math.min(1, Math.hypot(cx - mask.cols/2, cy - mask.rows/2) / Math.hypot(mask.cols/2, mask.rows/2));
-      if (ratio >= options.ratioMin && ratio <= options.ratioMax && fill > 0.10 && notFullImage) {
-        let score = area * (0.45 + fill) * (0.35 + centerScore);
-        if (sourceName === 'white-mask') score *= 1.20;
-        if (sourceName === 'foreground-light-mask') score *= 1.35;
-        list.push({ area, rectArea, fill, ratio, rect, pts, score, source: sourceName });
+
+      // 重要修正：edge-contour 本質上是「邊線」，contourArea 常常很小；
+      // 外框候選應該用 minAreaRect 的 rectArea 來通過面積門檻，否則黑背景/邊線圖很容易 no-candidate。
+      const sizeMetric = (sourceName === 'edge-contour') ? rectArea : Math.max(area, rectArea * 0.20);
+      const minFill = (sourceName === 'edge-contour') ? 0.012 : 0.050;
+      const minArea = imgArea * Math.min(options.minAreaRatio || 0.002, 0.004);
+
+      if (sizeMetric >= minArea && ratio >= options.ratioMin && ratio <= options.ratioMax && fill > minFill && notFullImage) {
+        let score = sizeMetric * (0.25 + Math.min(1, fill)) * (0.35 + centerScore);
+        if (sourceName === 'white-mask') score *= 1.35;
+        if (sourceName === 'foreground-light-mask') score *= 1.45;
+        if (sourceName === 'edge-contour') score *= 1.10;
+        list.push({ area: Math.max(area, rectArea*0.35), rectArea, fill, ratio, rect, pts, score, source: sourceName });
       }
       cnt.delete();
     }
@@ -514,7 +521,7 @@
 
   function detectOuterFrame(canvas, cropCanvas, options) {
     if (typeof cv === 'undefined' || !cv.Mat) return {version:VERSION,ok:false,reason:'opencv-not-ready'};
-    options = Object.assign({minAreaRatio:0.004,ratioMin:1.45,ratioMax:8.5}, options || {});
+    options = Object.assign({minAreaRatio:0.002,ratioMin:1.35,ratioMax:10.0}, options || {});
     const ctx = canvas.getContext('2d');
     const src = cv.imread(canvas);
     const imgArea = src.cols * src.rows;
