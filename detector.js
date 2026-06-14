@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v11-cassette-crop-shadow-safe';
+  const VERSION = 'v12-line-window-crop';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
 
@@ -30,197 +30,57 @@
     return a[idx];
   }
 
-  function rollingBackground(profile, halfWindow, excludeHalfWidth) {
-    const out = new Array(profile.length).fill(0);
-    for (let i = 0; i < profile.length; i++) {
-      const values = [];
-      const s = clamp(i - halfWindow, 0, profile.length - 1);
-      const e = clamp(i + halfWindow, 0, profile.length - 1);
-      for (let k = s; k <= e; k++) {
-        if (Math.abs(k - i) > excludeHalfWidth) values.push(profile[k]);
-      }
-      out[i] = median(values);
-    }
-    return out;
-  }
-
-  function normalizeProfile(profile) {
-    const maxVal = Math.max(1, ...profile);
-    return profile.map(v => v / maxVal * 100);
-  }
-
   function redPinkScore(r, g, b) {
-    // 對淡粉紅線比較敏感，但避免把單純暗影當紅線。
-    const rg = r - g;
-    const rb = r - b;
+    // 對淡粉紅/紫紅快篩線比較敏感，同時壓低陰影與白塑膠反光。
+    const max = Math.max(r, g, b);
+    const min = Math.min(r, g, b);
     const avg = (r + g + b) / 3;
-    const sat = Math.max(r, g, b) - Math.min(r, g, b);
-    const redExcess = Math.max(0, rg) * 0.75 + Math.max(0, rb) * 0.75;
-    const pinkBoost = Math.max(0, r - (g + b) * 0.50);
-    const brightnessGate = avg > 65 ? 1 : 0.35;
-    const saturationGate = sat > 4 ? 1 : 0.30;
-    return clamp((redExcess + pinkBoost * 0.55) * brightnessGate * saturationGate, 0, 255);
+    const sat = max - min;
+
+    const redExcess = Math.max(0, r - g) * 0.9 + Math.max(0, r - b) * 0.9;
+    const pinkRatio = r / Math.max(1, (g + b) / 2);
+    const ratioBoost = Math.max(0, pinkRatio - 1.015) * 95;
+
+    const brightnessGate = avg > 55 ? 1 : 0.25;
+    const saturationGate = sat > 3 ? 1 : 0.25;
+
+    return clamp((redExcess + ratioBoost) * brightnessGate * saturationGate, 0, 255);
   }
 
-  function getImageDataFast(canvas) {
+  function getImage(canvas) {
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
-    return { ctx, w: canvas.width, h: canvas.height, data: ctx.getImageData(0, 0, canvas.width, canvas.height).data };
+    return { ctx, w: canvas.width, h: canvas.height, img: ctx.getImageData(0, 0, canvas.width, canvas.height), data: ctx.getImageData(0, 0, canvas.width, canvas.height).data };
   }
 
-  function findCassetteBox(canvas) {
-    const { w, h, data } = getImageDataFast(canvas);
-    const target = 230;
-    const step = Math.max(1, Math.round(Math.max(w, h) / target));
-    const dw = Math.ceil(w / step);
-    const dh = Math.ceil(h / step);
+  function buildRedMap(canvas) {
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    const w = canvas.width, h = canvas.height;
+    const data = ctx.getImageData(0, 0, w, h).data;
+    const score = new Float32Array(w * h);
+    const row = new Array(h).fill(0);
+    const vals = [];
 
-    const whiteness = new Float32Array(dw * dh);
-    const values = [];
-
-    for (let yy = 0; yy < dh; yy++) {
-      const y = clamp(yy * step, 0, h - 1);
-      for (let xx = 0; xx < dw; xx++) {
-        const x = clamp(xx * step, 0, w - 1);
+    for (let y = 0; y < h; y++) {
+      let sum = 0;
+      for (let x = 0; x < w; x++) {
         const idx = (y * w + x) * 4;
-        const r = data[idx], g = data[idx + 1], b = data[idx + 2];
-        const avg = (r + g + b) / 3;
-        const sat = Math.max(r, g, b) - Math.min(r, g, b);
-        // 白塑膠分數：亮、低飽和。陰影會降低 avg，但仍可保留部分分數。
-        const score = avg - sat * 1.10;
-        whiteness[yy * dw + xx] = score;
-        values.push(score);
+        const s = redPinkScore(data[idx], data[idx + 1], data[idx + 2]);
+        score[y * w + x] = s;
+        sum += s;
       }
+      row[y] = sum / w;
+      if (y % 3 === 0) vals.push(row[y]);
     }
 
-    const p78 = percentile(values, 0.78);
-    const p90 = percentile(values, 0.90);
-    const threshold = Math.max(132, p78 + (p90 - p78) * 0.20);
-
-    const mask = new Uint8Array(dw * dh);
-    for (let i = 0; i < mask.length; i++) {
-      mask[i] = whiteness[i] >= threshold ? 1 : 0;
-    }
-
-    // 小型形態學 closing：補快篩因陰影造成的小斷裂。
-    const closed = new Uint8Array(mask.length);
-    for (let y = 1; y < dh - 1; y++) {
-      for (let x = 1; x < dw - 1; x++) {
-        let cnt = 0;
-        for (let dy = -1; dy <= 1; dy++) {
-          for (let dx = -1; dx <= 1; dx++) cnt += mask[(y + dy) * dw + (x + dx)];
-        }
-        closed[y * dw + x] = cnt >= 3 ? 1 : 0;
-      }
-    }
-
-    const visited = new Uint8Array(closed.length);
-    const qx = [], qy = [];
-    let best = null;
-
-    for (let sy = 1; sy < dh - 1; sy++) {
-      for (let sx = 1; sx < dw - 1; sx++) {
-        const startIdx = sy * dw + sx;
-        if (!closed[startIdx] || visited[startIdx]) continue;
-
-        let head = 0;
-        qx.length = 0; qy.length = 0;
-        qx.push(sx); qy.push(sy);
-        visited[startIdx] = 1;
-
-        let minX = sx, maxX = sx, minY = sy, maxY = sy, area = 0, border = false, sumScore = 0;
-        while (head < qx.length) {
-          const x = qx[head], y = qy[head]; head++;
-          area++;
-          sumScore += whiteness[y * dw + x];
-          if (x <= 1 || y <= 1 || x >= dw - 2 || y >= dh - 2) border = true;
-          if (x < minX) minX = x; if (x > maxX) maxX = x;
-          if (y < minY) minY = y; if (y > maxY) maxY = y;
-
-          const nx4 = [x + 1, x - 1, x, x];
-          const ny4 = [y, y, y + 1, y - 1];
-          for (let k = 0; k < 4; k++) {
-            const nx = nx4[k], ny = ny4[k];
-            if (nx < 0 || ny < 0 || nx >= dw || ny >= dh) continue;
-            const ni = ny * dw + nx;
-            if (closed[ni] && !visited[ni]) {
-              visited[ni] = 1;
-              qx.push(nx); qy.push(ny);
-            }
-          }
-        }
-
-        const bw = maxX - minX + 1;
-        const bh = maxY - minY + 1;
-        const ar = bw / Math.max(1, bh);
-        const areaRatio = area / (dw * dh);
-        const fill = area / Math.max(1, bw * bh);
-        const cx = (minX + maxX) / 2 / dw;
-        const cy = (minY + maxY) / 2 / dh;
-
-        // 快篩外觀：直長條、不貼邊、面積合理。排除桌面大亮區與太小反光。
-        if (border) continue;
-        if (ar < 0.16 || ar > 0.82) continue;
-        if (bh < dh * 0.25 || bh > dh * 0.96) continue;
-        if (bw < dw * 0.045 || bw > dw * 0.55) continue;
-        if (areaRatio < 0.008 || areaRatio > 0.42) continue;
-        if (fill < 0.18) continue;
-
-        const centerPenalty = Math.abs(cx - 0.5) * 0.35 + Math.abs(cy - 0.52) * 0.20;
-        const longScore = bh * 2.2 + area * 0.12 + (sumScore / area) * 0.02;
-        const score = longScore - centerPenalty * 120;
-        if (!best || score > best.score) {
-          best = { minX, maxX, minY, maxY, score, ar, area, fill };
-        }
-      }
-    }
-
-    if (!best) {
-      return { ok: false, x: 0, y: 0, w, h, reason: 'no-cassette-component', confidence: 0 };
-    }
-
-    let x = best.minX * step;
-    let y = best.minY * step;
-    let ww = (best.maxX - best.minX + 1) * step;
-    let hh = (best.maxY - best.minY + 1) * step;
-
-    // 外框 padding：保留整支快篩邊緣，不讓分析只剩局部。
-    const padX = Math.round(ww * 0.18);
-    const padY = Math.round(hh * 0.08);
-    x = clamp(x - padX, 0, w - 1);
-    y = clamp(y - padY, 0, h - 1);
-    ww = clamp(ww + padX * 2, 1, w - x);
-    hh = clamp(hh + padY * 2, 1, h - y);
-
-    return {
-      ok: true,
-      x, y, w: ww, h: hh,
-      reason: 'component',
-      confidence: Math.round(best.score),
-      aspect: best.ar,
-      fill: best.fill
-    };
-  }
-
-  function makeCroppedCanvas(sourceCanvas, box) {
-    const maxH = 680;
-    const maxW = 430;
-    const scale = Math.min(1, maxH / box.h, maxW / box.w);
-    const cw = Math.max(1, Math.round(box.w * scale));
-    const ch = Math.max(1, Math.round(box.h * scale));
-    const crop = document.createElement('canvas');
-    crop.width = cw;
-    crop.height = ch;
-    const cctx = crop.getContext('2d');
-    cctx.fillStyle = '#ffffff';
-    cctx.fillRect(0, 0, cw, ch);
-    cctx.drawImage(sourceCanvas, box.x, box.y, box.w, box.h, 0, 0, cw, ch);
-    return { canvas: crop, box, scale };
+    const bg = median(vals);
+    const corrected = row.map(v => Math.max(0, v - bg));
+    return { w, h, score, row: smoothArray(corrected, 2) };
   }
 
   function findPeaks(profile, options) {
-    const threshold = Math.max(2.2, (options.redThreshold || 38) / 9.5);
+    const maxVal = Math.max(1, ...profile);
+    const threshold = Math.max(0.8, maxVal * 0.18, (options.redThreshold || 38) / 32);
     const minWidth = Math.max(1, options.minPeakWidth || 3);
-    const minDistance = Math.max(8, options.minPeakDistance || 25);
     const candidates = [];
     let start = -1;
 
@@ -240,123 +100,222 @@
       }
     }
 
-    candidates.sort((a, b) => b.area - a.area);
-    const selected = [];
-    for (const p of candidates) {
-      if (!selected.some(q => Math.abs(q.y - p.y) < minDistance)) selected.push(p);
-      if (selected.length >= 4) break;
-    }
-    return selected.sort((a, b) => a.y - b.y);
+    return candidates.sort((a, b) => b.area - a.area);
   }
 
-  function analyzeCanvas(canvas, options) {
-    options = Object.assign({
-      autoCrop: true,
-      roiX1: 0.30,
-      roiX2: 0.62,
-      roiY1: 0.14,
-      roiY2: 0.66,
-      smoothRadius: 2,
-      bgHalfWindow: 22,
-      bgExcludeHalfWidth: 5,
-      redThreshold: 38,
-      minPeakWidth: 3,
-      minPeakDistance: 25,
-      cMinArea: 18,
-      cMinHeight: 4.0,
-      tMinArea: 10,
-      tMinHeight: 2.5,
-      negativeRatio: 0.22,
-      weakPositiveRatio: 0.50
-    }, options || {});
+  function xStatsForBand(redMap, yCenter, halfY) {
+    const { w, h, score } = redMap;
+    const xs = [];
+    const sY = clamp(Math.round(yCenter - halfY), 0, h - 1);
+    const eY = clamp(Math.round(yCenter + halfY), 0, h - 1);
+    let maxS = 0;
+    for (let y = sY; y <= eY; y++) {
+      for (let x = 0; x < w; x++) {
+        const s = score[y * w + x];
+        if (s > maxS) maxS = s;
+      }
+    }
+    const th = Math.max(5, maxS * 0.45);
+    for (let y = sY; y <= eY; y++) {
+      for (let x = 0; x < w; x++) {
+        if (score[y * w + x] >= th) xs.push(x);
+      }
+    }
+    if (!xs.length) return null;
+    xs.sort((a, b) => a - b);
+    return {
+      minX: percentile(xs, 0.05),
+      maxX: percentile(xs, 0.95),
+      centerX: median(xs),
+      count: xs.length
+    };
+  }
 
-    let preprocess = { used: false, ok: false, reason: 'off' };
-    if (options.autoCrop) {
-      const box = findCassetteBox(canvas);
-      if (box.ok) {
-        const cropped = makeCroppedCanvas(canvas, box);
-        canvas.width = cropped.canvas.width;
-        canvas.height = cropped.canvas.height;
-        canvas.getContext('2d').drawImage(cropped.canvas, 0, 0);
-        preprocess = { used: true, ok: true, reason: box.reason, confidence: box.confidence, box, aspect: box.aspect, fill: box.fill };
-      } else {
-        preprocess = { used: true, ok: false, reason: box.reason, confidence: 0 };
+  function findLinePairInOriginal(canvas, options) {
+    const redMap = buildRedMap(canvas);
+    const peaks = findPeaks(redMap.row, options)
+      .filter(p => p.y > redMap.h * 0.08 && p.y < redMap.h * 0.92)
+      .slice(0, 12);
+
+    let best = null;
+    for (let i = 0; i < peaks.length; i++) {
+      for (let j = i + 1; j < peaks.length; j++) {
+        const a = peaks[i].y < peaks[j].y ? peaks[i] : peaks[j];
+        const b = peaks[i].y < peaks[j].y ? peaks[j] : peaks[i];
+        const d = b.y - a.y;
+        if (d < redMap.h * 0.012 || d > redMap.h * 0.16) continue;
+        const xsA = xStatsForBand(redMap, a.y, Math.max(3, a.width));
+        const xsB = xStatsForBand(redMap, b.y, Math.max(3, b.width));
+        if (!xsA || !xsB) continue;
+        if (Math.abs(xsA.centerX - xsB.centerX) > redMap.w * 0.09) continue;
+
+        const centerX = (xsA.centerX + xsB.centerX) / 2;
+        const centerPenalty = Math.abs(centerX - redMap.w * 0.5) / redMap.w;
+        const score = a.area + b.area - centerPenalty * 8;
+        if (!best || score > best.score) {
+          best = { c: a, t: b, xA: xsA, xB: xsB, redMap, score, distance: d };
+        }
       }
     }
 
-    const { w, h, data } = getImageDataFast(canvas);
-    const x1 = Math.floor(w * options.roiX1);
-    const x2 = Math.floor(w * options.roiX2);
-    const y1 = Math.floor(h * options.roiY1);
-    const y2 = Math.floor(h * options.roiY2);
-    const len = Math.max(1, y2 - y1 + 1);
-    const rawProfile = new Array(len).fill(0);
+    return best || { redMap, c: null, t: null, score: 0 };
+  }
 
-    for (let y = y1; y <= y2; y++) {
+  function cropWindowFromLines(sourceCanvas, pair) {
+    const w = sourceCanvas.width, h = sourceCanvas.height;
+
+    if (!pair || !pair.c || !pair.t) {
+      return {
+        ok: false,
+        reason: 'no-line-pair',
+        x: 0, y: 0, w, h,
+        canvas: sourceCanvas
+      };
+    }
+
+    const cY = pair.c.y;
+    const tY = pair.t.y;
+    const d = Math.max(10, tY - cY);
+    const cx = (pair.xA.centerX + pair.xB.centerX) / 2;
+    const lineW = Math.max(pair.xA.maxX - pair.xA.minX, pair.xB.maxX - pair.xB.minX, 12);
+
+    // 這裡是「判讀窗」裁切，不是整張快篩卡匣裁切。
+    const cropW = Math.max(lineW * 5.0, w * 0.085, 72);
+    const topPad = Math.max(d * 2.2, 45);
+    const bottomPad = Math.max(d * 3.1, 70);
+
+    let x = Math.round(cx - cropW / 2);
+    let y = Math.round(cY - topPad);
+    let cw = Math.round(cropW);
+    let ch = Math.round((tY + bottomPad) - y);
+
+    x = clamp(x, 0, w - 2);
+    y = clamp(y, 0, h - 2);
+    cw = clamp(cw, 2, w - x);
+    ch = clamp(ch, 2, h - y);
+
+    const out = document.createElement('canvas');
+    out.width = cw;
+    out.height = ch;
+    const ctx = out.getContext('2d');
+    ctx.drawImage(sourceCanvas, x, y, cw, ch, 0, 0, cw, ch);
+
+    return {
+      ok: true,
+      reason: 'line-window',
+      x, y, w: cw, h: ch,
+      canvas: out,
+      cYOriginal: cY,
+      tYOriginal: tY,
+      cYInCrop: cY - y,
+      tYInCrop: tY - y,
+      pairDistance: d,
+      lineCenterX: cx
+    };
+  }
+
+  function makeProfileFromCrop(cropCanvas) {
+    const ctx = cropCanvas.getContext('2d', { willReadFrequently: true });
+    const w = cropCanvas.width, h = cropCanvas.height;
+    const data = ctx.getImageData(0, 0, w, h).data;
+    const raw = new Array(h).fill(0);
+
+    const x1 = Math.round(w * 0.12);
+    const x2 = Math.round(w * 0.88);
+    for (let y = 0; y < h; y++) {
       let sum = 0, count = 0;
       for (let x = x1; x <= x2; x++) {
         const idx = (y * w + x) * 4;
         sum += redPinkScore(data[idx], data[idx + 1], data[idx + 2]);
         count++;
       }
-      rawProfile[y - y1] = count ? sum / count : 0;
+      raw[y] = count ? sum / count : 0;
     }
 
-    const smooth = smoothArray(rawProfile, options.smoothRadius);
-    const bg = rollingBackground(smooth, options.bgHalfWindow, options.bgExcludeHalfWidth);
-    const corrected = smooth.map((v, i) => Math.max(0, v - bg[i]));
-    const profile = normalizeProfile(smoothArray(corrected, 1));
-    const peaks = findPeaks(profile, options);
+    const smooth = smoothArray(raw, 2);
+    const base = median(smooth);
+    return smooth.map(v => Math.max(0, v - base));
+  }
 
-    let cLine = null, tLine = null;
-    if (peaks.length >= 2) {
-      // 從上到下：上方當 C，下方當 T。快篩線方向為水平。
-      cLine = peaks[0];
-      tLine = peaks[1];
-    } else if (peaks.length === 1) {
-      cLine = peaks[0];
-      tLine = { y: Math.min(profile.length - 1, peaks[0].y + Math.round(profile.length * 0.12)), start: 0, end: 0, area: 0, height: 0, width: 0 };
+  function measureAround(profile, expectedY, halfWindow) {
+    const y0 = clamp(Math.round(expectedY - halfWindow), 0, profile.length - 1);
+    const y1 = clamp(Math.round(expectedY + halfWindow), 0, profile.length - 1);
+    let peakY = expectedY, height = 0;
+    for (let y = y0; y <= y1; y++) {
+      if (profile[y] > height) { height = profile[y]; peakY = y; }
+    }
+
+    const areaHalf = Math.max(4, Math.round(halfWindow * 0.8));
+    let area = 0, width = 0;
+    const s = clamp(Math.round(peakY - areaHalf), 0, profile.length - 1);
+    const e = clamp(Math.round(peakY + areaHalf), 0, profile.length - 1);
+    const th = Math.max(0.8, height * 0.35);
+    for (let y = s; y <= e; y++) {
+      area += profile[y];
+      if (profile[y] >= th) width++;
+    }
+    return { y: peakY, canvasY: peakY, start: s, end: e, area, height, width };
+  }
+
+  function analyzeCanvas(canvas, options) {
+    options = Object.assign({ redThreshold: 38, minPeakWidth: 3, minPeakDistance: 25 }, options || {});
+
+    const pair = findLinePairInOriginal(canvas, options);
+    const crop = cropWindowFromLines(canvas, pair);
+    const cropCanvas = crop.canvas;
+    const profile = makeProfileFromCrop(cropCanvas);
+
+    let cLine, tLine;
+    if (crop.ok) {
+      const half = Math.max(5, crop.pairDistance * 0.45);
+      cLine = measureAround(profile, crop.cYInCrop, half);
+      tLine = measureAround(profile, crop.tYInCrop, half);
     } else {
-      cLine = { y: Math.round(profile.length * 0.24), start: 0, end: 0, area: 0, height: 0, width: 0 };
-      tLine = { y: Math.round(profile.length * 0.36), start: 0, end: 0, area: 0, height: 0, width: 0 };
+      const peaks = findPeaks(profile, options).slice(0, 2).sort((a, b) => a.y - b.y);
+      cLine = peaks[0] || { y: 0, canvasY: 0, area: 0, height: 0, width: 0 };
+      tLine = peaks[1] || { y: 0, canvasY: 0, area: 0, height: 0, width: 0 };
     }
-
-    cLine.canvasY = y1 + cLine.y;
-    tLine.canvasY = y1 + tLine.y;
 
     const ratio = cLine.area > 0 ? tLine.area / cLine.area : 0;
-    const cValid = cLine.area >= options.cMinArea && cLine.height >= options.cMinHeight && cLine.width >= options.minPeakWidth;
-    const tValid = tLine.area >= options.tMinArea && tLine.height >= options.tMinHeight && tLine.width >= options.minPeakWidth;
+    const cValid = cLine.area > 12 && cLine.height > 1.0;
+    const tValid = tLine.area > 8 && tLine.height > 0.8;
 
-    let result = 'INVALID';
-    let label = '無效 / C線不足或未出現';
-
-    if (!cValid) {
+    let result = 'INVALID', label = '無效 / 找不到有效C線';
+    if (!crop.ok) {
       result = 'INVALID';
-      label = '無效 / C線不足或未出現';
-    } else if (!tValid || ratio < options.negativeRatio) {
+      label = '無效 / 找不到成對 C/T 線，無法裁切判讀窗';
+    } else if (!cValid) {
+      result = 'INVALID';
+      label = '無效 / C線訊號不足';
+    } else if (!tValid || ratio < 0.08) {
       result = 'NEGATIVE';
-      label = '陰性 / 僅偵測到控制線';
-    } else if (ratio < options.weakPositiveRatio) {
+      label = '陰性 / 只有C線有效';
+    } else if (ratio < 0.22) {
       result = 'WEAK_POSITIVE';
-      label = '弱陽性 / T線訊號偏弱';
+      label = '弱陽性 / T線較弱';
     } else {
       result = 'POSITIVE';
-      label = '陽性 / T線與C線皆有效';
+      label = '陽性 / C線與T線皆有效';
     }
 
     return {
       version: VERSION,
       result,
       label,
-      preprocess,
       ratio,
+      processedCanvas: cropCanvas,
+      preprocess: {
+        ok: crop.ok,
+        reason: crop.reason,
+        x: crop.x, y: crop.y, w: crop.w, h: crop.h,
+        mode: 'line-window-crop'
+      },
+      roi: { x1: 0, y1: 0, x2: cropCanvas.width, y2: cropCanvas.height },
       cLine,
       tLine,
       peaks: [cLine, tLine],
-      allPeaks: peaks,
-      profile,
-      roi: { x1, x2, y1, y2 }
+      allPeaks: findPeaks(profile, options).slice(0, 6),
+      profile
     };
   }
 

@@ -139,3 +139,11 @@ canvas {
   #chart { width: 82px; max-width: 82px; max-height: 430px; }
   button, .fileBtn { min-width: 115px; }
 }
+.analysisWrap { display:flex; align-items:stretch; justify-content:center; gap:10px; }
+#canvas { width:auto; max-height:460px; max-width:360px; object-fit:contain; }
+#chart { width:110px; min-width:110px; max-width:110px; height:auto; margin-top:10px; }
+@media (max-width: 640px) {
+  .analysisWrap { gap:6px; }
+  #canvas { max-width: calc(100vw - 170px); max-height:420px; }
+  #chart { width:90px; min-width:90px; max-width:90px; }
+}

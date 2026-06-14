@@ -48,43 +48,49 @@
     distText.textContent = minPeakDistance.value;
   }
 
-  function resizeAndDrawImage(img) {
-    const maxW = 760;
-    const maxH = 760;
+  function makeSourceCanvas(img) {
+    const maxW = 1100;
+    const maxH = 1100;
     const scale = Math.min(1, maxW / img.naturalWidth, maxH / img.naturalHeight);
-    canvas.width = Math.round(img.naturalWidth * scale);
-    canvas.height = Math.round(img.naturalHeight * scale);
-    const ctx = canvas.getContext('2d');
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    const src = document.createElement('canvas');
+    src.width = Math.round(img.naturalWidth * scale);
+    src.height = Math.round(img.naturalHeight * scale);
+    const ctx = src.getContext('2d');
+    ctx.drawImage(img, 0, 0, src.width, src.height);
+    return src;
   }
 
-  function drawOverlay(analysis) {
+  function showProcessedImage(analysis) {
+    const src = analysis.processedCanvas;
+    const maxH = 460;
+    const maxW = 360;
+    const scale = Math.min(1, maxW / src.width, maxH / src.height);
+    canvas.width = Math.round(src.width * scale);
+    canvas.height = Math.round(src.height * scale);
     const ctx = canvas.getContext('2d');
-    const roi = analysis.roi;
-    const roiW = roi.x2 - roi.x1;
-    const roiH = roi.y2 - roi.y1;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(src, 0, 0, canvas.width, canvas.height);
 
     ctx.save();
-    ctx.lineWidth = Math.max(2, canvas.width / 420);
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = 'rgba(255,170,0,0.95)';
+    ctx.strokeRect(1, 1, canvas.width - 2, canvas.height - 2);
 
-    ctx.strokeStyle = 'rgba(255, 170, 0, 0.95)';
-    ctx.strokeRect(roi.x1, roi.y1, roiW, roiH);
-
-    ctx.strokeStyle = 'rgba(220, 38, 38, 0.95)';
-    ctx.lineWidth = Math.max(2, canvas.width / 380);
+    ctx.strokeStyle = 'rgba(220,38,38,0.95)';
     for (const p of analysis.peaks) {
+      const y = p.y / Math.max(1, src.height - 1) * canvas.height;
       ctx.beginPath();
-      ctx.moveTo(roi.x1, p.canvasY);
-      ctx.lineTo(roi.x2, p.canvasY);
+      ctx.moveTo(0, y);
+      ctx.lineTo(canvas.width, y);
       ctx.stroke();
     }
 
-    ctx.font = `${Math.max(12, canvas.width / 52)}px sans-serif`;
-    ctx.fillStyle = 'rgba(220, 38, 38, 0.95)';
-    ctx.fillText('C', roi.x2 + 5, analysis.cLine.canvasY + 4);
-    ctx.fillText('T', roi.x2 + 5, analysis.tLine.canvasY + 4);
-
+    const cy = analysis.cLine.y / Math.max(1, src.height - 1) * canvas.height;
+    const ty = analysis.tLine.y / Math.max(1, src.height - 1) * canvas.height;
+    ctx.font = '13px sans-serif';
+    ctx.fillStyle = 'rgba(220,38,38,0.95)';
+    ctx.fillText('C', canvas.width - 18, cy - 4);
+    ctx.fillText('T', canvas.width - 18, ty - 4);
     ctx.restore();
   }
 
@@ -145,10 +151,6 @@
       resultEl.textContent = '無效';
     }
 
-    const cropText = analysis.preprocess
-      ? `快篩外框裁切: ${analysis.preprocess.ok ? '成功' : '失敗'}${analysis.preprocess.ok ? `, confidence=${analysis.preprocess.confidence}` : `, reason=${analysis.preprocess.reason}`}`
-      : '';
-
     const allPeaks = (analysis.allPeaks || []).map((p, i) =>
       `峰${i + 1}: y=${Math.round(p.y)}, area=${p.area.toFixed(1)}, height=${p.height.toFixed(1)}, width=${p.width}px`
     ).join('<br>');
@@ -156,9 +158,10 @@
     detailEl.innerHTML = [
       `版本: ${analysis.version || 'unknown'}`,
       analysis.label,
-      cropText,
-      `C線: y=${Math.round(analysis.cLine.canvasY)}, area=${analysis.cLine.area.toFixed(1)}, height=${analysis.cLine.height.toFixed(1)}, width=${analysis.cLine.width}px`,
-      `T線: y=${Math.round(analysis.tLine.canvasY)}, area=${analysis.tLine.area.toFixed(1)}, height=${analysis.tLine.height.toFixed(1)}, width=${analysis.tLine.width}px`,
+      `裁切模式: ${analysis.preprocess.mode}, ${analysis.preprocess.ok ? '成功' : '失敗'}, reason=${analysis.preprocess.reason}`,
+      `裁切區: x=${Math.round(analysis.preprocess.x)}, y=${Math.round(analysis.preprocess.y)}, w=${Math.round(analysis.preprocess.w)}, h=${Math.round(analysis.preprocess.h)}`,
+      `C線: y=${Math.round(analysis.cLine.y)}, area=${analysis.cLine.area.toFixed(1)}, height=${analysis.cLine.height.toFixed(1)}, width=${analysis.cLine.width}px`,
+      `T線: y=${Math.round(analysis.tLine.y)}, area=${analysis.tLine.area.toFixed(1)}, height=${analysis.tLine.height.toFixed(1)}, width=${analysis.tLine.width}px`,
       `T/C Ratio=${analysis.ratio.toFixed(3)}`,
       allPeaks ? `<hr>${allPeaks}` : ''
     ].filter(Boolean).join('<br>');
@@ -166,9 +169,9 @@
 
   function analyze() {
     if (!lastImage) return;
-    resizeAndDrawImage(lastImage);
-    const analysis = window.AsapDetector.analyzeCanvas(canvas, getOptions());
-    drawOverlay(analysis);
+    const sourceCanvas = makeSourceCanvas(lastImage);
+    const analysis = window.AsapDetector.analyzeCanvas(sourceCanvas, getOptions());
+    showProcessedImage(analysis);
     drawChart(analysis.profile, analysis.peaks);
     setResult(analysis);
   }
