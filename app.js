@@ -19,7 +19,7 @@
   const debugGray=document.getElementById('debugGray');
   const debugMask=document.getElementById('debugMask');
   const debugEdge=document.getElementById('debugEdge');
-  const debugFg=document.getElementById('debugFg');
+  const debugBright=document.getElementById('debugBright');
   const debugText=document.getElementById('debugText');
 
 
@@ -80,11 +80,90 @@
   }
 
 
+
+  function showMat(canvasEl, mat) {
+    if (!canvasEl || !mat || mat.empty()) return;
+    cv.imshow(canvasEl, mat);
+  }
+
+  function renderDebugViews() {
+    if (!cvReady || !canvas || !canvas.width || !canvas.height) return;
+
+    let src = null;
+    let gray = null;
+    let bg = null;
+    let norm = null;
+    let rgb = null;
+    let hsv = null;
+    let lower = null;
+    let upper = null;
+    let white = null;
+    let blur = null;
+    let edge = null;
+    let k = null;
+    let bright = null;
+    let kOpen = null;
+    let kClose = null;
+
+    try {
+      src = cv.imread(canvas);
+
+      gray = new cv.Mat();
+      cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+      bg = new cv.Mat();
+      cv.GaussianBlur(gray, bg, new cv.Size(0,0), 31, 31, cv.BORDER_DEFAULT);
+      norm = new cv.Mat();
+      cv.divide(gray, bg, norm, 128);
+      cv.normalize(norm, norm, 0, 255, cv.NORM_MINMAX);
+      norm.convertTo(norm, cv.CV_8U);
+      showMat(debugGray, norm);
+
+      rgb = new cv.Mat();
+      hsv = new cv.Mat();
+      cv.cvtColor(src, rgb, cv.COLOR_RGBA2RGB);
+      cv.cvtColor(rgb, hsv, cv.COLOR_RGB2HSV);
+      white = new cv.Mat();
+      lower = new cv.Mat(hsv.rows, hsv.cols, hsv.type(), [0,0,118,0]);
+      upper = new cv.Mat(hsv.rows, hsv.cols, hsv.type(), [180,92,255,255]);
+      cv.inRange(hsv, lower, upper, white);
+      kOpen = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(5,5));
+      kClose = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(13,13));
+      cv.morphologyEx(white, white, cv.MORPH_OPEN, kOpen);
+      cv.morphologyEx(white, white, cv.MORPH_CLOSE, kClose);
+      showMat(debugMask, white);
+
+      blur = new cv.Mat();
+      edge = new cv.Mat();
+      cv.GaussianBlur(norm, blur, new cv.Size(5,5), 0);
+      cv.Canny(blur, edge, 28, 90);
+      k = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(9,9));
+      cv.morphologyEx(edge, edge, cv.MORPH_CLOSE, k);
+      cv.dilate(edge, edge, k, new cv.Point(-1,-1), 1);
+      showMat(debugEdge, edge);
+
+      bright = new cv.Mat();
+      cv.threshold(norm, bright, 145, 255, cv.THRESH_BINARY);
+      cv.morphologyEx(bright, bright, cv.MORPH_OPEN, kOpen);
+      cv.morphologyEx(bright, bright, cv.MORPH_CLOSE, kClose);
+      showMat(debugBright, bright);
+    }
+    catch (ex) {
+      console.error('Debug view failed:', ex);
+    }
+    finally {
+      [src, gray, bg, norm, rgb, hsv, lower, upper, white, blur, edge, k, bright, kOpen, kClose]
+        .forEach(m => { if (m) m.delete(); });
+    }
+  }
+
   function formatFeatures(f) {
     if (!f) return '<br>內部特徵：未執行';
     let html = '<hr>';
     html += `判讀窗候選：${f.windowCandidates}，來源：${f.windowSource || '-'}<br>`;
     html += `S孔候選：${f.sampleCandidates}，來源：${f.sampleSource || '-'}<br>`;
+    if (f.sampleSource && f.sampleSource.indexOf('fallback') >= 0) {
+      html += '<b style="color:#dc2626">注意：S Well 是 fallback，代表尚未真正辨識到加樣孔。</b><br>';
+    }
     html += `方向：${f.orientation}<br>`;
     html += `180度校正：${f.orientationCorrected ? '有' : '無'}<br>`;
     if (f.window) {
@@ -115,16 +194,14 @@
         `中心：x=${r.rect.cx.toFixed(0)}, y=${r.rect.cy.toFixed(0)}<br>` +
         `尺寸：w=${r.rect.w.toFixed(0)}, h=${r.rect.h.toFixed(0)}, angle=${r.rect.angle.toFixed(1)}°<br>` +
         formatFeatures(r.features);
-      debugText.innerHTML = r.debug || '';
+      if(r.debug){debugText.innerHTML=r.debug;}
     } else {
       resultEl.classList.add('invalid');
       resultEl.textContent = '外框辨識失敗';
       detailEl.innerHTML =
         `版本：${r.version}<br>` +
         `失敗原因：${r.reason}<br>` +
-        `候選數：${r.candidates || 0}<br>` +
         `建議：降低「最小面積比例」，或把「長寬比下限」調到 1.8。`;
-      debugText.innerHTML = r.debug || '';
     }
   }
 
@@ -138,29 +215,22 @@
       return;
     }
     try {
-      debugText.innerHTML = '';
-      const r = window.AsapOuterDetector.detectOuterFrame(
-        canvas,
-        cropCanvas,
-        getOptions(),
-        {
-          gray: debugGray,
-          mask: debugMask,
-          edge: debugEdge,
-          fg: debugFg
-        }
-      );
+      renderDebugViews();
+      const r = window.AsapOuterDetector.detectOuterFrame(canvas, cropCanvas, getOptions());
       setResult(r);
-    } catch (ex) {
+    }
+    catch (ex) {
       console.error(ex);
       resultEl.className = 'result invalid';
       resultEl.textContent = '分析失敗';
       detailEl.innerHTML =
         '<b>Exception</b><br>' +
         (ex && ex.message ? ex.message : String(ex));
-      debugText.innerHTML =
-        '<b>Exception</b><br>' +
-        (ex && ex.stack ? ex.stack.replace(/\n/g, '<br>') : (ex && ex.message ? ex.message : String(ex)));
+      if (debugText) {
+        debugText.innerHTML =
+          '<b>Exception</b><br>' +
+          (ex && ex.stack ? ex.stack : (ex && ex.message ? ex.message : String(ex)));
+      }
     }
   }
 

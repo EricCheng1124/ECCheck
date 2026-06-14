@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v28.2-inrange-safe-debug';
+  const VERSION = 'v28.3-sample-area-fixed';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -110,34 +110,37 @@
   }
 
   function makeWhiteMask(src) {
-    const rgb = new cv.Mat(); cv.cvtColor(src, rgb, cv.COLOR_RGBA2RGB);
-    const hsv = new cv.Mat(); cv.cvtColor(rgb, hsv, cv.COLOR_RGB2HSV);
+    const rgb = new cv.Mat();
+    const hsv = new cv.Mat();
     const mask = new cv.Mat();
     let lower = null;
     let upper = null;
 
     try {
-      // OpenCV.js 某些版本不接受 new cv.Scalar(...) 傳入 inRange，必須用 Mat。
+      cv.cvtColor(src, rgb, cv.COLOR_RGBA2RGB);
+      cv.cvtColor(rgb, hsv, cv.COLOR_RGB2HSV);
+
+      // OpenCV.js 某些版本不接受 new cv.Scalar() 給 inRange，
+      // 這裡改成 Mat，避免 BindingError: Cannot pass "0,0,118,0" as a Mat。
       lower = new cv.Mat(hsv.rows, hsv.cols, hsv.type(), [0, 0, 118, 0]);
       upper = new cv.Mat(hsv.rows, hsv.cols, hsv.type(), [180, 92, 255, 255]);
       cv.inRange(hsv, lower, upper, mask);
-    } finally {
+
+      const k1 = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(5,5));
+      const k2 = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(13,13));
+      cv.morphologyEx(mask, mask, cv.MORPH_OPEN, k1);
+      cv.morphologyEx(mask, mask, cv.MORPH_CLOSE, k2);
+      k1.delete();
+      k2.delete();
+    }
+    finally {
       if (lower) lower.delete();
       if (upper) upper.delete();
+      rgb.delete();
+      hsv.delete();
     }
 
-    const k1 = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(5,5));
-    const k2 = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(13,13));
-    cv.morphologyEx(mask, mask, cv.MORPH_OPEN, k1);
-    cv.morphologyEx(mask, mask, cv.MORPH_CLOSE, k2);
-    rgb.delete(); hsv.delete(); k1.delete(); k2.delete(); return mask;
-  }
-
-  function showDebugMat(targetCanvas, mat) {
-    if (!targetCanvas || !mat || mat.empty()) return;
-    targetCanvas.width = mat.cols;
-    targetCanvas.height = mat.rows;
-    cv.imshow(targetCanvas, mat);
+    return mask;
   }
 
   function addCandidatesFromBinary(bin, imgArea, options, out, method) {
@@ -165,35 +168,29 @@
     contours.delete(); hierarchy.delete();
   }
 
-  function collectOuterCandidates(src, options, debugTargets) {
+  function collectOuterCandidates(src, options) {
     const imgArea = src.cols * src.rows;
     const all = [];
 
     // A. 白色物件分割：主力，黑底尤其穩
     const white = makeWhiteMask(src);
     addCandidatesFromBinary(white, imgArea, options, all, 'white-mask');
-    showDebugMat(debugTargets && debugTargets.mask, white);
 
     // B. 邊緣輪廓：輔助，處理白底或桌面接近白色
     const norm = makeNormalizedGray(src);
-    showDebugMat(debugTargets && debugTargets.gray, norm);
     const blur = new cv.Mat(); cv.GaussianBlur(norm, blur, new cv.Size(5,5), 0);
     const edges = new cv.Mat(); cv.Canny(blur, edges, 28, 90);
     const k = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(9,9));
     cv.morphologyEx(edges, edges, cv.MORPH_CLOSE, k); cv.dilate(edges, edges, k, new cv.Point(-1,-1), 1);
     addCandidatesFromBinary(edges, imgArea, options, all, 'edge-contour');
-    showDebugMat(debugTargets && debugTargets.edge, edges);
 
     // C. 高亮前景：比整體背景亮的區塊
     const fg = new cv.Mat(); cv.threshold(norm, fg, 145, 255, cv.THRESH_BINARY);
-    const fgOpenK = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(5,5));
-    const fgCloseK = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(11,11));
-    cv.morphologyEx(fg, fg, cv.MORPH_OPEN, fgOpenK);
-    cv.morphologyEx(fg, fg, cv.MORPH_CLOSE, fgCloseK);
+    cv.morphologyEx(fg, fg, cv.MORPH_OPEN, cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(5,5)));
+    cv.morphologyEx(fg, fg, cv.MORPH_CLOSE, cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(11,11)));
     addCandidatesFromBinary(fg, imgArea, options, all, 'bright-foreground');
-    showDebugMat(debugTargets && debugTargets.fg, fg);
 
-    white.delete(); norm.delete(); blur.delete(); edges.delete(); k.delete(); fg.delete(); fgOpenK.delete(); fgCloseK.delete();
+    white.delete(); norm.delete(); blur.delete(); edges.delete(); k.delete(); fg.delete();
 
     // 去重
     const unique = [];
@@ -259,26 +256,125 @@
   }
 
   function findSampleByContours(norm, W, H, win) {
-    const blur = new cv.Mat(); cv.GaussianBlur(norm, blur, new cv.Size(7,7), 0);
-    const bin = new cv.Mat(); cv.adaptiveThreshold(blur, bin, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 51, 3);
-    cv.morphologyEx(bin, bin, cv.MORPH_CLOSE, cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(9,9)));
-    const contours = new cv.MatVector(); const hierarchy = new cv.Mat(); cv.findContours(bin, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
-    const candidates=[];
-    for(let i=0;i<contours.size();i++){
-      const cnt=contours.get(i); const area=cv.contourArea(cnt); const br=cv.boundingRect(cnt);
-      const cx=br.x+br.width/2, cy=br.y+br.height/2; const wh=br.width/Math.max(1,br.height); const rectArea=br.width*br.height;
-      const peri=cv.arcLength(cnt,true); const circ=peri>0?4*Math.PI*area/(peri*peri):0; const fill=area/Math.max(1,rectArea);
-      if(win){ const ox=Math.max(0,Math.min(br.x+br.width,win.x+win.w)-Math.max(br.x,win.x)); const oy=Math.max(0,Math.min(br.y+br.height,win.y+win.h)-Math.max(br.y,win.y)); if(ox*oy>rectArea*0.12){cnt.delete(); continue;} }
-      if(cx>W*0.10 && cx<W*0.90 && cy>H*0.08 && cy<H*0.92 && br.width>W*0.12 && br.width<W*0.62 && br.height>W*0.12 && br.height<W*0.72 && wh>0.35 && wh<2.35 && fill>0.08 && circ>0.06){
-        const alignX = win ? (1-Math.min(1,Math.abs(cx-(win.x+win.w/2))/(W*0.38))) : 0.5;
-        const score=rectArea*(0.4+circ)*(0.5+alignX)*(0.4+fill);
-        candidates.push({cx,cy,rx:br.width/2,ry:br.height/2,r:Math.max(br.width,br.height)/2,x:br.x,y:br.y,w:br.width,h:br.height,source:'sample-contour',circ,fill,score});
+    const blur = new cv.Mat();
+    cv.GaussianBlur(norm, blur, new cv.Size(7,7), 0);
+
+    const bin = new cv.Mat();
+    cv.adaptiveThreshold(
+      blur,
+      bin,
+      255,
+      cv.ADAPTIVE_THRESH_GAUSSIAN_C,
+      cv.THRESH_BINARY_INV,
+      51,
+      3
+    );
+
+    const kClose = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(9,9));
+    const kOpen = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(3,3));
+    cv.morphologyEx(bin, bin, cv.MORPH_CLOSE, kClose);
+    cv.morphologyEx(bin, bin, cv.MORPH_OPEN, kOpen);
+
+    const contours = new cv.MatVector();
+    const hierarchy = new cv.Mat();
+    cv.findContours(bin, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+
+    const candidates = [];
+
+    // 重要修正：S Well 不再全圖亂找。
+    // 它應該在 Window 下方，且大致與 Window 中線對齊。
+    const winCx = win ? (win.x + win.w / 2) : W * 0.50;
+    const winCy = win ? (win.y + win.h / 2) : H * 0.38;
+    const searchTop = win ? Math.max(win.y + win.h * 0.55, H * 0.38) : H * 0.45;
+    const searchBottom = H * 0.93;
+    const maxDx = win ? Math.max(W * 0.16, win.w * 0.95) : W * 0.20;
+
+    const sampleDebug = [];
+
+    for (let i=0; i<contours.size(); i++) {
+      const cnt = contours.get(i);
+      const area = cv.contourArea(cnt);
+      const br = cv.boundingRect(cnt);
+      const cx = br.x + br.width / 2;
+      const cy = br.y + br.height / 2;
+      const rectArea = Math.max(1, br.width * br.height);
+      const wh = br.width / Math.max(1, br.height);
+      const peri = cv.arcLength(cnt, true);
+      const circ = peri > 0 ? 4 * Math.PI * area / (peri * peri) : 0;
+      const fill = area / rectArea;
+      const dx = Math.abs(cx - winCx);
+
+      let reject = '';
+
+      // 排除與 Window 重疊的東西，避免 C/T 線或判讀窗邊界被當成 S Well。
+      if (win) {
+        const ox = Math.max(0, Math.min(br.x + br.width, win.x + win.w) - Math.max(br.x, win.x));
+        const oy = Math.max(0, Math.min(br.y + br.height, win.y + win.h) - Math.max(br.y, win.y));
+        if (ox * oy > rectArea * 0.06) reject = 'overlap-window';
       }
+
+      if (!reject && cy <= searchTop) reject = 'above-sample-area';
+      if (!reject && cy >= searchBottom) reject = 'too-low';
+      if (!reject && dx > maxDx) reject = 'not-aligned';
+      if (!reject && br.width < W * 0.12) reject = 'too-narrow';
+      if (!reject && br.width > W * 0.56) reject = 'too-wide';
+      if (!reject && br.height < W * 0.12) reject = 'too-short';
+      if (!reject && br.height > W * 0.60) reject = 'too-tall';
+      if (!reject && (wh < 0.45 || wh > 1.85)) reject = 'bad-aspect';
+
+      // 原本 circ > 0.06 太鬆，字母 S/C/T 和陰影都可能通過。
+      // 這裡提高到 0.28，並搭配 fill，讓圓孔/橢圓孔優先。
+      if (!reject && circ < 0.28) reject = 'low-circularity';
+      if (!reject && (fill < 0.10 || fill > 0.90)) reject = 'bad-fill';
+
+      const align = 1 - Math.min(1, dx / Math.max(1, maxDx));
+      const below = 1 - Math.min(1, Math.abs(cy - H * 0.68) / (H * 0.35));
+      const sizeScore = Math.min(1.5, rectArea / Math.max(1, W * W * 0.035));
+      const score = rectArea * (0.60 + circ * 1.8) * (0.45 + fill) * (0.60 + align * 1.6) * (0.55 + below) * sizeScore;
+
+      sampleDebug.push({
+        x: br.x, y: br.y, w: br.width, h: br.height,
+        cx, cy, circ, fill, align, score,
+        reject: reject || 'PASS'
+      });
+
+      if (!reject) {
+        candidates.push({
+          cx, cy,
+          rx: br.width / 2,
+          ry: br.height / 2,
+          r: Math.max(br.width, br.height) / 2,
+          x: br.x,
+          y: br.y,
+          w: br.width,
+          h: br.height,
+          source: 'sample-contour-window-below',
+          circ,
+          fill,
+          align,
+          score
+        });
+      }
+
       cnt.delete();
     }
+
     candidates.sort((a,b)=>b.score-a.score);
-    blur.delete(); bin.delete(); contours.delete(); hierarchy.delete();
-    return {sample:candidates[0]||null, count:candidates.length};
+    sampleDebug.sort((a,b)=>b.score-a.score);
+
+    blur.delete();
+    bin.delete();
+    kClose.delete();
+    kOpen.delete();
+    contours.delete();
+    hierarchy.delete();
+
+    return {
+      sample: candidates[0] || null,
+      count: candidates.length,
+      debug: sampleDebug.slice(0, 8),
+      search: {top: searchTop, bottom: searchBottom, winCx, maxDx}
+    };
   }
 
   function fallbackWindowFromGeometry(W,H) {
@@ -288,7 +384,7 @@
   function fallbackSampleByWindow(W,H,win) {
     const cx = win ? (win.x+win.w/2) : W*0.50;
     const cy = win && win.cy > H*0.50 ? H*0.30 : H*0.68;
-    return {cx, cy, rx:W*0.18, ry:W*0.22, r:W*0.22, source:'fallback-sample-by-window'};
+    return {cx, cy, rx:W*0.18, ry:W*0.22, r:W*0.22, source:'fallback-sample-by-window-not-detected'};
   }
 
   function findInternalFeaturesOnCrop(cropCanvas, draw) {
@@ -303,8 +399,33 @@
     win = makeWindowSafe(win,W,H);
     const sf = findSampleByContours(norm,W,H,win);
     let sample = sf.sample || fallbackSampleByWindow(W,H,win);
-    if(draw){ drawRect(ctx, win, 'rgba(37,99,235,0.95)', 'Window'); drawEllipseMark(ctx, sample, 'rgba(168,85,247,0.95)', 'S well'); }
-    const out={window:win, sample, windowSource:win.source, sampleSource:sample.source, windowCandidates:wf.count+(redWin?1:0), sampleCandidates:sf.count};
+    if(draw){
+      if (sf.search) {
+        ctx.save();
+        ctx.strokeStyle = 'rgba(245,158,11,0.85)';
+        ctx.lineWidth = Math.max(1, cropCanvas.width / 260);
+        ctx.setLineDash([6,4]);
+        ctx.strokeRect(
+          Math.max(0, sf.search.winCx - sf.search.maxDx),
+          Math.max(0, sf.search.top),
+          Math.min(W, sf.search.maxDx * 2),
+          Math.max(1, sf.search.bottom - sf.search.top)
+        );
+        ctx.restore();
+      }
+      drawRect(ctx, win, 'rgba(37,99,235,0.95)', 'Window');
+      drawEllipseMark(ctx, sample, 'rgba(168,85,247,0.95)', sample.source.includes('fallback') ? 'S fallback' : 'S well');
+    }
+    const out={
+      window:win,
+      sample,
+      windowSource:win.source,
+      sampleSource:sample.source,
+      windowCandidates:wf.count+(redWin?1:0),
+      sampleCandidates:sf.count,
+      sampleDebug:sf.debug || [],
+      sampleSearch:sf.search || null
+    };
     src.delete(); norm.delete(); return out;
   }
 
@@ -343,34 +464,60 @@ function candidateFeatureScore(srcCanvas, cand)
 
         let score = 0;
 
-        const hasWindow = !!f.window;
-        const hasSample = !!f.sample;
-        const windowScore = hasWindow ? 2000 : 0;
-        const sampleScore = hasSample ? 2000 : 0;
-        score += windowScore + sampleScore;
+        const hasWindow =
+            !!f.window;
+
+        const hasSample =
+            !!f.sample;
+
+        if(hasWindow)
+            score += 3000;
+
+        const realSample =
+            hasSample &&
+            f.sample.source &&
+            !f.sample.source.includes('fallback');
+
+        if(realSample)
+            score += 5000;
+        else if(hasSample)
+            score += 600;
 
         let align = 0;
-        let alignScore = 0;
 
         if(hasWindow && hasSample)
         {
-            const wx = f.window.x + f.window.w / 2;
-            const sx = f.sample.cx;
-            const dx = Math.abs(wx - sx);
-            align = 1 - Math.min(1, dx / (tmp.width * 0.35));
-            alignScore = align * 1000;
-            score += alignScore;
+            const wx =
+                f.window.x +
+                f.window.w / 2;
+
+            const sx =
+                f.sample.cx;
+
+            const dx =
+                Math.abs(wx - sx);
+
+            align =
+                1 -
+                Math.min(
+                    1,
+                    dx / (tmp.width * 0.35)
+                );
+
+            score +=
+                align * 1000;
         }
 
-        return { score, windowScore, sampleScore, alignScore, align, f };
+        return {
+            score,
+            align,
+            f
+        };
     }
     catch(e)
     {
         return {
             score:0,
-            windowScore:0,
-            sampleScore:0,
-            alignScore:0,
             align:0,
             f:null
         };
@@ -379,11 +526,11 @@ function candidateFeatureScore(srcCanvas, cand)
 
 
 
-  function detectOuterFrame(canvas, cropCanvas, options, debugTargets) {
+  function detectOuterFrame(canvas, cropCanvas, options) {
     if (typeof cv === 'undefined' || !cv.Mat) return {version:VERSION,ok:false,reason:'opencv-not-ready'};
     options = Object.assign({ minAreaRatio:0.01, ratioMin:2.2, ratioMax:6.5 }, options||{});
     const ctx=canvas.getContext('2d'); const src=cv.imread(canvas); const imgArea=src.cols*src.rows;
-    const rawCands=collectOuterCandidates(src, options, debugTargets);
+    const rawCands=collectOuterCandidates(src, options);
     const scored=[];
     for(const c of rawCands.slice(0,8)){
       const fs=candidateFeatureScore(canvas,c);
@@ -393,10 +540,8 @@ function candidateFeatureScore(srcCanvas, cand)
     + ratioScore * 100
     + c.fill * 100;
       c.featureScore=fs.score;
-      c.windowScore=fs.windowScore || 0;
-      c.sampleScore=fs.sampleScore || 0;
-      c.alignScore=fs.alignScore || 0;
-      c.featureInfo=fs.f;
+      c.featureDetail=fs.f;
+      c.featureAlign=fs.align;
       scored.push(c);
     }
     scored.sort((a,b)=>b.totalScore-a.totalScore);
@@ -415,31 +560,47 @@ function candidateFeatureScore(srcCanvas, cand)
 
 let dbg='';
 
-dbg +=
-`<b>Debug Summary</b><br>
-White Mask：已產生<br>
-Edge：已產生<br>
-Bright Foreground：已納入候選來源<br>
-Raw Candidates：${rawCands.length}<br>
-Scored Candidates：${scored.length}<hr>`;
+dbg += '<b>Debug Summary</b><br>';
+dbg += 'White Mask：已產生<br>';
+dbg += 'Edge：已產生<br>';
+dbg += 'Bright Foreground：已納入候選來源<br>';
+dbg += 'Raw Candidates：' + rawCands.length + '<br>';
+dbg += 'Scored Candidates：' + scored.length + '<br><hr>';
 
 scored.forEach((c,i)=>
 {
-    const fi = c.featureInfo || {};
+    const f = c.featureDetail;
+    const win = f && f.window;
+    const sample = f && f.sample;
+    const realSample = sample && sample.source && !sample.source.includes('fallback');
+
     dbg +=
-    `
-    <b>#${i+1}</b><br>
+    `#${i+1}<br>
     Method=${c.method}<br>
     Candidate Score=${Math.round(c.totalScore)}<br>
     Feature Score=${Math.round(c.featureScore||0)}<br>
-    Window Score=${Math.round(c.windowScore||0)} / Source=${fi.windowSource || '-'}<br>
-    S Well Score=${Math.round(c.sampleScore||0)} / Source=${fi.sampleSource || '-'}<br>
-    Align Score=${Math.round(c.alignScore||0)}<br>
+    Window Score=${win ? 3000 : 0} / Source=${win ? win.source : '-'}<br>
+    S Well Score=${realSample ? 5000 : (sample ? 600 : 0)} / Source=${sample ? sample.source : '-'}<br>
+    Align Score=${Math.round((c.featureAlign||0)*1000)}<br>
     Ratio=${c.ratio.toFixed(2)}<br>
     Fill=${c.fill.toFixed(2)}<br>
-    AreaRatio=${(c.areaRatio*100).toFixed(2)}%<br>
-    <hr>
-    `;
+    AreaRatio=${(c.areaRatio*100).toFixed(2)}%<br>`;
+
+    if (f && f.sampleSearch) {
+      dbg +=
+      `Sample Search：top=${f.sampleSearch.top.toFixed(0)}, bottom=${f.sampleSearch.bottom.toFixed(0)}, centerX=${f.sampleSearch.winCx.toFixed(0)}, maxDx=${f.sampleSearch.maxDx.toFixed(0)}<br>`;
+    }
+
+    if (f && f.sampleDebug && f.sampleDebug.length) {
+      dbg += '<b>Sample Candidates</b><br>';
+      f.sampleDebug.forEach((s,j)=>{
+        dbg += `${j+1}. ${s.reject} | x=${s.x}, y=${s.y}, w=${s.w}, h=${s.h}, circ=${s.circ.toFixed(2)}, fill=${s.fill.toFixed(2)}, align=${s.align.toFixed(2)}, score=${Math.round(s.score)}<br>`;
+      });
+    } else {
+      dbg += 'Sample Candidates：無<br>';
+    }
+
+    dbg += '<hr>';
 });
 
 result={
