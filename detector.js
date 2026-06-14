@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v28.6-closed-edge-priority';
+  const VERSION = 'v28.7-real-feature-gate';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -478,8 +478,6 @@ function outerGeometryScore(c, imgArea)
 {
     const areaRatio = c.rectArea / Math.max(1, imgArea);
 
-    // 快篩卡匣在照片中通常不會只佔 2~3%。
-    // 這裡不是硬性刪除，而是讓真正完整外框優先。
     let areaScore = 0;
     if(areaRatio < 0.035)
         areaScore = 0.02;
@@ -500,7 +498,8 @@ function outerGeometryScore(c, imgArea)
             Math.abs(c.ratio - 3.6) / 2.9
         );
 
-    const fillTarget = c.method.includes('edge') ? 0.22 : 0.50;
+    const edgeLike = c.method.includes('edge');
+    const fillTarget = edgeLike ? 0.22 : 0.50;
     const fillScore =
         1 - Math.min(
             1,
@@ -508,14 +507,12 @@ function outerGeometryScore(c, imgArea)
         );
 
     const methodBonus =
-        c.method.includes('edge') ? 1900 :
+        edgeLike ? 1900 :
         c.method.includes('white') ? 900 :
         250;
 
     const vertical = longAxisVerticalScore(c);
 
-    // 這次的錯誤就是把桌面上的橫向亮帶當成外框。
-    // 快篩卡在拍照流程中應該是直向，所以長軸不夠直立就大幅扣分。
     const horizontalPenalty =
         vertical.score < 0.25 ? 5600 :
         vertical.score < 0.45 ? 2600 :
@@ -524,14 +521,42 @@ function outerGeometryScore(c, imgArea)
     const smallPenalty =
         areaRatio < 0.050 ? 2400 : 0;
 
+    // v28.7：補上原本 v28.6 Debug 有寫、但實際沒定義的封閉外框評分。
+    // 封閉長方形外框通常會有合理 fill；太低代表只是開放邊線，太高可能是大塊背景/手機。
+    let closedEdgeScore = 0;
+    if(edgeLike)
+    {
+        if(c.fill >= 0.12 && c.fill <= 0.42)
+            closedEdgeScore = 1.00;
+        else if(c.fill >= 0.07 && c.fill <= 0.55)
+            closedEdgeScore = 0.55;
+        else
+            closedEdgeScore = 0.10;
+    }
+    else
+    {
+        closedEdgeScore = fillScore * 0.45;
+    }
+
+    const lowRatioPenalty =
+        c.ratio < 2.05 ? 5200 :
+        c.ratio < 2.35 ? 2400 :
+        0;
+
+    const openEdgePenalty =
+        edgeLike && c.fill < 0.10 ? 4200 : 0;
+
     const score =
-        areaScore * 5200 +
-        ratioScore * 1700 +
-        fillScore * 850 +
-        vertical.score * 3600 +
+        areaScore * 4200 +
+        ratioScore * 1300 +
+        fillScore * 750 +
+        vertical.score * 3000 +
+        closedEdgeScore * 2300 +
         methodBonus -
         smallPenalty -
-        horizontalPenalty;
+        horizontalPenalty -
+        lowRatioPenalty -
+        openEdgePenalty;
 
     return {
         score: Math.max(0, score),
@@ -571,35 +596,38 @@ function candidateFeatureScore(srcCanvas, cand)
 
         let score = 0;
 
-        const hasWindow =
-            !!f.window;
+        const win = f && f.window;
+        const sample = f && f.sample;
 
-        const hasSample =
-            !!f.sample;
+        const hasRedWindow =
+            !!(win && win.source === 'red-line-window');
 
-        if(hasWindow)
-            score += 2200;
+        const hasRealWindow =
+            !!(win && win.source && !win.source.includes('fallback'));
 
-        const realSample =
-            hasSample &&
-            f.sample.source &&
-            !f.sample.source.includes('fallback');
+        const hasRealSample =
+            !!(sample && sample.source && !sample.source.includes('fallback'));
 
-        if(realSample)
-            score += 5000;
-        else if(hasSample)
-            score += 0;
+        // v28.7：不能再讓 fallback 特徵幫候選加分。
+        // 紅線判讀窗比一般 opencv-window-contour 可信，因為手機/滑鼠墊也可能產生假矩形。
+        if(hasRedWindow)
+            score += 6200;
+        else if(hasRealWindow)
+            score += 1200;
+
+        if(hasRealSample)
+            score += 5200;
 
         let align = 0;
 
-        if(hasWindow && hasSample)
+        if(win && sample)
         {
             const wx =
-                f.window.x +
-                f.window.w / 2;
+                win.x +
+                win.w / 2;
 
             const sx =
-                f.sample.cx;
+                sample.cx;
 
             const dx =
                 Math.abs(wx - sx);
@@ -611,15 +639,17 @@ function candidateFeatureScore(srcCanvas, cand)
                     dx / (tmp.width * 0.35)
                 );
 
-            // fallback 的 S Well 只是猜測，不可以靠 align 加分騙過外框。
-            if(realSample)
-                score += align * 900;
+            if(hasRealSample || hasRedWindow)
+                score += align * 700;
         }
 
         return {
             score,
             align,
-            f
+            f,
+            hasRedWindow,
+            hasRealWindow,
+            hasRealSample
         };
     }
     catch(e)
@@ -627,10 +657,14 @@ function candidateFeatureScore(srcCanvas, cand)
         return {
             score:0,
             align:0,
-            f:null
+            f:null,
+            hasRedWindow:false,
+            hasRealWindow:false,
+            hasRealSample:false
         };
     }
 }
+
 
 
 
@@ -643,18 +677,26 @@ function candidateFeatureScore(srcCanvas, cand)
     for(const c of rawCands.slice(0,8)){
       const fs=candidateFeatureScore(canvas,c);
       const geo=outerGeometryScore(c,imgArea);
-      const hasRealSample = fs.f && fs.f.sample && fs.f.sample.source && !fs.f.sample.source.includes('fallback');
-      const noRealSamplePenalty = hasRealSample ? 0 : 900;
+      const hasRedWindow = !!fs.hasRedWindow;
+      const hasRealWindow = !!fs.hasRealWindow;
+      const hasRealSample = !!fs.hasRealSample;
+      const noRealSamplePenalty = hasRealSample ? 0 : (hasRedWindow ? 600 : 2200);
+      const noTrustedFeaturePenalty = (hasRedWindow || hasRealSample) ? 0 : 8200;
       c.outerScore=geo.score;
       c.outerDetail=geo;
       c.totalScore =
         geo.score +
         fs.score -
-        noRealSamplePenalty;
+        noRealSamplePenalty -
+        noTrustedFeaturePenalty;
       c.featureScore=fs.score;
       c.featureDetail=fs.f;
       c.featureAlign=fs.align;
       c.noRealSamplePenalty=noRealSamplePenalty;
+      c.noTrustedFeaturePenalty=noTrustedFeaturePenalty;
+      c.hasRedWindow=hasRedWindow;
+      c.hasRealWindow=hasRealWindow;
+      c.hasRealSample=hasRealSample;
       scored.push(c);
     }
     scored.sort((a,b)=>b.totalScore-a.totalScore);
@@ -669,6 +711,7 @@ function candidateFeatureScore(srcCanvas, cand)
     if(best){
       let features=null;
       try{ warpCropToCanvas(canvas,cropCanvas,best.pts); features=detectInternalFeatures(cropCanvas); } catch(e){ console.error(e); }
+      const bestHasTrustedFeature = !!(best.hasRedWindow || best.hasRealSample);
       
 
 let dbg='';
@@ -694,6 +737,8 @@ scored.forEach((c,i)=>
     Outer Score=${Math.round(c.outerScore||0)}<br>
     Feature Score=${Math.round(c.featureScore||0)}<br>
     No Real S Penalty=${Math.round(c.noRealSamplePenalty||0)}<br>
+    No Trusted Feature Penalty=${Math.round(c.noTrustedFeaturePenalty||0)}<br>
+    Red Window=${c.hasRedWindow ? 'YES' : 'NO'} / Real Sample=${c.hasRealSample ? 'YES' : 'NO'}<br>
     Window Score=${win ? 3000 : 0} / Source=${win ? win.source : '-'}<br>
     S Well Score=${realSample ? 5000 : (sample ? 600 : 0)} / Source=${sample ? sample.source : '-'}<br>
     Align Score=${Math.round((c.featureAlign||0)*1000)}<br>
@@ -722,8 +767,8 @@ scored.forEach((c,i)=>
 
 result={
     version:VERSION,
-    ok:true,
-    reason:best.method+'+feature-score',
+    ok:bestHasTrustedFeature,
+    reason:bestHasTrustedFeature ? best.method+'+real-feature-gate' : 'no-real-window-or-sample',
     ratio:best.ratio,
     areaRatio:best.rectArea/imgArea,
     fill:best.fill,

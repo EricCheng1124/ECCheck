@@ -1,8 +1,10 @@
-# ASAP Check v28.6
+# ASAP Check v28.7
 
-- Edge-contour 改以封閉外框為優先
-- 低長寬比候選加重扣分，避免手機角/桌面塊誤判
-- Edge fill 過低視為開放邊緣，會大幅扣分
-- Debug 新增 Closed Edge / LowRatioPenalty / OpenEdgePenalty
+本版修正：
 
-版本：v28.6-closed-edge-priority
+- 補上 v28.6 未定義的 Closed Edge / LowRatio / OpenEdge 評分
+- fallback Window / fallback S Well 不再讓候選過關
+- 候選必須有 red-line-window 或真正 S Well 才算可信
+- 手機、滑鼠墊、桌面陰影即使有封閉邊緣，也會因沒有真實快篩特徵被淘汰
+
+版本：v28.7-real-feature-gate
