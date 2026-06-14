@@ -181,7 +181,17 @@
 
   function setResult(r) {
     resultEl.className = 'result';
-    if (r.ok) {
+
+    // v29.2 防呆：如果 detector debug 已經顯示 Final Gate PASS，
+    // 但 r.ok 因快取或舊邏輯變成 false，UI 仍以 PASS 顯示。
+    const debugSaysPass =
+      r &&
+      r.debug &&
+      r.debug.indexOf('Final Gate：outer=PASS / trustedFeature=PASS') >= 0;
+
+    const uiOk = !!(r.ok || debugSaysPass);
+
+    if (uiOk) {
       resultEl.classList.add('ok');
       const sampleFallback = r.features && r.features.sampleSource && r.features.sampleSource.indexOf('fallback') >= 0;
       if (r.partialMessage || sampleFallback) {

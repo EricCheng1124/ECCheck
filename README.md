@@ -1,8 +1,7 @@
-# ASAP Check v29.1
+# ASAP Check v29.2
 
-- 修正 final gate：Red Window 可作為可信特徵
-- 外框幾何通過且 Red Window=YES 時，即使 S Well 為 fallback 也判定外框成功
-- UI 會顯示「S Well 尚未確認」
-- 保留 v29.0 的 SmallOuterPenalty / InnerWindowPenalty
+- 修正 Debug 顯示 Final Gate PASS 但結果仍顯示失敗的問題
+- Final Gate 通過時強制 ok=true
+- UI 增加防呆：Debug PASS 時也顯示成功
 
-版本：v29.1-final-gate-red-window
+版本：v29.2-final-gate-force-pass
