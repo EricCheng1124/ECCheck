@@ -31,7 +31,6 @@
     const values = [];
     const start = clamp(center - halfWindow, 0, profile.length - 1);
     const end = clamp(center + halfWindow, 0, profile.length - 1);
-
     for (let i = start; i <= end; i++) {
       if (Math.abs(i - center) > excludeHalfWidth) values.push(profile[i]);
     }
@@ -78,40 +77,44 @@
       height,
       area,
       width,
-      background: bg
+      background: bg,
+      peakValue
     };
   }
 
-  function redScoreRGB(r, g, b) {
-    // 快篩線通常是紅/粉紅/紫紅；用「紅色相對於 G/B 的差值」比單純 R 更穩
-    return clamp(r - Math.max(g, b) * 0.72, 0, 255);
+  function redPinkScore(r, g, b) {
+    // 對粉紅/紫紅線加權；同時壓掉純陰影。
+    const redPart = r - Math.max(g, b) * 0.58;
+    const magentaPart = (r + b) * 0.5 - g * 0.78;
+    return clamp(Math.max(redPart, magentaPart), 0, 255);
   }
 
   function analyzeCanvas(canvas, options) {
     options = Object.assign({
-      // 這張快篩是直放，T/C 線是「水平線」，所以要在 X 範圍內沿 Y 方向分析
+      // 直放快篩：C/T 是水平線，所以沿 Y 方向分析
       roiX1: 0.40,
       roiX2: 0.56,
-      roiY1: 0.22,
-      roiY2: 0.78,
+      roiY1: 0.20,
+      roiY2: 0.74,
 
-      // 在 ROI 高度內，C 在上、T 在下。這兩個值依品牌微調
-      cPosition: 0.38,
-      tPosition: 0.50,
-      positionTolerance: 0.08,
+      // ROI 內 C 在上、T 在下；依照片目前位置調整過
+      cPosition: 0.36,
+      tPosition: 0.48,
+      positionTolerance: 0.075,
 
       smoothRadius: 2,
       peakHalfWidth: 4,
-      bgHalfWindow: 28,
-      pixelMinSignal: 1.2,
+      bgHalfWindow: 24,
+      pixelMinSignal: 0.55,
 
-      cMinArea: 25,
-      cMinHeight: 2.2,
-      tMinArea: 10,
-      tMinHeight: 1.2,
+      // 先放寬門檻，讓弱線也能進入判斷；之後用實測照片再校正
+      cMinArea: 5.0,
+      cMinHeight: 0.65,
+      tMinArea: 4.5,
+      tMinHeight: 0.60,
 
-      negativeRatio: 0.08,
-      weakPositiveRatio: 0.18
+      negativeRatio: 0.25,
+      weakPositiveRatio: 0.55
     }, options || {});
 
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
@@ -126,14 +129,13 @@
     const y2 = Math.floor(h * options.roiY2);
     const roiH = Math.max(1, y2 - y1 + 1);
 
-    // profile[y]：每一列的紅線強度。真正的 C/T 水平線會形成峰值
     const profile = new Array(roiH).fill(0);
     for (let y = y1; y <= y2; y++) {
       let sum = 0;
       let count = 0;
       for (let x = x1; x <= x2; x++) {
         const idx = (y * w + x) * 4;
-        sum += redScoreRGB(data[idx], data[idx + 1], data[idx + 2]);
+        sum += redPinkScore(data[idx], data[idx + 1], data[idx + 2]);
         count++;
       }
       profile[y - y1] = count ? sum / count : 0;
@@ -143,7 +145,6 @@
     const cLine = measureLine(smooth, options.cPosition, options);
     const tLine = measureLine(smooth, options.tPosition, options);
 
-    // 補上 canvas 絕對座標，給畫面 overlay 用
     cLine.canvasY = y1 + cLine.y;
     tLine.canvasY = y1 + tLine.y;
 
@@ -176,7 +177,8 @@
       tLine,
       peaks: [cLine, tLine],
       profile: smooth,
-      roi: { x1, x2, y1, y2 }
+      roi: { x1, x2, y1, y2 },
+      options
     };
   }
 

@@ -1,5 +1,5 @@
 (function () {
-  const ACCESS_CODE = 'ASAP2026'; // 可改成你自己的授權碼
+  const ACCESS_CODE = 'ASAP2026';
 
   const lockPanel = document.getElementById('lockPanel');
   const mainPanel = document.getElementById('mainPanel');
@@ -35,6 +35,7 @@
   }
 
   function getOptions() {
+    // 這三個拉桿先保留，但新版主判斷使用 detector.js 內的 T/C Ratio 參數
     return {
       redThreshold: Number(redThreshold.value),
       minPeakWidth: Number(minPeakWidth.value),
@@ -49,8 +50,10 @@
   }
 
   function resizeAndDrawImage(img) {
-    const maxW = 520;
-    const scale = Math.min(1, maxW / img.naturalWidth);
+    // 縮小顯示，避免一直捲動；分析仍保留足夠解析度
+    const maxW = 760;
+    const maxH = 520;
+    const scale = Math.min(1, maxW / img.naturalWidth, maxH / img.naturalHeight);
     canvas.width = Math.round(img.naturalWidth * scale);
     canvas.height = Math.round(img.naturalHeight * scale);
 
@@ -60,47 +63,66 @@
 
   function drawOverlay(analysis) {
     const ctx = canvas.getContext('2d');
+    const roi = analysis.roi;
+    const profile = analysis.profile;
+    const roiW = roi.x2 - roi.x1;
+    const roiH = roi.y2 - roi.y1;
+    const maxVal = Math.max(1, ...profile);
+
     ctx.save();
-    ctx.lineWidth = Math.max(2, canvas.width / 350);
+    ctx.lineWidth = Math.max(2, canvas.width / 420);
 
-    ctx.strokeStyle = 'rgba(255, 170, 0, 0.9)';
-    ctx.strokeRect(analysis.roi.x1, analysis.roi.y1, analysis.roi.x2 - analysis.roi.x1, analysis.roi.y2 - analysis.roi.y1);
+    // ROI 框
+    ctx.strokeStyle = 'rgba(255, 170, 0, 0.95)';
+    ctx.strokeRect(roi.x1, roi.y1, roiW, roiH);
 
+    // 直接把波形疊在照片 ROI 裡：左邊是低訊號，右邊是高訊號
+    ctx.beginPath();
+    profile.forEach((v, i) => {
+      const y = roi.y1 + (i / Math.max(1, profile.length - 1)) * roiH;
+      const x = roi.x1 + (v / maxVal) * roiW;
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    });
+    ctx.strokeStyle = 'rgba(17, 24, 39, 0.95)';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    // C / T 偵測線
     ctx.strokeStyle = 'rgba(220, 38, 38, 0.95)';
+    ctx.lineWidth = Math.max(2, canvas.width / 380);
     for (const p of analysis.peaks) {
       ctx.beginPath();
-      ctx.moveTo(analysis.roi.x1, p.canvasY);
-      ctx.lineTo(analysis.roi.x2, p.canvasY);
+      ctx.moveTo(roi.x1, p.canvasY);
+      ctx.lineTo(roi.x2, p.canvasY);
       ctx.stroke();
     }
+
+    // 標籤
+    ctx.font = `${Math.max(13, canvas.width / 48)}px sans-serif`;
+    ctx.fillStyle = 'rgba(220, 38, 38, 0.95)';
+    ctx.fillText('C', roi.x2 + 6, analysis.cLine.canvasY + 5);
+    ctx.fillText('T', roi.x2 + 6, analysis.tLine.canvasY + 5);
+
     ctx.restore();
   }
 
   function drawChart(profile, peaks) {
+    // 保留小圖，但縮到很矮；主要分析看照片上的疊圖
     const ctx = chart.getContext('2d');
     const w = chart.clientWidth || 600;
-    const h = 120;
+    const h = 90;
     chart.width = w;
     chart.height = h;
     ctx.clearRect(0, 0, w, h);
 
-    ctx.strokeStyle = '#e5e7eb';
-    ctx.lineWidth = 1;
-    for (let i = 0; i < 5; i++) {
-      const y = 15 + i * 24;
-      ctx.beginPath();
-      ctx.moveTo(0, y);
-      ctx.lineTo(w, y);
-      ctx.stroke();
-    }
-
-    const maxVal = Math.max(80, ...profile);
+    const maxVal = Math.max(1, ...profile);
     ctx.strokeStyle = '#111827';
     ctx.lineWidth = 2;
     ctx.beginPath();
     profile.forEach((v, i) => {
-      const x = i / (profile.length - 1) * w;
-      const y = h - 12 - (v / maxVal) * (h - 28);
+      const x = i / Math.max(1, profile.length - 1) * w;
+      const y = h - 8 - (v / maxVal) * (h - 16);
       if (i === 0) ctx.moveTo(x, y);
       else ctx.lineTo(x, y);
     });
@@ -109,10 +131,10 @@
     ctx.strokeStyle = '#dc2626';
     ctx.lineWidth = 2;
     for (const p of peaks) {
-      const x = p.y / (profile.length - 1) * w;
+      const x = p.y / Math.max(1, profile.length - 1) * w;
       ctx.beginPath();
-      ctx.moveTo(x, 8);
-      ctx.lineTo(x, h - 8);
+      ctx.moveTo(x, 4);
+      ctx.lineTo(x, h - 4);
       ctx.stroke();
     }
   }
@@ -133,13 +155,12 @@
       resultEl.textContent = '無效';
     }
 
-    const peakText = [
-      `C線: y=${analysis.cLine.canvasY}, area=${analysis.cLine.area.toFixed(1)}, height=${analysis.cLine.height.toFixed(1)}, width=${analysis.cLine.width}px`,
-      `T線: y=${analysis.tLine.canvasY}, area=${analysis.tLine.area.toFixed(1)}, height=${analysis.tLine.height.toFixed(1)}, width=${analysis.tLine.width}px`,
+    detailEl.innerHTML = [
+      analysis.label,
+      `C線: y=${Math.round(analysis.cLine.canvasY)}, area=${analysis.cLine.area.toFixed(1)}, height=${analysis.cLine.height.toFixed(1)}, width=${analysis.cLine.width}px`,
+      `T線: y=${Math.round(analysis.tLine.canvasY)}, area=${analysis.tLine.area.toFixed(1)}, height=${analysis.tLine.height.toFixed(1)}, width=${analysis.tLine.width}px`,
       `T/C Ratio=${analysis.ratio.toFixed(3)}`
     ].join('<br>');
-
-    detailEl.innerHTML = `${analysis.label}<br>${peakText}`;
   }
 
   function analyze() {

@@ -19,7 +19,7 @@ body {
 }
 
 .app {
-  max-width: 560px;
+  max-width: 860px;
   margin: 0 auto;
   padding: 18px;
 }
@@ -113,13 +113,19 @@ canvas {
 #canvas { display: block; }
 #chart { height: 180px; }
 
-
-/* v3: compact view */
-.card { padding: 12px; margin-bottom: 10px; }
+/* v4 compact layout */
+.app { max-width: 760px; padding: 10px; }
+.card { padding: 12px; margin-bottom: 10px; border-radius: 14px; }
 h1 { font-size: 23px; }
 h2 { font-size: 17px; margin-bottom: 8px; }
-.result { font-size: 24px; padding: 10px; }
-.detail { font-size: 13px; line-height: 1.35; }
-#chart { height: 120px; }
-.canvasCard { padding: 10px; }
-canvas { margin-top: 6px; }
+header { margin-bottom: 8px; }
+.result { font-size: 25px; padding: 10px; }
+.detail { font-size: 14px; line-height: 1.45; }
+.canvasCard { order: 1; }
+.resultCard { order: 2; }
+#mainPanel { display: flex; flex-direction: column; }
+#mainPanel.hidden { display: none; }
+#canvas { max-height: 520px; object-fit: contain; }
+#chart { height: 90px; }
+input[type="range"] { margin: 0; }
+button, .fileBtn { padding: 11px 16px; font-size: 16px; }
