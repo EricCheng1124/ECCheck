@@ -4,72 +4,55 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="robots" content="noindex,nofollow,noarchive" />
-  <title>ASAP Check</title>
-  <link rel="stylesheet" href="style.css?v=11" />
+  <title>ASAP Check V13</title>
+  <link rel="stylesheet" href="style.css?v=13" />
 </head>
 <body>
   <div class="app">
     <header>
       <div>
         <h1>ASAP Check</h1>
-        <p>Rapid Test Image Recognition Demo</p>
+        <p>V13 Cassette Outer Frame Detection</p>
       </div>
-      <span class="badge">Demo</span>
+      <span class="badge">v13</span>
     </header>
 
-    <section id="lockPanel" class="card">
-      <h2>授權進入</h2>
-      <p class="hint">請輸入授權碼。這只是基本防護，不代表核心演算法已被完整保護。</p>
-      <input id="passInput" type="password" inputmode="text" placeholder="Access Code" autocomplete="off" />
-      <button id="unlockBtn" class="primary">進入</button>
-      <p id="lockMsg" class="msg"></p>
+    <section class="card">
+      <h2>影像來源</h2>
+      <div class="row">
+        <label class="fileBtn">拍照<input id="cameraInput" type="file" accept="image/*" capture="environment" /></label>
+        <label class="fileBtn secondary">選照片<input id="galleryInput" type="file" accept="image/*" /></label>
+      </div>
+      <p class="hint">v13 只做一件事：先找出整支快篩卡匣外框，裁切出卡匣。暫時不判斷陰陽性。</p>
     </section>
 
-    <main id="mainPanel" class="hidden">
-      <section class="card compactCard">
-        <h2>影像來源</h2>
-        <div class="row">
-          <label class="fileBtn">
-            拍照
-            <input id="cameraInput" type="file" accept="image/*" capture="environment" />
-          </label>
-          <label class="fileBtn secondary">
-            選照片
-            <input id="galleryInput" type="file" accept="image/*" />
-          </label>
-        </div>
-        <p class="hint">v12：先找 C/T 紅線成對位置 → 直接裁切判讀窗，只分析裁切後橘框內容。</p>
-      </section>
+    <section class="card params">
+      <h2>外框辨識參數</h2>
+      <label>白色亮度門檻 V <span id="vText">145</span></label>
+      <input id="vThreshold" type="range" min="90" max="230" value="145" />
+      <label>低飽和門檻 S <span id="sText">70</span></label>
+      <input id="sThreshold" type="range" min="20" max="150" value="70" />
+      <label>最小面積比例 <span id="areaText">2.0</span>%</label>
+      <input id="minAreaRatio" type="range" min="0.3" max="10" value="2.0" step="0.1" />
+    </section>
 
-      <section class="card compactCard">
-        <h2>參數</h2>
-        <label>紅線靈敏度 <span id="redText">38</span></label>
-        <input id="redThreshold" type="range" min="10" max="100" value="38" />
+    <section class="card resultCard">
+      <h2>外框辨識結果</h2>
+      <div id="result" class="result neutral">尚未分析</div>
+      <div id="detail" class="detail">請先拍照或選擇照片。</div>
+    </section>
 
-        <label>最小線寬 <span id="widthText">3</span> px</label>
-        <input id="minPeakWidth" type="range" min="1" max="20" value="3" />
+    <section class="card">
+      <h2>原圖外框偵測</h2>
+      <canvas id="sourceCanvas"></canvas>
+    </section>
 
-        <label>最小線距 <span id="distText">25</span> px</label>
-        <input id="minPeakDistance" type="range" min="10" max="120" value="25" />
-      </section>
-
-      <section class="card canvasCard">
-        <h2>影像與分析</h2>
-        <div class="analysisGrid">
-          <canvas id="canvas"></canvas>
-          <canvas id="chart"></canvas>
-        </div>
-      </section>
-
-      <section class="card resultCard">
-        <h2>辨識結果</h2>
-        <div id="result" class="result neutral">尚未分析</div>
-        <div id="detail" class="detail">請先拍照或選擇照片。</div>
-      </section>
-    </main>
+    <section class="card">
+      <h2>裁切後卡匣</h2>
+      <canvas id="cropCanvas"></canvas>
+    </section>
   </div>
-
-  <script src="detector.js?v=12?v=11"></script>
-  <script src="app.js?v=12?v=11"></script>
+  <script src="detector.js?v=13"></script>
+  <script src="app.js?v=13"></script>
 </body>
 </html>
