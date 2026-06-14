@@ -194,3 +194,7 @@ h2 { font-size: 16px; }
   .analysisGrid #canvas { max-width: calc(100% - 88px) !important; max-height: 390px !important; }
   .analysisGrid #chart { flex-basis: 80px !important; width: 80px !important; max-width: 80px !important; max-height: 390px !important; }
 }
+
+/* v7: corrected cassette crop preview */
+.analysisGrid #canvas { max-height: 500px !important; }
+.analysisGrid #chart { max-height: 500px !important; }
