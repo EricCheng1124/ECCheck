@@ -49,7 +49,7 @@
   }
 
   function resizeAndDrawImage(img) {
-    const maxW = 1100;
+    const maxW = 520;
     const scale = Math.min(1, maxW / img.naturalWidth);
     canvas.width = Math.round(img.naturalWidth * scale);
     canvas.height = Math.round(img.naturalHeight * scale);
@@ -79,7 +79,7 @@
   function drawChart(profile, peaks) {
     const ctx = chart.getContext('2d');
     const w = chart.clientWidth || 600;
-    const h = 180;
+    const h = 120;
     chart.width = w;
     chart.height = h;
     ctx.clearRect(0, 0, w, h);
@@ -87,7 +87,7 @@
     ctx.strokeStyle = '#e5e7eb';
     ctx.lineWidth = 1;
     for (let i = 0; i < 5; i++) {
-      const y = 20 + i * 35;
+      const y = 15 + i * 24;
       ctx.beginPath();
       ctx.moveTo(0, y);
       ctx.lineTo(w, y);

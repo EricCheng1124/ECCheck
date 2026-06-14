@@ -19,7 +19,7 @@ body {
 }
 
 .app {
-  max-width: 860px;
+  max-width: 560px;
   margin: 0 auto;
   padding: 18px;
 }
@@ -112,3 +112,14 @@ canvas {
 
 #canvas { display: block; }
 #chart { height: 180px; }
+
+
+/* v3: compact view */
+.card { padding: 12px; margin-bottom: 10px; }
+h1 { font-size: 23px; }
+h2 { font-size: 17px; margin-bottom: 8px; }
+.result { font-size: 24px; padding: 10px; }
+.detail { font-size: 13px; line-height: 1.35; }
+#chart { height: 120px; }
+.canvasCard { padding: 10px; }
+canvas { margin-top: 6px; }
