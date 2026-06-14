@@ -1,2 +1,3 @@
-# ASAP Check v17
-OpenCV outer frame + result window contour + sample well center detection.
+# ASAP Check v18
+
+OpenCV outer frame + safer window validation + sample inner-hole center.

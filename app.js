@@ -98,7 +98,7 @@
     resultEl.className = 'result';
     if (r.ok) {
       resultEl.classList.add('ok');
-      resultEl.textContent = '外框＋Window/S孔中心辨識成功';
+      resultEl.textContent = '外框＋Window安全/S內孔辨識成功';
       detailEl.innerHTML =
         `版本：${r.version}<br>` +
         `方法：${r.reason}<br>` +

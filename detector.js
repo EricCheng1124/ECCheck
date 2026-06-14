@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v17-window-sample-center';
+  const VERSION = 'v18-window-safe-sample-inner';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
 
@@ -168,6 +168,102 @@
     return { win: candidates[0] || null, count: candidates.length };
   }
 
+
+  function findSampleInnerHole(norm, W, H, win, roughSample) {
+    // 目標：不要抓 S 孔外圈，改抓中間較暗的內孔中心
+    let x0 = Math.round(W * 0.18);
+    let y0 = Math.round(H * 0.48);
+    let x1 = Math.round(W * 0.82);
+    let y1 = Math.round(H * 0.92);
+    if (win) y0 = Math.max(y0, Math.round(win.y + win.h * 0.85));
+    if (roughSample) {
+      const rr = Math.max(roughSample.r || 0, roughSample.rx || 0, roughSample.ry || 0, W * 0.14);
+      x0 = Math.round(clamp(roughSample.cx - rr * 1.2, 0, W - 2));
+      x1 = Math.round(clamp(roughSample.cx + rr * 1.2, 1, W - 1));
+      y0 = Math.round(clamp(roughSample.cy - rr * 1.2, 0, H - 2));
+      y1 = Math.round(clamp(roughSample.cy + rr * 1.2, 1, H - 1));
+    }
+    const rw = Math.max(2, x1 - x0);
+    const rh = Math.max(2, y1 - y0);
+    let roi = norm.roi(new cv.Rect(x0, y0, rw, rh));
+    let blur = new cv.Mat();
+    cv.GaussianBlur(roi, blur, new cv.Size(5,5), 0);
+
+    let bin = new cv.Mat();
+    // 內孔通常比外殼/孔邊緣更暗，用 Otsu 反二值化抓暗區
+    cv.threshold(blur, bin, 0, 255, cv.THRESH_BINARY_INV + cv.THRESH_OTSU);
+    cv.morphologyEx(bin, bin, cv.MORPH_OPEN, cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(3,3)));
+    cv.morphologyEx(bin, bin, cv.MORPH_CLOSE, cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(5,5)));
+
+    let contours = new cv.MatVector();
+    let hierarchy = new cv.Mat();
+    cv.findContours(bin, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+    const candidates = [];
+    for (let i = 0; i < contours.size(); i++) {
+      const cnt = contours.get(i);
+      const area = cv.contourArea(cnt);
+      const br = cv.boundingRect(cnt);
+      const rectArea = br.width * br.height;
+      const cx = x0 + br.x + br.width / 2;
+      const cy = y0 + br.y + br.height / 2;
+      const peri = cv.arcLength(cnt, true);
+      const circularity = peri > 0 ? 4 * Math.PI * area / (peri * peri) : 0;
+      const wh = br.width / Math.max(1, br.height);
+      const fill = area / Math.max(1, rectArea);
+
+      if (
+        area > W * H * 0.0006 && area < W * H * 0.035 &&
+        cx > W * 0.15 && cx < W * 0.82 &&
+        cy > H * 0.45 && cy < H * 0.93 &&
+        br.width > W * 0.05 && br.width < W * 0.32 &&
+        br.height > W * 0.06 && br.height < W * 0.36 &&
+        wh > 0.35 && wh < 1.65 &&
+        fill > 0.12 && circularity > 0.10
+      ) {
+        if (win) {
+          const overlapX = Math.max(0, Math.min(cx + br.width/2, win.x+win.w) - Math.max(cx - br.width/2, win.x));
+          const overlapY = Math.max(0, Math.min(cy + br.height/2, win.y+win.h) - Math.max(cy - br.height/2, win.y));
+          if (overlapX * overlapY > rectArea * 0.10) { cnt.delete(); continue; }
+        }
+        const expectedX = win ? (win.x + win.w * 0.45) : W * 0.45;
+        const centerScore = 1 - Math.min(1, Math.abs(cx - expectedX) / (W * 0.40));
+        const yScore = 1 - Math.min(1, Math.abs(cy - H * 0.68) / (H * 0.35));
+        const score = area * (0.5 + circularity) * (0.5 + centerScore) * (0.5 + yScore);
+        candidates.push({ cx, cy, r: Math.max(br.width, br.height) / 2, rx: br.width/2, ry: br.height/2, x: cx-br.width/2, y: cy-br.height/2, w:br.width, h:br.height, source:'inner-hole', circularity, fill, score });
+      }
+      cnt.delete();
+    }
+    candidates.sort((a,b)=>b.score-a.score);
+    roi.delete(); blur.delete(); bin.delete(); contours.delete(); hierarchy.delete();
+    return { sample: candidates[0] || null, count: candidates.length };
+  }
+
+  function makeWindowSafer(win, W, H) {
+    // Window 有機會被內部線條或陰影干擾，所以做二次安全檢查；不合格才退回幾何位置
+    if (!win) return null;
+    const cx = win.x + win.w / 2;
+    const cy = win.y + win.h / 2;
+    const aspect = win.h / Math.max(1, win.w);
+    const ok =
+      cx > W * 0.20 && cx < W * 0.72 &&
+      cy > H * 0.18 && cy < H * 0.62 &&
+      win.w > W * 0.12 && win.w < W * 0.42 &&
+      win.h > H * 0.16 && win.h < H * 0.44 &&
+      aspect > 1.35 && aspect < 4.5;
+    if (!ok) return null;
+
+    // 對找到的窗稍微往內縮，避免藍框吃到外殼高光邊緣；後面 C/T 分析會更乾淨
+    const padX = Math.round(win.w * 0.05);
+    const padY = Math.round(win.h * 0.04);
+    return Object.assign({}, win, {
+      x: clamp(win.x + padX, 0, W-1),
+      y: clamp(win.y + padY, 0, H-1),
+      w: clamp(win.w - padX * 2, 1, W),
+      h: clamp(win.h - padY * 2, 1, H),
+      sourceSafe: 'validated-shrink'
+    });
+  }
+
   function findSampleByCirclesAndContours(norm, W, H, win) {
     const candidates = [];
     // 先用 HoughCircles 找圓/橢圓中心
@@ -279,12 +375,13 @@
     const norm = makeNormalizedGray(src);
 
     const wf = findWindowByContours(norm, W, H);
-    let resultWindow = wf.win;
-    let windowSource = resultWindow ? 'opencv-window-contour' : 'fallback-geometry';
+    let resultWindow = makeWindowSafer(wf.win, W, H);
+    let windowSource = resultWindow ? 'opencv-window-contour-safe' : 'fallback-geometry';
     if (!resultWindow) resultWindow = fallbackWindow(W, H);
 
     const sf = findSampleByCirclesAndContours(norm, W, H, resultWindow);
-    let sampleHole = sf.sample;
+    const inner = findSampleInnerHole(norm, W, H, resultWindow, sf.sample);
+    let sampleHole = inner.sample || sf.sample;
     let sampleSource = sampleHole ? sampleHole.source : 'fallback-geometry';
     if (!sampleHole) sampleHole = fallbackSample(W, H);
 
@@ -300,7 +397,7 @@
       windowSource,
       sampleSource,
       windowCandidates: wf.count,
-      sampleCandidates: sf.count
+      sampleCandidates: sf.count + inner.count
     };
   }
 
