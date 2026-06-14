@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v26-window-sample-orientation-stable';
+  const VERSION = 'v27-debug';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -310,7 +310,7 @@
     if(best){
       let features=null;
       try{ warpCropToCanvas(canvas,cropCanvas,best.pts); features=detectInternalFeatures(cropCanvas); } catch(e){ console.error(e); }
-      result={version:VERSION,ok:true,reason:best.method+'+feature-score',ratio:best.ratio,areaRatio:best.rectArea/imgArea,fill:best.fill,candidates:scored.length,rect:{cx:best.rect.center.x,cy:best.rect.center.y,w:best.rect.size.width,h:best.rect.size.height,angle:best.rect.angle},features};
+      result={version:VERSION,ok:true,reason:best.method+'+feature-score',ratio:best.ratio,areaRatio:best.rectArea/imgArea,fill:best.fill,candidates:scored.length,rect:{cx:best.rect.center.x,cy:best.rect.center.y,w:best.rect.size.width,h:best.rect.size.height,angle:best.rect.angle},features,debug:'Candidates:'+scored.length+'<br>Method:'+best.method+'<br>FeatureScore:'+Math.round(best.featureScore||0)};
     } else {
       cropCanvas.width=1; cropCanvas.height=1; result={version:VERSION,ok:false,reason:'no-candidate',candidates:rawCands.length};
     }

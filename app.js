@@ -16,6 +16,11 @@
   const cropCanvas = document.getElementById('cropCanvas');
   const resultEl = document.getElementById('result');
   const detailEl = document.getElementById('detail');
+  const debugGray=document.getElementById('debugGray');
+  const debugMask=document.getElementById('debugMask');
+  const debugEdge=document.getElementById('debugEdge');
+  const debugText=document.getElementById('debugText');
+
 
   const minAreaRatio = document.getElementById('minAreaRatio');
   const ratioMin = document.getElementById('ratioMin');
@@ -109,6 +114,7 @@
         `中心：x=${r.rect.cx.toFixed(0)}, y=${r.rect.cy.toFixed(0)}<br>` +
         `尺寸：w=${r.rect.w.toFixed(0)}, h=${r.rect.h.toFixed(0)}, angle=${r.rect.angle.toFixed(1)}°<br>` +
         formatFeatures(r.features);
+      if(r.debug){debugText.innerHTML=r.debug;}
     } else {
       resultEl.classList.add('invalid');
       resultEl.textContent = '外框辨識失敗';

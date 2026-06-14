@@ -3,13 +3,13 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>ASAP Check v26 OpenCV</title>
+  <title>ASAP Check v27 OpenCV</title>
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
   <div class="app">
     <header>
-      <div><h1>ASAP Check</h1><p>v26 外框＋Window/S方向穩定測試版</p></div>
+      <div><h1>ASAP Check</h1><p>v27 外框＋Window/S方向穩定測試版</p></div>
       <span class="badge">v26</span>
     </header>
 
@@ -56,11 +56,21 @@
         <h2>裁切後快篩卡匣</h2>
         <canvas id="cropCanvas"></canvas>
       </section>
+    
+      <section class="card">
+        <h2>Debug View</h2>
+        <label><input id="debugMode" type="checkbox" checked /> 顯示 Debug</label>
+        <h3>Gray</h3><canvas id="debugGray"></canvas>
+        <h3>White Mask</h3><canvas id="debugMask"></canvas>
+        <h3>Edge</h3><canvas id="debugEdge"></canvas>
+        <div id="debugText" class="detail"></div>
+      </section>
+
     </main>
   </div>
 
   <script async src="https://docs.opencv.org/4.9.0/opencv.js" onload="window.__opencvLoaded && window.__opencvLoaded()"></script>
-  <script src="detector.js?v=26"></script>
-  <script src="app.js?v=26"></script>
+  <script src="detector.js?v=27"></script>
+  <script src="app.js?v=27"></script>
 </body>
 </html>
