@@ -45,7 +45,7 @@
 
   function onCvReady() {
     cvReady = true;
-    cvStatus.textContent = 'OpenCV.js 已載入，可開始外框＋Window/S Well辨識。';
+    cvStatus.textContent = 'OpenCV.js 已載入，可開始 V20 外框＋Window/S孔辨識。';
     if (lastImage) analyze();
   }
 

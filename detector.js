@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v19-window-safe-sample-well';
+  const VERSION = 'v20-window-profile-sample-inner';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
 
@@ -426,14 +426,16 @@
   }
 
   function fallbackWindow(W, H) {
+    const w = Math.round(W * 0.34);
+    const h = Math.round(H * 0.31);
+    const x = Math.round(W * 0.30);
+    const y = Math.round(H * 0.25);
     return {
-      x: Math.round(W * 0.30),
-      y: Math.round(H * 0.25),
-      w: Math.round(W * 0.34),
-      h: Math.round(H * 0.31),
-      cx: Math.round(W * 0.47),
-      cy: Math.round(H * 0.405),
-      area: 0, fill: 0, aspect: 0, score: 0
+      x, y, w, h,
+      cx: x + w / 2,
+      cy: y + h / 2,
+      area: 0, fill: 0, aspect: h / Math.max(1, w), score: 0,
+      sourceSafe: 'fallback-geometry'
     };
   }
 
@@ -447,6 +449,86 @@
     };
   }
 
+
+  function makeVisualSampleFromInner(inner, W) {
+    if (!inner) return null;
+    const rx = Math.max(18, Math.round(W * 0.16));
+    const ry = Math.max(20, Math.round(W * 0.20));
+    return Object.assign({}, inner, {
+      cx: inner.cx,
+      cy: inner.cy,
+      rx,
+      ry,
+      r: Math.max(rx, ry),
+      source: 'inner-hole-center-visual-well',
+      score: (inner.score || 1) + 999999
+    });
+  }
+
+  function findWindowByDarkProfile(norm, W, H) {
+    // V20：輪廓失敗時，不直接用幾何比例；改用上半部暗凹槽的 x/y profile 找 Window。
+    const x0 = Math.round(W * 0.18), x1 = Math.round(W * 0.78);
+    const y0 = Math.round(H * 0.14), y1 = Math.round(H * 0.66);
+    const xs = new Array(Math.max(1, x1 - x0)).fill(0);
+    const ys = new Array(Math.max(1, y1 - y0)).fill(0);
+    let total = 0;
+
+    for (let y = y0; y < y1; y++) {
+      for (let x = x0; x < x1; x++) {
+        const v = norm.ucharPtr(y, x)[0];
+        // 暗凹槽與粉紅線都會進來，白色外殼會被排除
+        const s = Math.max(0, 135 - v);
+        if (s > 0) {
+          xs[x - x0] += s;
+          ys[y - y0] += s;
+          total += s;
+        }
+      }
+    }
+    if (total <= 0) return { win: null, count: 0 };
+
+    function segmentFromProfile(arr, minLen, maxLen) {
+      const maxV = Math.max(...arr);
+      if (maxV <= 0) return null;
+      const th = maxV * 0.22;
+      let best = null, start = -1, sum = 0;
+      for (let i = 0; i <= arr.length; i++) {
+        const on = i < arr.length && arr[i] >= th;
+        if (on && start < 0) { start = i; sum = 0; }
+        if (on) sum += arr[i];
+        if ((!on || i === arr.length) && start >= 0) {
+          const end = i - 1;
+          const len = end - start + 1;
+          if (len >= minLen && len <= maxLen) {
+            const score = sum * (1 + Math.min(len, maxLen) / maxLen);
+            if (!best || score > best.score) best = { start, end, len, score };
+          }
+          start = -1;
+        }
+      }
+      return best;
+    }
+
+    const sx = segmentFromProfile(xs, Math.round(W * 0.10), Math.round(W * 0.45));
+    const sy = segmentFromProfile(ys, Math.round(H * 0.14), Math.round(H * 0.46));
+    if (!sx || !sy) return { win: null, count: 0 };
+
+    let x = x0 + sx.start;
+    let y = y0 + sy.start;
+    let w = sx.len;
+    let h = sy.len;
+    // 稍微放大，讓藍框包住整個凹槽；之後 makeWindowSafer 會再內縮
+    const padX = Math.round(w * 0.10);
+    const padY = Math.round(h * 0.08);
+    x = clamp(x - padX, 0, W - 1);
+    y = clamp(y - padY, 0, H - 1);
+    w = clamp(w + padX * 2, 1, W - x);
+    h = clamp(h + padY * 2, 1, H - y);
+    const aspect = h / Math.max(1, w);
+    if (aspect < 1.2 || aspect > 5.5) return { win: null, count: 0 };
+    return { win: { x, y, w, h, cx: x + w/2, cy: y + h/2, area: w*h, fill: 0, aspect, score: sx.score + sy.score, sourceSafe: 'profile-dark-window' }, count: 1 };
+  }
+
   function findInternalFeaturesOnCrop(cropCanvas, draw) {
     const src = cv.imread(cropCanvas);
     const W = src.cols;
@@ -455,22 +537,24 @@
     const norm = makeNormalizedGray(src);
 
     const wf = findWindowByContours(norm, W, H);
-    let resultWindow = makeWindowSafer(wf.win, W, H);
-    let windowSource = resultWindow ? 'opencv-window-contour-safe' : 'fallback-geometry';
+    const pf = findWindowByDarkProfile(norm, W, H);
+    let rawWindow = wf.win || pf.win;
+    let resultWindow = makeWindowSafer(rawWindow, W, H);
+    let windowSource = resultWindow ? (wf.win ? 'opencv-window-contour-safe' : 'profile-dark-window-safe') : 'fallback-geometry';
     if (!resultWindow) resultWindow = fallbackWindow(W, H);
 
-    const well = findSampleWellOuter(norm, W, H, resultWindow);
+    // V20：S 孔中心優先採用「內孔最暗區」；外圈只作視覺參考，避免大橢圓被陰影拉偏。
     const sf = findSampleByCirclesAndContours(norm, W, H, resultWindow);
+    const well = findSampleWellOuter(norm, W, H, resultWindow);
     const inner = findSampleInnerHole(norm, W, H, resultWindow, sf.sample || well.sample);
 
-    let sampleHole = well.sample || sf.sample || inner.sample;
+    let sampleHole = inner.sample ? makeVisualSampleFromInner(inner.sample, W) : (well.sample || sf.sample);
     let sampleSource = sampleHole ? sampleHole.source : 'fallback-geometry';
     if (!sampleHole) {
       sampleHole = fallbackSample(W, H);
-      // 幾何 fallback 也改成視覺中心：對齊 Window 中心，位置在下半部。
       if (resultWindow) sampleHole.cx = resultWindow.x + resultWindow.w / 2;
-      sampleHole.rx = Math.round(W * 0.22);
-      sampleHole.ry = Math.round(W * 0.26);
+      sampleHole.rx = Math.round(W * 0.18);
+      sampleHole.ry = Math.round(W * 0.22);
       sampleHole.source = 'fallback-sample-well';
       sampleSource = sampleHole.source;
     }
@@ -488,7 +572,7 @@
       innerSample: inner.sample,
       windowSource,
       sampleSource,
-      windowCandidates: wf.count,
+      windowCandidates: wf.count + pf.count,
       sampleCandidates: well.count + sf.count + inner.count
     };
   }

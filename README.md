@@ -1,6 +1,6 @@
-# ASAP Check v19
+# ASAP Check v20
 
 - OpenCV outer frame detection
-- Safer Window detection with fallback
-- Sample Well visual center detection with ellipse overlay
-- Inner-hole cross displayed for debug
+- Window contour + dark-profile fallback
+- Sample Well uses inner-hole center first, with visual ellipse overlay
+- Debug display only; no C/T positive-negative judgement yet
