@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v29.0-outer-size-guard';
+  const VERSION = 'v29.1-final-gate-red-window';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -834,7 +834,31 @@ function candidateFeatureScore(srcCanvas, cand)
     if(best){
       let features=null;
       try{ warpCropToCanvas(canvas,cropCanvas,best.pts); features=detectInternalFeatures(cropCanvas); } catch(e){ console.error(e); }
-      const bestHasTrustedFeature = !!(best.hasRedWindow || best.hasRealSample);
+
+      // v29.1 final gate 修正：
+      // v29.0 會把「已找到正確外框 + red-line-window」的候選誤殺，
+      // 因為 S Well 若是 fallback 就被 no-real-window-or-sample 擋掉。
+      // 這裡把可信紅線視窗當成可信特徵；S Well 沒找到時仍可判定外框成功，但 UI 會提示 S Well 尚未確認。
+      const bestAreaRatio = best.rectArea / Math.max(1, imgArea);
+      const bestAppearanceOk = !!(best.appearanceDetail && best.appearanceDetail.trustedBrightCard);
+      const bestCenterOk = !(best.outerDetail && best.outerDetail.centerScore !== undefined) || best.outerDetail.centerScore >= 0.25;
+      const bestOuterGeometryOk =
+        bestAreaRatio >= 0.045 &&
+        best.ratio >= options.ratioMin * 0.82 &&
+        best.ratio <= options.ratioMax * 1.22 &&
+        bestAppearanceOk &&
+        bestCenterOk;
+
+      const bestHasTrustedRedWindow = !!best.hasRedWindow;
+      const bestHasRealSample = !!best.hasRealSample;
+      const bestHasTrustedFeature = !!(bestHasTrustedRedWindow || bestHasRealSample);
+      const bestOk = !!(bestOuterGeometryOk && bestHasTrustedFeature);
+
+      let failReason = '';
+      if(!bestOuterGeometryOk) failReason = 'bad-outer-geometry';
+      else if(!bestHasTrustedFeature) failReason = 'no-trusted-window-or-sample';
+
+      const partialMessage = bestHasTrustedRedWindow && !bestHasRealSample;
       
 
 let dbg='';
@@ -844,7 +868,9 @@ dbg += 'White Mask：已產生<br>';
 dbg += 'Edge：已產生<br>';
 dbg += 'Bright Foreground：已納入候選來源<br>';
 dbg += 'Raw Candidates：' + rawCands.length + '<br>';
-dbg += 'Scored Candidates：' + scored.length + '<br><hr>';
+dbg += 'Scored Candidates：' + scored.length + '<br>';
+dbg += 'Final Gate：outer=' + (bestOuterGeometryOk ? 'PASS' : 'FAIL') + ' / trustedFeature=' + (bestHasTrustedFeature ? 'PASS' : 'FAIL') + ' / redWindow=' + (bestHasTrustedRedWindow ? 'YES' : 'NO') + ' / realSample=' + (bestHasRealSample ? 'YES' : 'NO') + '<br>';
+dbg += 'Final Reason：' + (bestOk ? (partialMessage ? 'outer+red-window-ok，S Well 尚未確認' : 'outer+real-feature-ok') : failReason) + '<br><hr>';
 
 scored.forEach((c,i)=>
 {
@@ -893,8 +919,8 @@ scored.forEach((c,i)=>
 
 result={
     version:VERSION,
-    ok:bestHasTrustedFeature,
-    reason:bestHasTrustedFeature ? best.method+'+real-feature-gate' : 'no-real-window-or-sample',
+    ok:bestOk,
+    reason:bestOk ? (partialMessage ? best.method+'+red-window-outer-pass' : best.method+'+real-feature-gate') : failReason,
     ratio:best.ratio,
     areaRatio:best.rectArea/imgArea,
     fill:best.fill,
@@ -907,6 +933,12 @@ result={
         angle:best.rect.angle
     },
     features,
+    sampleConfirmed:bestHasRealSample,
+    redWindowConfirmed:bestHasTrustedRedWindow,
+    outerGeometryOk:bestOuterGeometryOk,
+    appearanceOk:bestAppearanceOk,
+    centerOk:bestCenterOk,
+    partialMessage,
     debug:dbg
 };
 

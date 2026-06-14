@@ -183,7 +183,12 @@
     resultEl.className = 'result';
     if (r.ok) {
       resultEl.classList.add('ok');
-      resultEl.textContent = '外框＋Window安全/S Well辨識成功';
+      const sampleFallback = r.features && r.features.sampleSource && r.features.sampleSource.indexOf('fallback') >= 0;
+      if (r.partialMessage || sampleFallback) {
+        resultEl.textContent = '外框＋Window辨識成功，S Well 尚未確認';
+      } else {
+        resultEl.textContent = '外框＋Window＋S Well辨識成功';
+      }
       detailEl.innerHTML =
         `版本：${r.version}<br>` +
         `方法：${r.reason}<br>` +
