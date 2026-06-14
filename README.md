@@ -1,10 +1,9 @@
-# ASAP Check v13
+# ASAP Check v15
 
-V13 only detects the outer frame of the rapid-test cassette.
-It does not judge C/T lines yet.
+OpenCV.js test version:
+- Detect outer cassette frame
+- Perspective crop cassette
+- Detect result window and S/sample hole on cropped cassette
+- If S/sample hole is above result window, rotate 180 degrees and re-detect
 
-Files:
-- index.html
-- style.css
-- app.js
-- detector.js
+Default access code: ASAP2026

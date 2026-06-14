@@ -3,14 +3,14 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>ASAP Check v14 OpenCV</title>
+  <title>ASAP Check v15 OpenCV</title>
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
   <div class="app">
     <header>
-      <div><h1>ASAP Check</h1><p>v14 OpenCV 外框辨識測試版</p></div>
-      <span class="badge">v14</span>
+      <div><h1>ASAP Check</h1><p>v15 OpenCV 外框＋判讀窗＋S孔測試版</p></div>
+      <span class="badge">v15</span>
     </header>
 
     <section id="lockPanel" class="card">
@@ -42,7 +42,7 @@
       </section>
 
       <section class="card resultCard">
-        <h2>外框辨識結果</h2>
+        <h2>外框與內部特徵辨識結果</h2>
         <div id="result" class="result neutral">尚未分析</div>
         <div id="detail" class="detail">請先拍照或選擇照片。</div>
       </section>
@@ -53,14 +53,14 @@
       </section>
 
       <section class="card">
-        <h2>裁切後快篩卡匣</h2>
+        <h2>裁切後快篩卡匣 / 內部特徵</h2>
         <canvas id="cropCanvas"></canvas>
       </section>
     </main>
   </div>
 
   <script async src="https://docs.opencv.org/4.9.0/opencv.js" onload="window.__opencvLoaded && window.__opencvLoaded()"></script>
-  <script src="detector.js?v=14"></script>
-  <script src="app.js?v=14"></script>
+  <script src="detector.js?v=15"></script>
+  <script src="app.js?v=15"></script>
 </body>
 </html>

@@ -73,11 +73,32 @@
     ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
   }
 
+
+  function formatFeatures(f) {
+    if (!f) return '<br>內部特徵：未執行';
+    let html = '<hr>';
+    html += `判讀窗候選：${f.windowCandidates}<br>`;
+    html += `S孔候選：${f.sampleCandidates}<br>`;
+    html += `方向：${f.orientation}<br>`;
+    html += `180度校正：${f.orientationCorrected ? '有' : '無'}<br>`;
+    if (f.window) {
+      html += `判讀窗：x=${f.window.x.toFixed(0)}, y=${f.window.y.toFixed(0)}, w=${f.window.w.toFixed(0)}, h=${f.window.h.toFixed(0)}<br>`;
+    } else {
+      html += '判讀窗：未找到<br>';
+    }
+    if (f.sample) {
+      html += `S孔：x=${f.sample.cx.toFixed(0)}, y=${f.sample.cy.toFixed(0)}, rx=${f.sample.rx.toFixed(0)}, ry=${f.sample.ry.toFixed(0)}<br>`;
+    } else {
+      html += 'S孔：未找到<br>';
+    }
+    return html;
+  }
+
   function setResult(r) {
     resultEl.className = 'result';
     if (r.ok) {
       resultEl.classList.add('ok');
-      resultEl.textContent = '外框辨識成功';
+      resultEl.textContent = '外框＋內部特徵辨識成功';
       detailEl.innerHTML =
         `版本：${r.version}<br>` +
         `方法：${r.reason}<br>` +
@@ -86,7 +107,8 @@
         `長寬比：${r.ratio.toFixed(2)}<br>` +
         `填充率：${r.fill.toFixed(2)}<br>` +
         `中心：x=${r.rect.cx.toFixed(0)}, y=${r.rect.cy.toFixed(0)}<br>` +
-        `尺寸：w=${r.rect.w.toFixed(0)}, h=${r.rect.h.toFixed(0)}, angle=${r.rect.angle.toFixed(1)}°`;
+        `尺寸：w=${r.rect.w.toFixed(0)}, h=${r.rect.h.toFixed(0)}, angle=${r.rect.angle.toFixed(1)}°<br>` +
+        formatFeatures(r.features);
     } else {
       resultEl.classList.add('invalid');
       resultEl.textContent = '外框辨識失敗';
