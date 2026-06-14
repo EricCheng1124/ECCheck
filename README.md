@@ -1,3 +1,6 @@
-# ASAP Check v18
+# ASAP Check v19
 
-OpenCV outer frame + safer window validation + sample inner-hole center.
+- OpenCV outer frame detection
+- Safer Window detection with fallback
+- Sample Well visual center detection with ellipse overlay
+- Inner-hole cross displayed for debug

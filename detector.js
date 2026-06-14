@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v18-window-safe-sample-inner';
+  const VERSION = 'v19-window-safe-sample-well';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
 
@@ -56,6 +56,30 @@
     ctx.stroke();
     ctx.font = `${Math.max(12, Math.round(ctx.canvas.width / 30))}px sans-serif`;
     ctx.fillText(label, c.cx + r + 4, c.cy + 4);
+    ctx.restore();
+  }
+
+
+
+  function drawEllipseMark(ctx, e, color, label) {
+    const rx = e.rx || e.r || 20;
+    const ry = e.ry || e.r || 20;
+    const cross = Math.max(8, Math.min(ctx.canvas.width, ctx.canvas.height) / 22);
+    ctx.save();
+    ctx.strokeStyle = color;
+    ctx.fillStyle = color;
+    ctx.lineWidth = Math.max(2, ctx.canvas.width / 180);
+    ctx.beginPath();
+    ctx.ellipse(e.cx, e.cy, rx, ry, 0, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(e.cx - cross, e.cy);
+    ctx.lineTo(e.cx + cross, e.cy);
+    ctx.moveTo(e.cx, e.cy - cross);
+    ctx.lineTo(e.cx, e.cy + cross);
+    ctx.stroke();
+    ctx.font = `${Math.max(12, Math.round(ctx.canvas.width / 30))}px sans-serif`;
+    ctx.fillText(label, e.cx + cross + 4, e.cy + 4);
     ctx.restore();
   }
 
@@ -168,6 +192,62 @@
     return { win: candidates[0] || null, count: candidates.length };
   }
 
+
+
+
+  function findSampleWellOuter(norm, W, H, win) {
+    // V19：抓整個 Sample Well 視覺中心，不再只抓內孔中心。
+    // 優先找下半部最大的橢圓/圓角凹槽；失敗時使用 Window 對齊的幾何 fallback。
+    let y0 = Math.round(H * 0.43);
+    if (win) y0 = Math.max(y0, Math.round(win.y + win.h * 0.75));
+    y0 = clamp(y0, 0, H - 10);
+
+    let roi = norm.roi(new cv.Rect(0, y0, W, H - y0));
+    let blur = new cv.Mat();
+    cv.GaussianBlur(roi, blur, new cv.Size(7,7), 0);
+    let bin = new cv.Mat();
+    cv.adaptiveThreshold(blur, bin, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 51, 3);
+    const k = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(11,11));
+    cv.morphologyEx(bin, bin, cv.MORPH_CLOSE, k);
+    cv.morphologyEx(bin, bin, cv.MORPH_OPEN, cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(5,5)));
+
+    let contours = new cv.MatVector();
+    let hierarchy = new cv.Mat();
+    cv.findContours(bin, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+
+    const candidates = [];
+    for (let i = 0; i < contours.size(); i++) {
+      const cnt = contours.get(i);
+      const area = cv.contourArea(cnt);
+      const br0 = cv.boundingRect(cnt);
+      const br = { x: br0.x, y: br0.y + y0, width: br0.width, height: br0.height };
+      const cx = br.x + br.width / 2;
+      const cy = br.y + br.height / 2;
+      const peri = cv.arcLength(cnt, true);
+      const circularity = peri > 0 ? 4 * Math.PI * area / (peri * peri) : 0;
+      const wh = br.width / Math.max(1, br.height);
+      const rectArea = br.width * br.height;
+      const fill = area / Math.max(1, rectArea);
+      if (
+        cx > W * 0.12 && cx < W * 0.85 &&
+        cy > H * 0.48 && cy < H * 0.93 &&
+        br.width > W * 0.20 && br.width < W * 0.78 &&
+        br.height > W * 0.18 && br.height < W * 0.92 &&
+        wh > 0.45 && wh < 2.30 &&
+        fill > 0.12 && circularity > 0.08
+      ) {
+        const expectedX = win ? (win.x + win.w / 2) : W * 0.47;
+        const centerScore = 1 - Math.min(1, Math.abs(cx - expectedX) / (W * 0.38));
+        const yScore = 1 - Math.min(1, Math.abs(cy - H * 0.66) / (H * 0.28));
+        const score = rectArea * (0.5 + circularity) * (0.6 + centerScore) * (0.5 + yScore) * (0.5 + fill);
+        candidates.push({ cx, cy, rx: br.width / 2, ry: br.height / 2, r: Math.max(br.width, br.height)/2, x:br.x, y:br.y, w:br.width, h:br.height, source:'sample-well-ellipse', circularity, fill, score });
+      }
+      cnt.delete();
+    }
+    candidates.sort((a,b)=>b.score-a.score);
+    roi.delete(); blur.delete(); bin.delete(); k.delete(); contours.delete(); hierarchy.delete();
+    return { sample: candidates[0] || null, count: candidates.length };
+  }
 
   function findSampleInnerHole(norm, W, H, win, roughSample) {
     // 目標：不要抓 S 孔外圈，改抓中間較暗的內孔中心
@@ -379,25 +459,37 @@
     let windowSource = resultWindow ? 'opencv-window-contour-safe' : 'fallback-geometry';
     if (!resultWindow) resultWindow = fallbackWindow(W, H);
 
+    const well = findSampleWellOuter(norm, W, H, resultWindow);
     const sf = findSampleByCirclesAndContours(norm, W, H, resultWindow);
-    const inner = findSampleInnerHole(norm, W, H, resultWindow, sf.sample);
-    let sampleHole = inner.sample || sf.sample;
+    const inner = findSampleInnerHole(norm, W, H, resultWindow, sf.sample || well.sample);
+
+    let sampleHole = well.sample || sf.sample || inner.sample;
     let sampleSource = sampleHole ? sampleHole.source : 'fallback-geometry';
-    if (!sampleHole) sampleHole = fallbackSample(W, H);
+    if (!sampleHole) {
+      sampleHole = fallbackSample(W, H);
+      // 幾何 fallback 也改成視覺中心：對齊 Window 中心，位置在下半部。
+      if (resultWindow) sampleHole.cx = resultWindow.x + resultWindow.w / 2;
+      sampleHole.rx = Math.round(W * 0.22);
+      sampleHole.ry = Math.round(W * 0.26);
+      sampleHole.source = 'fallback-sample-well';
+      sampleSource = sampleHole.source;
+    }
 
     if (draw) {
       if (resultWindow) drawRect(ctx, resultWindow, 'rgba(37,99,235,0.95)', 'Window');
-      if (sampleHole) drawCross(ctx, sampleHole, 'rgba(168,85,247,0.95)', 'S center');
+      if (sampleHole) drawEllipseMark(ctx, sampleHole, 'rgba(168,85,247,0.95)', 'S well');
+      if (inner.sample) drawCross(ctx, inner.sample, 'rgba(217,70,239,0.75)', 'inner');
     }
 
     src.delete(); norm.delete();
     return {
       window: resultWindow,
       sample: sampleHole,
+      innerSample: inner.sample,
       windowSource,
       sampleSource,
       windowCandidates: wf.count,
-      sampleCandidates: sf.count + inner.count
+      sampleCandidates: well.count + sf.count + inner.count
     };
   }
 

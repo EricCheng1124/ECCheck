@@ -45,7 +45,7 @@
 
   function onCvReady() {
     cvReady = true;
-    cvStatus.textContent = 'OpenCV.js 已載入，可開始外框＋內部特徵辨識。';
+    cvStatus.textContent = 'OpenCV.js 已載入，可開始外框＋Window/S Well辨識。';
     if (lastImage) analyze();
   }
 
@@ -87,9 +87,9 @@
       html += '判讀窗：未找到<br>';
     }
     if (f.sample) {
-      html += `S孔：x=${f.sample.cx.toFixed(0)}, y=${f.sample.cy.toFixed(0)}, rx=${f.sample.rx.toFixed(0)}, ry=${f.sample.ry.toFixed(0)}<br>`;
+      html += `S Well：x=${f.sample.cx.toFixed(0)}, y=${f.sample.cy.toFixed(0)}, rx=${f.sample.rx.toFixed(0)}, ry=${f.sample.ry.toFixed(0)}<br>`;
     } else {
-      html += 'S孔：未找到<br>';
+      html += 'S Well：未找到<br>';
     }
     return html;
   }
@@ -98,7 +98,7 @@
     resultEl.className = 'result';
     if (r.ok) {
       resultEl.classList.add('ok');
-      resultEl.textContent = '外框＋Window安全/S內孔辨識成功';
+      resultEl.textContent = '外框＋Window安全/S Well辨識成功';
       detailEl.innerHTML =
         `版本：${r.version}<br>` +
         `方法：${r.reason}<br>` +
