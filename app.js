@@ -51,7 +51,7 @@
 
   function onCvReady() {
     cvReady = true;
-    cvStatus.textContent = 'OpenCV.js is ready. You can start outer frame and Window/S Well ROI debug.';
+    cvStatus.textContent = '';
     if (lastImage) analyze();
   }
 
@@ -180,9 +180,9 @@
       html += 'Window: not found<br>';
     }
     if (f.sample) {
-      html += `S Well：x=${f.sample.cx.toFixed(0)}, y=${f.sample.cy.toFixed(0)}, rx=${f.sample.rx.toFixed(0)}, ry=${f.sample.ry.toFixed(0)}<br>`;
+      html += `S Well: x=${f.sample.cx.toFixed(0)}, y=${f.sample.cy.toFixed(0)}, rx=${f.sample.rx.toFixed(0)}, ry=${f.sample.ry.toFixed(0)}<br>`;
     } else {
-      html += 'S Well：not found<br>';
+      html += 'S Well: not found<br>';
     }
     return html;
   }
@@ -198,7 +198,7 @@
     const debugSaysPass =
       r &&
       r.debug &&
-      r.debug.indexOf('Final Gate：outer=PASS / trustedFeature=PASS') >= 0;
+      r.debug.indexOf('Final Gate: outer=PASS / trustedFeature=PASS') >= 0;
 
     const uiOk = !!(r.ok || debugSaysPass);
 
@@ -239,8 +239,8 @@
     resizeAndDrawImage(lastImage);
     if (!cvReady) {
       resultEl.className = 'result neutral';
-      resultEl.textContent = 'Loading OpenCV';
-      detailEl.textContent = 'Please wait until OpenCV.js finishes loading.';
+      resultEl.textContent = '';
+      detailEl.textContent = '';
       return;
     }
     try {
