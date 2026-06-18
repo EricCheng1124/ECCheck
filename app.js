@@ -23,12 +23,12 @@
   const debugText=document.getElementById('debugText');
 
 
-  const minAreaRatio = document.getElementById('minAreaRatio');
-  const ratioMin = document.getElementById('ratioMin');
-  const ratioMax = document.getElementById('ratioMax');
-  const areaText = document.getElementById('areaText');
-  const ratioMinText = document.getElementById('ratioMinText');
-  const ratioMaxText = document.getElementById('ratioMaxText');
+  // Settings UI removed; keep fixed detection defaults here.
+  const DEFAULT_OPTIONS = {
+    minAreaRatio: 0.01,
+    ratioMin: 2.2,
+    ratioMax: 6.5
+  };
 
   function unlock() {
     if ((passInput.value || '').trim() === ACCESS_CODE) {
@@ -54,19 +54,12 @@
     cvStatus.textContent = '';
     if (lastImage) analyze();
   }
-
   function updateTexts() {
-    areaText.textContent = Number(minAreaRatio.value).toFixed(1);
-    ratioMinText.textContent = Number(ratioMin.value).toFixed(1);
-    ratioMaxText.textContent = Number(ratioMax.value).toFixed(1);
+    // Settings UI removed.
   }
 
   function getOptions() {
-    return {
-      minAreaRatio: Number(minAreaRatio.value) / 100,
-      ratioMin: Number(ratioMin.value),
-      ratioMax: Number(ratioMax.value)
-    };
+    return DEFAULT_OPTIONS;
   }
 
   function resizeAndDrawImage(img) {
@@ -275,7 +268,7 @@
     img.onerror = function () {
       resultEl.className = 'result invalid';
       resultEl.textContent = 'Image loading failed';
-      detailEl.textContent = 'Please choose the photo again.';
+      detailEl.textContent = '';
     };
     img.src = URL.createObjectURL(file);
   }
@@ -284,9 +277,6 @@
   passInput.addEventListener('keydown', e => { if (e.key === 'Enter') unlock(); });
   cameraInput.addEventListener('change', e => loadFile(e.target.files[0]));
   galleryInput.addEventListener('change', e => loadFile(e.target.files[0]));
-  [minAreaRatio, ratioMin, ratioMax].forEach(el => el.addEventListener('input', () => { updateTexts(); analyze(); }));
-
-  updateTexts();
   if (sessionStorage.getItem('asap_access') === '1') {
     lockPanel.classList.add('hidden');
     mainPanel.classList.remove('hidden');

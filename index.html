@@ -29,17 +29,6 @@
         </div>
         <p id="cvStatus" class="hint"></p>
       </section>
-
-      <section class="card">
-        <h2>OpenCV Outer Frame Settings</h2>
-        <label>Minimum Area Ratio <span id="areaText">1.0</span>%</label>
-        <input id="minAreaRatio" type="range" min="0.2" max="8" value="1.0" step="0.1" />
-        <label>Minimum Aspect Ratio <span id="ratioMinText">2.2</span></label>
-        <input id="ratioMin" type="range" min="1.5" max="4" value="2.2" step="0.1" />
-        <label>Maximum Aspect Ratio <span id="ratioMaxText">6.5</span></label>
-        <input id="ratioMax" type="range" min="4" max="10" value="6.5" step="0.1" />
-      </section>
-
       <section class="card resultCard">
         <h2>Outer Frame Detection Result</h2>
         <div id="result" class="result neutral"></div>
@@ -76,7 +65,7 @@
   </div>
 
   <script async src="https://docs.opencv.org/4.9.0/opencv.js" onload="window.__opencvLoaded && window.__opencvLoaded()"></script>
-  <script src="detector.js?v=30.3"></script>
-  <script src="app.js?v=30.3"></script>
+  <script src="detector.js?v=30.4"></script>
+  <script src="app.js?v=30.4"></script>
 </body>
 </html>

@@ -1,5 +1,3 @@
 # ASAP Check
 
-- OpenCV-based rapid test cassette detection.
-- Includes ROI Only Canvas.
-- ROI Only keeps the outer frame, Window, and S Well for easier ROI verification.
+English clean version. Settings panel and default access-code hint removed.
