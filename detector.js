@@ -1284,15 +1284,15 @@ function candidateFeatureScore(srcCanvas, cand)
 let dbg='';
 
 dbg += '<b>Debug Summary</b><br>';
-dbg += 'White Mask：已產生<br>';
-dbg += 'Edge：已產生<br>';
-dbg += 'Bright Foreground：已納入候選來源<br>';
-dbg += 'Raw Candidates：' + rawCands.length + '<br>';
-dbg += 'Scored Candidates：' + scored.length + '<br>';
-dbg += 'Final Gate：outer=' + (bestOuterGeometryOk ? 'PASS' : 'FAIL') + ' / trustedFeature=' + (bestHasTrustedFeature ? 'PASS' : 'FAIL') + ' / redWindow=' + (bestHasTrustedRedWindow ? 'YES' : 'NO') + ' / realSample=' + (bestHasRealSample ? 'YES' : 'NO') + '<br>';
-dbg += 'Final Reason：' + (bestOk ? (outerOnlyOk ? 'outer-only-ok，Window/S Well 尚未確認' : (partialMessage ? 'outer+red-window-ok，S Well 尚未確認' : 'outer+real-feature-ok')) : failReason) + '<br>';
-dbg += 'Final Force：finalGate=' + (forceOkByFinalGate ? 'YES' : 'NO') + ' / strongCandidate=' + (forceOkByStrongCandidate ? 'YES' : 'NO') + ' / outerOnly=' + (outerOnlyOk ? 'YES' : 'NO') + '<br>';
-dbg += 'Best Gate Detail：areaRatio=' + (bestAreaRatio*100).toFixed(2) + '% / ratio=' + best.ratio.toFixed(2) + ' / outerScore=' + Math.round(best.outerScore||0) + ' / appearance=' + (bestAppearanceOk ? 'PASS':'FAIL') + ' / center=' + (bestCenterOk ? 'PASS':'FAIL') + '<br><hr>';
+dbg += 'White Mask: generated<br>';
+dbg += 'Edge: generated<br>';
+dbg += 'Bright Foreground: included as candidate source<br>';
+dbg += 'Raw Candidates: ' + rawCands.length + '<br>';
+dbg += 'Scored Candidates: ' + scored.length + '<br>';
+dbg += 'Final Gate: outer=' + (bestOuterGeometryOk ? 'PASS' : 'FAIL') + ' / trustedFeature=' + (bestHasTrustedFeature ? 'PASS' : 'FAIL') + ' / redWindow=' + (bestHasTrustedRedWindow ? 'YES' : 'NO') + ' / realSample=' + (bestHasRealSample ? 'YES' : 'NO') + '<br>';
+dbg += 'Final Reason: ' + (bestOk ? (outerOnlyOk ? 'outer-only-ok, Window/S Well not confirmed yet' : (partialMessage ? 'outer+red-window-ok, S Well not confirmed yet' : 'outer+real-feature-ok')) : failReason) + '<br>';
+dbg += 'Final Force: finalGate=' + (forceOkByFinalGate ? 'YES' : 'NO') + ' / strongCandidate=' + (forceOkByStrongCandidate ? 'YES' : 'NO') + ' / outerOnly=' + (outerOnlyOk ? 'YES' : 'NO') + '<br>';
+dbg += 'Best Gate Detail: areaRatio=' + (bestAreaRatio*100).toFixed(2) + '% / ratio=' + best.ratio.toFixed(2) + ' / outerScore=' + Math.round(best.outerScore||0) + ' / appearance=' + (bestAppearanceOk ? 'PASS':'FAIL') + ' / center=' + (bestCenterOk ? 'PASS':'FAIL') + '<br><hr>';
 
 scored.forEach((c,i)=>
 {
@@ -1334,7 +1334,7 @@ scored.forEach((c,i)=>
       dbg +=
       `Red Window ROI：x=${f.redWindow.x.toFixed(0)}, y=${f.redWindow.y.toFixed(0)}, w=${f.redWindow.w.toFixed(0)}, h=${f.redWindow.h.toFixed(0)}, redCount=${f.redWindow.count || 0}<br>`;
     } else {
-      dbg += 'Red Window ROI：未找到<br>';
+      dbg += 'Red Window ROI: not found<br>';
     }
 
     if (f && f.windowDebug && f.windowDebug.length) {
@@ -1343,7 +1343,7 @@ scored.forEach((c,i)=>
         dbg += `${j+1}. ${w.reject} | x=${w.x}, y=${w.y}, w=${w.w}, h=${w.h}, aspect=${w.aspect.toFixed(2)}, fill=${w.fill.toFixed(2)}, center=${w.centerScore.toFixed(2)}, score=${Math.round(w.score)}<br>`;
       });
     } else {
-      dbg += 'Window Candidates：無<br>';
+      dbg += 'Window Candidates: none<br>';
     }
 
     if (f && f.sampleSearch) {
@@ -1357,7 +1357,7 @@ scored.forEach((c,i)=>
         dbg += `${j+1}. ${s.reject} | x=${s.x}, y=${s.y}, w=${s.w}, h=${s.h}, circ=${s.circ.toFixed(2)}, fill=${s.fill.toFixed(2)}, align=${s.align.toFixed(2)}, score=${Math.round(s.score)}<br>`;
       });
     } else {
-      dbg += 'Sample Candidates：無<br>';
+      dbg += 'Sample Candidates: none<br>';
     }
 
     dbg += '<hr>';

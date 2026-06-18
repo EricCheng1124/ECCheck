@@ -1,71 +1,70 @@
 <!doctype html>
-<html lang="zh-Hant">
+<html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>ASAP Check v30.3 OpenCV</title>
+  <title>ASAP Check</title>
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
   <div class="app">
     <header>
-      <div><h1>ASAP Check</h1><p>v30.3 小試紙槽優先版</p></div>
-      <span class="badge">v30.3 小試紙槽優先版</span>
+      <div><h1>ASAP Check</h1></div>
+      
     </header>
 
     <section id="lockPanel" class="card">
-      <h2>授權進入</h2>
+      <h2>Access</h2>
       <input id="passInput" type="password" placeholder="Access Code" autocomplete="off" />
-      <button id="unlockBtn" class="primary">進入</button>
+      <button id="unlockBtn" class="primary">Enter</button>
       <p id="lockMsg" class="msg"></p>
-      <p class="hint">預設：ASAP2026</p>
     </section>
 
     <main id="mainPanel" class="hidden">
       <section class="card">
-        <h2>影像來源</h2>
+        <h2>Image Source</h2>
         <div class="row">
-          <label class="fileBtn">拍照<input id="cameraInput" type="file" accept="image/*" capture="environment" /></label>
-          <label class="fileBtn secondary">選照片<input id="galleryInput" type="file" accept="image/*" /></label>
+          <label class="fileBtn">Take Photo<input id="cameraInput" type="file" accept="image/*" capture="environment" /></label>
+          <label class="fileBtn secondary">Choose Photo<input id="galleryInput" type="file" accept="image/*" /></label>
         </div>
-        <p id="cvStatus" class="hint">OpenCV.js 載入中...</p>
+        <p id="cvStatus" class="hint">Loading OpenCV.js...</p>
       </section>
 
       <section class="card">
-        <h2>OpenCV 外框參數</h2>
-        <label>最小面積比例 <span id="areaText">1.0</span>%</label>
+        <h2>OpenCV Outer Frame Settings</h2>
+        <label>Minimum Area Ratio <span id="areaText">1.0</span>%</label>
         <input id="minAreaRatio" type="range" min="0.2" max="8" value="1.0" step="0.1" />
-        <label>長寬比下限 <span id="ratioMinText">2.2</span></label>
+        <label>Minimum Aspect Ratio <span id="ratioMinText">2.2</span></label>
         <input id="ratioMin" type="range" min="1.5" max="4" value="2.2" step="0.1" />
-        <label>長寬比上限 <span id="ratioMaxText">6.5</span></label>
+        <label>Maximum Aspect Ratio <span id="ratioMaxText">6.5</span></label>
         <input id="ratioMax" type="range" min="4" max="10" value="6.5" step="0.1" />
       </section>
 
       <section class="card resultCard">
-        <h2>外框辨識結果</h2>
-        <div id="result" class="result neutral">尚未分析</div>
-        <div id="detail" class="detail">請先拍照或選擇照片。</div>
+        <h2>Outer Frame Detection Result</h2>
+        <div id="result" class="result neutral">Not analyzed yet</div>
+        <div id="detail" class="detail">請先Take Photo或選擇照片。</div>
       </section>
 
       <section class="card">
-        <h2>原圖外框偵測</h2>
+        <h2>Original Image Detection</h2>
         <canvas id="canvas"></canvas>
       </section>
 
       <section class="card">
-        <h2>裁切後快篩卡匣</h2>
+        <h2>Cropped Test Cassette</h2>
         <canvas id="cropCanvas"></canvas>
       </section>
 
       <section class="card">
-        <h2>ROI Only：只顯示外框 / Window / S Well</h2>
+        <h2>ROI Only: Outer Frame / Window / S Well</h2>
         <canvas id="roiCanvas"></canvas>
-        <p class="hint">黑底只保留外框、Window 與 S Well，方便確認 ROI 是否抓對。</p>
+        <p class="hint">Black background keeps only the outer frame, Window, and S Well for ROI verification.</p>
       </section>
     
       <section class="card">
         <h2>Debug View</h2>
-        <label><input id="debugMode" type="checkbox" checked /> 顯示 Debug</label>
+        <label><input id="debugMode" type="checkbox" checked /> Show Debug</label>
         <h3>Gray</h3><canvas id="debugGray"></canvas>
         <h3>White Mask</h3><canvas id="debugMask"></canvas>
         <h3>Edge</h3><canvas id="debugEdge"></canvas>

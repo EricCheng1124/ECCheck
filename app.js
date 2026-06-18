@@ -37,7 +37,7 @@
       mainPanel.classList.remove('hidden');
       lockMsg.textContent = '';
     } else {
-      lockMsg.textContent = '授權碼錯誤';
+      lockMsg.textContent = 'Invalid access code';
     }
   }
 
@@ -51,7 +51,7 @@
 
   function onCvReady() {
     cvReady = true;
-    cvStatus.textContent = 'OpenCV.js 已載入，可開始外框＋雙方向 Window/S Well ROI Debug。';
+    cvStatus.textContent = 'OpenCV.js is ready. You can start outer frame and Window/S Well ROI debug.';
     if (lastImage) analyze();
   }
 
@@ -162,27 +162,27 @@
   function renderRoiOnlyView(r) { }
 
   function formatFeatures(f) {
-    if (!f) return '<br>內部特徵：未執行';
+    if (!f) return '<br>Internal features: not executed';
     let html = '<hr>';
-    html += `判讀窗候選：${f.windowCandidates}，來源：${f.windowSource || '-'}<br>`;
-    html += `S孔候選：${f.sampleCandidates}，來源：${f.sampleSource || '-'}<br>`;
+    html += `Window candidates: ${f.windowCandidates}, source: ${f.windowSource || '-'}<br>`;
+    html += `S Well candidates: ${f.sampleCandidates}, source: ${f.sampleSource || '-'}<br>`;
     if (f.sampleSource && f.sampleSource.indexOf('fallback') >= 0) {
-      html += '<b style="color:#dc2626">注意：S Well 是 fallback，代表尚未真正辨識到加樣孔。</b><br>';
+      html += '<b style="color:#dc2626">Note: S Well is fallback, meaning the sample well was not truly detected.</b><br>';
     }
-    html += `方向：${f.orientation}<br>`;
-    html += `180度校正：${f.orientationCorrected ? '有' : '無'}<br>`;
+    html += `Orientation: ${f.orientation}<br>`;
+    html += `180-degree correction: ${f.orientationCorrected ? 'Yes' : 'No'}<br>`;
     if (f.roiMetrics) {
-      html += `ROI對位：align=${f.roiMetrics.alignScore.toFixed(2)}, dx=${f.roiMetrics.alignDx.toFixed(0)}, yGap=${f.roiMetrics.yGap.toFixed(0)}, Window在S上方=${f.roiMetrics.windowAboveSample ? 'YES' : 'NO'}<br>`;
+      html += `ROI alignment: align=${f.roiMetrics.alignScore.toFixed(2)}, dx=${f.roiMetrics.alignDx.toFixed(0)}, yGap=${f.roiMetrics.yGap.toFixed(0)}, Window above S=${f.roiMetrics.windowAboveSample ? 'YES' : 'NO'}<br>`;
     }
     if (f.window) {
-      html += `判讀窗：x=${f.window.x.toFixed(0)}, y=${f.window.y.toFixed(0)}, w=${f.window.w.toFixed(0)}, h=${f.window.h.toFixed(0)}<br>`;
+      html += `Window: x=${f.window.x.toFixed(0)}, y=${f.window.y.toFixed(0)}, w=${f.window.w.toFixed(0)}, h=${f.window.h.toFixed(0)}<br>`;
     } else {
-      html += '判讀窗：未找到<br>';
+      html += 'Window: not found<br>';
     }
     if (f.sample) {
       html += `S Well：x=${f.sample.cx.toFixed(0)}, y=${f.sample.cy.toFixed(0)}, rx=${f.sample.rx.toFixed(0)}, ry=${f.sample.ry.toFixed(0)}<br>`;
     } else {
-      html += 'S Well：未找到<br>';
+      html += 'S Well：not found<br>';
     }
     return html;
   }
@@ -206,30 +206,30 @@
       resultEl.classList.add('ok');
       const sampleFallback = r.features && r.features.sampleSource && r.features.sampleSource.indexOf('fallback') >= 0;
       if (r.outerOnlyOk) {
-        resultEl.textContent = '外框辨識成功，Window/S Well 尚未確認';
+        resultEl.textContent = 'Outer frame detected. Window/S Well not confirmed yet.';
       } else if (r.partialMessage || sampleFallback) {
-        resultEl.textContent = '外框＋Window辨識成功，S Well 尚未確認';
+        resultEl.textContent = 'Outer frame and Window detected. S Well not confirmed yet.';
       } else {
-        resultEl.textContent = '外框＋Window＋S Well辨識成功';
+        resultEl.textContent = 'Outer frame, Window, and S Well detected.';
       }
       detailEl.innerHTML =
-        `版本：${r.version}<br>` +
-        `方法：${r.reason}<br>` +
-        `候選數：${r.candidates}<br>` +
-        `面積比例：${(r.areaRatio * 100).toFixed(2)}%<br>` +
-        `長寬比：${r.ratio.toFixed(2)}<br>` +
-        `填充率：${r.fill.toFixed(2)}<br>` +
-        `中心：x=${r.rect.cx.toFixed(0)}, y=${r.rect.cy.toFixed(0)}<br>` +
-        `尺寸：w=${r.rect.w.toFixed(0)}, h=${r.rect.h.toFixed(0)}, angle=${r.rect.angle.toFixed(1)}°<br>` +
+        `Version: ${r.version}<br>` +
+        `Method: ${r.reason}<br>` +
+        `Candidates: ${r.candidates}<br>` +
+        `Area ratio: ${(r.areaRatio * 100).toFixed(2)}%<br>` +
+        `Aspect ratio: ${r.ratio.toFixed(2)}<br>` +
+        `Fill ratio: ${r.fill.toFixed(2)}<br>` +
+        `Center: x=${r.rect.cx.toFixed(0)}, y=${r.rect.cy.toFixed(0)}<br>` +
+        `Size: w=${r.rect.w.toFixed(0)}, h=${r.rect.h.toFixed(0)}, angle=${r.rect.angle.toFixed(1)}°<br>` +
         formatFeatures(r.features);
     } else {
       resultEl.classList.add('invalid');
-      resultEl.textContent = '外框辨識失敗';
+      resultEl.textContent = 'Outer frame detection failed.';
       detailEl.innerHTML =
-        `版本：${r.version}<br>` +
-        `失敗原因：${r.reason}<br>` +
-        `候選數：${r.candidates || 0}<br>` +
-        `建議：請直接看下方 Debug Summary 的 Final Gate 與 #1 候選。`;
+        `Version: ${r.version}<br>` +
+        `Failure reason: ${r.reason}<br>` +
+        `Candidates: ${r.candidates || 0}<br>` +
+        `Suggestion: check the Debug Summary below, especially Final Gate and candidate #1.`;
       if (debugText && r && r.debug) { debugText.innerHTML = r.debug; }
     }
   }
@@ -239,8 +239,8 @@
     resizeAndDrawImage(lastImage);
     if (!cvReady) {
       resultEl.className = 'result neutral';
-      resultEl.textContent = 'OpenCV 載入中';
-      detailEl.textContent = '請等 OpenCV.js 載入完成。';
+      resultEl.textContent = 'Loading OpenCV';
+      detailEl.textContent = 'Please wait until OpenCV.js finishes loading.';
       return;
     }
     try {
@@ -251,7 +251,7 @@
     catch (ex) {
       console.error(ex);
       resultEl.className = 'result invalid';
-      resultEl.textContent = '分析失敗';
+      resultEl.textContent = 'Analysis failed';
       detailEl.innerHTML =
         '<b>Exception</b><br>' +
         (ex && ex.message ? ex.message : String(ex));
@@ -274,8 +274,8 @@
     };
     img.onerror = function () {
       resultEl.className = 'result invalid';
-      resultEl.textContent = '讀圖失敗';
-      detailEl.textContent = '請重新選擇照片。';
+      resultEl.textContent = 'Image loading failed';
+      detailEl.textContent = 'Please choose the photo again.';
     };
     img.src = URL.createObjectURL(file);
   }

@@ -1,5 +1,5 @@
-# ASAP Check v30.3
+# ASAP Check
 
-- 基於 v30.0 內部 ROI Debug
-- 新增 ROI Only Canvas
-- ROI Only 只顯示外框、Window、S Well，移除其他卡匣內容干擾
+- OpenCV-based rapid test cassette detection.
+- Includes ROI Only Canvas.
+- ROI Only keeps the outer frame, Window, and S Well for easier ROI verification.
