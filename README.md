@@ -1,5 +1,6 @@
-# ASAP Check v31.6
+# ASAP Check v31.7
 
-- Extended Window ratio downward after orientation correction.
-- CT zone now follows the extended Window so T line stays inside the analysis range.
-- Version cache updated to v31.6.
+- CT Analyze Zone changed to Window center 40% with inner 90% keep, effective width 36%.
+- CT zone Y still starts below Top S line.
+- UI keeps Original Image Detection, Cropped Test Cassette, and Debug Summary only.
+- Access code: ASAP.

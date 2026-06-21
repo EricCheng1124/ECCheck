@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v31.6-window-extended-after-rotation';
+  const VERSION = 'v31.7-ct-zone-36-clean-ui';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -1088,14 +1088,14 @@
     const ctx = cropCanvas.getContext('2d', {willReadFrequently:true});
     const data = ctx.getImageData(0,0,W,H).data;
 
-    // v31.4：CT 不再使用整個 Window 寬度，避免把試紙槽左右邊壁與反光肩峰算進去。
-    // 第一層取 Window 中央 30%，第二層在 30% 內再縮 90%，最後有效寬度約為 Window 的 27%。
-    const centerBandStart = 0.35;
-    const centerBandWidth = 0.30;
+    // v31.7：CT 不再使用整個 Window 寬度，避免把試紙槽左右邊壁與反光肩峰算進去。
+    // 第一層取 Window 中央 40%，第二層在 40% 內再縮 90%，最後有效寬度約為 Window 的 36%。
+    const centerBandStart = 0.30;
+    const centerBandWidth = 0.40;
     const innerKeep = 0.90;
     const innerMargin = centerBandWidth * (1 - innerKeep) / 2;
-    const ctStartRatio = centerBandStart + innerMargin;       // 0.365
-    const ctEndRatio = centerBandStart + centerBandWidth - innerMargin; // 0.635
+    const ctStartRatio = centerBandStart + innerMargin;       // 0.32
+    const ctEndRatio = centerBandStart + centerBandWidth - innerMargin; // 0.68
 
     const x0 = clamp(Math.floor(win.x + win.w * ctStartRatio), 0, W-1);
     const x1 = clamp(Math.ceil(win.x + win.w * ctEndRatio), 0, W);
