@@ -1,3 +1,3 @@
-# ASAP Check v31.15
+# ASAP Check v31.16
 
-CT scan real red line: after peak detection, scan the full C/T range to find the real continuous horizontal pink/red line.
+CT faint T red-line scan: after peak selection, T continuity uses a relaxed faint-line mode for weak positive T lines.

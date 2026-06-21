@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v31.15-ct-scan-real-red-line';
+  const VERSION = 'v31.16-ct-faint-t-red-line';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -1095,7 +1095,8 @@
     // v31.14：Peak 抓出後，不只檢查 peak 當下那一列。
     // 會回頭在 peak 附近上下搜尋，找真正「水平連續線段」的位置。
     // 目的：峰值可能落在紅線邊緣/陰影/肩峰，必須 refine 到真正 C/T 線中心後再畫線與判斷。
-    function rowLineContinuity(absY) {
+    function rowLineContinuity(absY, mode) {
+      const faintMode = mode === 'faintT';
       const yy = clamp(Math.round(absY), 0, Math.max(0, H - 1));
 
       // v31.15：不要只看原本很窄的 x0~x1。
@@ -1103,8 +1104,8 @@
       const lx0 = clamp(Math.floor(win.x + win.w * 0.18), 0, W - 1);
       const lx1 = clamp(Math.ceil(win.x + win.w * 0.88), lx0 + 1, W);
       const lineW = Math.max(1, lx1 - lx0);
-      const minRun = Math.max(3, Math.round(lineW * 0.13));
-      const minRatio = 0.10;
+      const minRun = faintMode ? Math.max(2, Math.round(lineW * 0.055)) : Math.max(3, Math.round(lineW * 0.13));
+      const minRatio = faintMode ? 0.035 : 0.10;
 
       const bgGap = Math.max(5, Math.round(H * 0.012));
       const bgYs = [
@@ -1148,18 +1149,18 @@
         const redLike =
           yLum > 45 &&
           r > 55 &&
-          redScore > 2.0 &&
-          redContrast > 0.8 &&
-          r >= g * 0.975 &&
-          r >= b * 0.955;
+          redScore > (faintMode ? 0.75 : 2.0) &&
+          redContrast > (faintMode ? 0.25 : 0.8) &&
+          r >= g * (faintMode ? 0.945 : 0.975) &&
+          r >= b * (faintMode ? 0.925 : 0.955);
 
         // 暗線只能當輔助，必須同時有一點點紅/粉紅傾向，避免視窗陰影誤判。
         const darkLike =
           yLum > 35 &&
-          darkScore > 5.0 &&
-          redScore > 0.6 &&
-          r >= g * 0.955 &&
-          r >= b * 0.935;
+          darkScore > (faintMode ? 3.2 : 5.0) &&
+          redScore > (faintMode ? 0.15 : 0.6) &&
+          r >= g * (faintMode ? 0.925 : 0.955) &&
+          r >= b * (faintMode ? 0.905 : 0.935);
 
         const lineLike = redLike || darkLike;
         total++;
@@ -1187,7 +1188,11 @@
       const contrastAvg = contrastSum / Math.max(1, total);
 
       // 必須真的有粉紅連續性；純暗線不直接通過。
-      const ok = (maxRun >= minRun || ratio >= minRatio) && (redRatio >= 0.035 || redAvg >= 2.2 || contrastAvg >= 1.2);
+      const strictOk = (maxRun >= minRun || ratio >= minRatio) && (redRatio >= 0.035 || redAvg >= 2.2 || contrastAvg >= 1.2);
+      // v31.16：T 線常非常淡，已經有 peak score + 相對門檻保護時，
+      // 連續紅色允許用較弱的水平線證據通過，避免淡陽性被判陰性。
+      const faintOk = faintMode && (maxRun >= minRun || ratio >= minRatio) && (redRatio >= 0.010 || redAvg >= 0.55 || contrastAvg >= 0.18 || darkAvg >= 2.8);
+      const ok = strictOk || faintOk;
 
       return {
         ok,
@@ -1210,7 +1215,7 @@
       };
     }
 
-    function refinePeakToRedLine(localY, localRange) {
+    function refinePeakToRedLine(localY, localRange, mode) {
       const absCenter = y0 + localY;
 
       // v31.15：真正回頭找線，不再只在 peak 附近 ±一點點找。
@@ -1223,7 +1228,7 @@
       let best = null;
       for (let yy = startY; yy <= endY; yy++) {
         const local = yy - y0;
-        const cont = rowLineContinuity(yy);
+        const cont = rowLineContinuity(yy, mode);
         const profileScore = positive[local] || 0;
 
         // 距離 peak 太遠可扣分，但不禁止，因為這次目的就是回頭修正錯峰。
@@ -1244,7 +1249,7 @@
       }
 
       if (!best) {
-        const cont = rowLineContinuity(absCenter);
+        const cont = rowLineContinuity(absCenter, mode);
         best = Object.assign({}, cont, {
           localY: Math.round(localY),
           absY: y0 + Math.round(localY),
@@ -1456,7 +1461,7 @@
     const cSelected = selected.includes(cQ);
     const tSelected = selected.includes(tQ);
     const cRed = refinePeakToRedLine(cQ.y, cFallbackRange);
-    const tRed = refinePeakToRedLine(tQ.y, tFallbackRange);
+    const tRed = refinePeakToRedLine(tQ.y, tFallbackRange, 'faintT');
 
     // refine 後，把實際畫線/Debug 的 y 改成真正連續線段的位置。
     // score 保留原 peak score，因為它代表波峰強度；y 則改成紅線中心。
@@ -1516,7 +1521,7 @@
     );
 
     return {
-      source:'ct-combined-pink-dark-profile-v31-15-scan-real-red-line',
+      source:'ct-combined-pink-dark-profile-v31-16-faint-t-red-line',
       x0, x1, y0, y1, h,
       zone:{x:x0, y:y0, w:Math.max(1, x1-x0), h:Math.max(1, y1-y0), startRatio:ctStartRatio, endRatio:ctEndRatio, widthRatio:ctEndRatio-ctStartRatio, topThirdY:Math.round(topThirdY), topThirdPadding:topThirdPadding, yLimitedByTopThird:(ctY0Float > windowInnerTop + 0.5)},
       raw, profile:positive, baseline:bg, rawBaseline, rawMedian, rawMax, pinkMax, darkMax, combinedMax, selectedMode, lumBackground, lumMedian, mean:stat.mean, std:stat.std,
