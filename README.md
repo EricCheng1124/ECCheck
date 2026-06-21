@@ -1,3 +1,3 @@
-# ASAP Check v31.16
+# ASAP Check v31.17
 
-CT faint T red-line scan: after peak selection, T continuity uses a relaxed faint-line mode for weak positive T lines.
+Result-only UI, advanced debug locked by password, and combined detection image with cropped cassette as main view plus original thumbnail overlay.

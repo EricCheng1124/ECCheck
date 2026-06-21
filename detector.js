@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v31.16-ct-faint-t-red-line';
+  const VERSION = 'v31.17-result-ui-advanced-lock';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }

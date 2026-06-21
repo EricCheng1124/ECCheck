@@ -14,6 +14,7 @@
   const galleryInput = document.getElementById('galleryInput');
   const canvas = document.getElementById('canvas');
   const cropCanvas = document.getElementById('cropCanvas');
+  const combinedCanvas = document.getElementById('combinedCanvas');
   const roiCanvas = document.getElementById('roiCanvas');
   const resultEl = document.getElementById('result');
   const detailEl = document.getElementById('detail');
@@ -22,6 +23,11 @@
   const debugEdge=document.getElementById('debugEdge');
   const debugBright=document.getElementById('debugBright');
   const debugText=document.getElementById('debugText');
+  const advancedLock = document.getElementById('advancedLock');
+  const advancedContent = document.getElementById('advancedContent');
+  const advancedPassInput = document.getElementById('advancedPassInput');
+  const advancedUnlockBtn = document.getElementById('advancedUnlockBtn');
+  const advancedMsg = document.getElementById('advancedMsg');
 
 
   // Settings UI removed; keep fixed detection defaults here.
@@ -55,6 +61,66 @@
     cvStatus.textContent = '';
     if (lastImage) analyze();
   }
+
+  function unlockAdvanced() {
+    if (!advancedPassInput || !advancedContent || !advancedLock) return;
+    if ((advancedPassInput.value || '').trim() === ACCESS_CODE) {
+      sessionStorage.setItem('asap_advanced', '1');
+      advancedLock.classList.add('hidden');
+      advancedContent.classList.remove('hidden');
+      if (advancedMsg) advancedMsg.textContent = '';
+    } else if (advancedMsg) {
+      advancedMsg.textContent = 'Invalid access code';
+    }
+  }
+
+  function applyAdvancedState() {
+    if (!advancedContent || !advancedLock) return;
+    if (sessionStorage.getItem('asap_advanced') === '1') {
+      advancedLock.classList.add('hidden');
+      advancedContent.classList.remove('hidden');
+    } else {
+      advancedLock.classList.remove('hidden');
+      advancedContent.classList.add('hidden');
+    }
+  }
+
+  function getCtResultText(r) {
+    const ct = r && r.features && r.features.ctAnalysis ? r.features.ctAnalysis : null;
+    if (!ct || !ct.result) return 'Invalid';
+    return ct.result;
+  }
+
+  function renderCombinedDetectionView() {
+    if (!combinedCanvas || !cropCanvas || !canvas || !cropCanvas.width || !cropCanvas.height) return;
+
+    const W = cropCanvas.width;
+    const H = cropCanvas.height;
+    combinedCanvas.width = W;
+    combinedCanvas.height = H;
+
+    const ctx = combinedCanvas.getContext('2d');
+    ctx.clearRect(0, 0, W, H);
+    ctx.drawImage(cropCanvas, 0, 0, W, H);
+
+    if (canvas.width && canvas.height) {
+      const thumbW = Math.max(80, Math.round(W * 0.34));
+      const thumbH = Math.round(canvas.height * thumbW / Math.max(1, canvas.width));
+      const pad = Math.max(6, Math.round(W * 0.025));
+      const x = pad;
+      const y = pad;
+
+      ctx.save();
+      ctx.fillStyle = 'rgba(255,255,255,0.92)';
+      ctx.fillRect(x - 3, y - 3, thumbW + 6, thumbH + 6);
+      ctx.strokeStyle = 'rgba(22,163,74,0.95)';
+      ctx.lineWidth = Math.max(2, Math.round(W / 140));
+      ctx.strokeRect(x - 3, y - 3, thumbW + 6, thumbH + 6);
+      ctx.drawImage(canvas, x, y, thumbW, thumbH);
+      ctx.restore();
+    }
+  }
+
   function updateTexts() {
     // Settings UI removed.
   }
@@ -287,24 +353,12 @@
     const uiOk = !!(r.ok || debugSaysPass);
 
     if (uiOk) {
-      resultEl.classList.add('ok');
-      const sampleFallback = r.features && r.features.sampleSource && r.features.sampleSource.indexOf('fallback') >= 0;
-      const sampleConfirmed = !!(r.sampleConfirmed || (r.features && r.features.sampleSource && r.features.sampleSource.indexOf('sample-s-zone-confirmed') >= 0));
-      const fixedWindowConfirmed = !!(r.features && r.features.windowSource && r.features.windowSource.indexOf('fixed-ratio-window') >= 0);
+      const ctText = getCtResultText(r);
+      resultEl.textContent = ctText;
+      if (ctText === 'Positive') resultEl.classList.add('positive');
+      else if (ctText === 'Negative') resultEl.classList.add('negative');
+      else resultEl.classList.add('invalid');
 
-      // v30.7：先判斷 S Well 是否已由 S-zone 確認，再判斷 outerOnly。
-      // v30.6 的演算法已經 realSample=YES，但 UI 仍被 outerOnlyOk 文字蓋掉。
-      if (sampleConfirmed && fixedWindowConfirmed) {
-        resultEl.textContent = 'Outer frame, Window, and S Well detected.';
-      } else if (sampleConfirmed) {
-        resultEl.textContent = 'Outer frame and S Well detected. Window is fixed by ratio.';
-      } else if (r.outerOnlyOk) {
-        resultEl.textContent = 'Outer frame detected. Window/S Well not confirmed yet.';
-      } else if (r.partialMessage || sampleFallback) {
-        resultEl.textContent = 'Outer frame and Window detected. S Well not confirmed yet.';
-      } else {
-        resultEl.textContent = 'Outer frame, Window, and S Well detected.';
-      }
       detailEl.innerHTML =
         `Version: ${r.version}<br>` +
         `Method: ${r.reason}<br>` +
@@ -325,6 +379,7 @@
         `Suggestion: check the Debug Summary below, especially Final Gate and candidate #1.`;
       if (debugText && r && r.debug) { debugText.innerHTML = r.debug; }
     }
+    renderCombinedDetectionView();
   }
 
   function analyze() {
@@ -349,6 +404,7 @@
         '<b>Exception</b><br>' +
         (ex && ex.message ? ex.message : String(ex));
       clearRoiOnlyView();
+      if (combinedCanvas) { const cctx = combinedCanvas.getContext('2d'); cctx.clearRect(0,0,combinedCanvas.width,combinedCanvas.height); }
       if (debugText) {
         debugText.innerHTML =
           '<b>Exception</b><br>' +
@@ -375,6 +431,8 @@
 
   unlockBtn.addEventListener('click', unlock);
   passInput.addEventListener('keydown', e => { if (e.key === 'Enter') unlock(); });
+  if (advancedUnlockBtn) advancedUnlockBtn.addEventListener('click', unlockAdvanced);
+  if (advancedPassInput) advancedPassInput.addEventListener('keydown', e => { if (e.key === 'Enter') unlockAdvanced(); });
   cameraInput.addEventListener('change', e => loadFile(e.target.files[0]));
   galleryInput.addEventListener('change', e => loadFile(e.target.files[0]));
   if (sessionStorage.getItem('asap_access') === '1') {

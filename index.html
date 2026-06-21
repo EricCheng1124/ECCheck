@@ -30,31 +30,38 @@
         <p id="cvStatus" class="hint"></p>
       </section>
       <section class="card resultCard">
-        <h2>Outer Frame Detection Result</h2>
+        <h2>Detection Result</h2>
         <div id="result" class="result neutral"></div>
-        <div id="detail" class="detail"></div>
       </section>
 
       <section class="card">
-        <h2>Original Image Detection</h2>
-        <canvas id="canvas"></canvas>
+        <h2>Detection Image</h2>
+        <canvas id="combinedCanvas"></canvas>
+        <canvas id="canvas" class="hiddenCanvas"></canvas>
+        <canvas id="cropCanvas" class="hiddenCanvas"></canvas>
       </section>
 
       <section class="card">
-        <h2>Cropped Test Cassette</h2>
-        <canvas id="cropCanvas"></canvas>
-      </section>
-
-      <section class="card">
-        <h2>Debug Summary</h2>
-        <div id="debugText" class="detail"></div>
+        <h2>Advanced Info</h2>
+        <div id="advancedLock" class="row">
+          <input id="advancedPassInput" type="password" placeholder="Access Code" autocomplete="off" />
+          <button id="advancedUnlockBtn" class="secondaryBtn">Open</button>
+        </div>
+        <p id="advancedMsg" class="msg"></p>
+        <div id="advancedContent" class="hidden">
+          <h3>Outer Frame Detection Result</h3>
+          <div id="detail" class="detail"></div>
+          <hr>
+          <h3>Debug Summary</h3>
+          <div id="debugText" class="detail"></div>
+        </div>
       </section>
 
     </main>
   </div>
 
   <script async src="https://docs.opencv.org/4.9.0/opencv.js" onload="window.__opencvLoaded && window.__opencvLoaded()"></script>
-  <script src="detector.js?v=31.13"></script>
-  <script src="app.js?v=31.13"></script>
+  <script src="detector.js?v=31.17"></script>
+  <script src="app.js?v=31.17"></script>
 </body>
 </html>
