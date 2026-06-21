@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v31.12-ct-score-only-shape-warning';
+  const VERSION = 'v31.13-ct-relative-red-continuity';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -1092,6 +1092,70 @@
     const ctx = cropCanvas.getContext('2d', {willReadFrequently:true});
     const data = ctx.getImageData(0,0,W,H).data;
 
+    // v31.13：Peak 抓出後，再確認該 Y 附近是否有「連續紅色線段」。
+    // 目的：避免單點雜訊或局部陰影被 score 誤判成 C/T 線。
+    function checkRedContinuity(localY) {
+      const yyCenter = clamp(Math.round(localY), 0, Math.max(0, H - 1));
+      const yRadius = Math.max(1, Math.round(H * 0.004));
+      const minRun = Math.max(3, Math.round((x1 - x0) * 0.18));
+      const minRatio = 0.16;
+
+      let bestRun = 0;
+      let bestRatio = 0;
+      let bestRedCount = 0;
+
+      for (let yy = yyCenter - yRadius; yy <= yyCenter + yRadius; yy++) {
+        if (yy < 0 || yy >= H) continue;
+
+        let run = 0;
+        let maxRun = 0;
+        let redCount = 0;
+        let total = 0;
+
+        for (let xx = x0; xx < x1; xx++) {
+          const idx = (yy * W + xx) * 4;
+          const r = data[idx];
+          const g = data[idx + 1];
+          const b = data[idx + 2];
+          const yLum = 0.299 * r + 0.587 * g + 0.114 * b;
+
+          // 放寬紅色條件：淡粉紅、灰紫紅都可以，但不能是純陰影。
+          const redScore = (r - (g + b) * 0.50) + (r - g) * 0.18 + (r - b) * 0.12;
+          const redLike =
+            yLum > 45 &&
+            r > 58 &&
+            redScore > 6 &&
+            r > g * 1.015 &&
+            r > b * 1.015;
+
+          total++;
+          if (redLike) {
+            redCount++;
+            run++;
+            if (run > maxRun) maxRun = run;
+          } else {
+            run = 0;
+          }
+        }
+
+        const ratio = redCount / Math.max(1, total);
+        if (maxRun > bestRun || (maxRun === bestRun && ratio > bestRatio)) {
+          bestRun = maxRun;
+          bestRatio = ratio;
+          bestRedCount = redCount;
+        }
+      }
+
+      return {
+        ok: bestRun >= minRun || bestRatio >= minRatio,
+        run: bestRun,
+        minRun,
+        ratio: bestRatio,
+        minRatio,
+        redCount: bestRedCount
+      };
+    }
+
     // v31.8：CT 改成「全 CT zone 動態找峰」。
     // 不再先硬切 C Range / T Range，避免 T 線因位置偏移而沒被選到。
     // 流程：Window 中央 40% × 內部 90% → Top S 以下 → 找全部候選峰 → 依上下位置分配 C/T。
@@ -1231,11 +1295,13 @@
 
     const selected = [];
     for (const p of allPeaks) {
-      if (!p.detected) continue;
+      // v31.13：這裡只負責「挑候選 peak」，不要先用全域 threshold 殺掉 T。
+      // T 線是否成立，後面會用相對門檻 + 連續紅色再判斷。
       if (selected.some(s=>Math.abs(s.y - p.y) < minSep)) continue;
       selected.push(p);
       if (selected.length >= 3) break;
     }
+    selected.forEach(p => { p.selected = true; });
     selected.sort((a,b)=>a.y-b.y);
 
     let cQ = null;
@@ -1269,6 +1335,7 @@
       const raw = maxInRange(positive, range.start, range.end);
       const q = qualifyPeak(positive, raw, threshold, range, h, label);
       q.quality = calcQuality(q);
+      q.selected = false;
       q.detected = false;
       if (q.score < threshold) q.reject = 'below-threshold';
       else q.reject = q.reject || 'not-selected';
@@ -1279,19 +1346,55 @@
 
     cQ.label = 'C';
     tQ.label = 'T';
-    // v31.9：只有 Dynamic Peak selected 才能被視為 detected。
-    // fallback peak 只做 Debug，不再被畫成 C/T 線，也不參與結果。
-    cQ.detected = selected.includes(cQ);
-    tQ.detected = selected.includes(tQ);
+
+    // v31.13：Peak 選出後，再用「分數門檻 + 連續紅色」做最後 detected。
+    // C 線：維持全域 threshold。
+    // T 線：改成相對 C 線門檻，避免淡 T 被全域 threshold 誤殺。
+    const cSelected = selected.includes(cQ);
+    const tSelected = selected.includes(tQ);
+    const cRed = checkRedContinuity(y0 + cQ.y);
+    const tRed = checkRedContinuity(y0 + tQ.y);
+
+    const cDetected = !!(
+      cQ &&
+      cSelected &&
+      cQ.score >= threshold &&
+      cRed.ok
+    );
+
+    const tThreshold = Math.min(
+      threshold * 0.65,
+      cQ ? cQ.score * 0.35 : threshold
+    );
+
+    const tcRatio = cQ && cQ.score > 0 ? tQ.score / cQ.score : 0;
+
+    const tDetected = !!(
+      tQ &&
+      tSelected &&
+      cDetected &&
+      tQ.score >= tThreshold &&
+      tRed.ok
+    );
+
+    cQ.detected = cDetected;
+    tQ.detected = tDetected;
+
+    if (!cSelected) cQ.reject = 'not-selected';
+    else if (cQ.score < threshold) cQ.reject = 'below-threshold';
+    else if (!cRed.ok) cQ.reject = 'no-red-continuity';
+    else cQ.reject = 'PASS';
+
+    if (!tSelected) tQ.reject = 'not-selected';
+    else if (tQ.score < tThreshold) tQ.reject = 'below-relative-threshold';
+    else if (!tRed.ok) tQ.reject = 'no-red-continuity';
+    else tQ.reject = 'PASS';
 
     // 防呆：單峰若在下半部，只能算 T-like，沒有 C，所以 Invalid。
     if (selected.length === 1 && selected[0].y > upperLimit) {
       cQ.detected = false;
-      tQ.detected = true;
     }
 
-    const cDetected = !!cQ.detected;
-    const tDetected = !!tQ.detected;
     let result = 'Invalid';
     if (cDetected && tDetected) result = 'Positive';
     else if (cDetected && !tDetected) result = 'Negative';
@@ -1301,18 +1404,18 @@
     const tRange = {start:tFallbackRange.start, end:tFallbackRange.end};
 
     const peakDebug = allPeaks.slice(0, 8).map(p =>
-      `y=${(y0+p.y).toFixed(0)}, score=${p.score.toFixed(1)}, q=${p.quality.toFixed(1)}, w=${p.width}, shoulder=${p.shoulderRatio.toFixed(2)}, near=${p.nearShoulderRatio.toFixed(2)}, reject=${p.reject}, warning=${p.warning || '-'}`
+      `y=${(y0+p.y).toFixed(0)}, score=${p.score.toFixed(1)}, q=${p.quality.toFixed(1)}, selected=${p.selected ? 'YES' : 'NO'}, w=${p.width}, shoulder=${p.shoulderRatio.toFixed(2)}, near=${p.nearShoulderRatio.toFixed(2)}, reject=${p.reject}, warning=${p.warning || '-'}`
     );
 
     return {
-      source:'ct-combined-pink-dark-profile-v31-12-score-only',
+      source:'ct-combined-pink-dark-profile-v31-13-relative-red-continuity',
       x0, x1, y0, y1, h,
       zone:{x:x0, y:y0, w:Math.max(1, x1-x0), h:Math.max(1, y1-y0), startRatio:ctStartRatio, endRatio:ctEndRatio, widthRatio:ctEndRatio-ctStartRatio, topThirdY:Math.round(topThirdY), topThirdPadding:topThirdPadding, yLimitedByTopThird:(ctY0Float > windowInnerTop + 0.5)},
       raw, profile:positive, baseline:bg, rawBaseline, rawMedian, rawMax, pinkMax, darkMax, combinedMax, selectedMode, lumBackground, lumMedian, mean:stat.mean, std:stat.std,
-      maxScore, threshold, candidateFloor, minSep,
+      maxScore, threshold, tThreshold, tcRatio, candidateFloor, minSep,
       cRange, tRange,
-      cPeak:{y:cQ.y, absY:y0+cQ.y, score:cQ.score, detected:cDetected, width:cQ.width, left:y0+cQ.left, right:y0+cQ.right, drop:cQ.drop, sharpness:cQ.sharpness, shoulderRatio:cQ.shoulderRatio, shoulderMaxRatio:cQ.shoulderMaxRatio, nearShoulderRatio:cQ.nearShoulderRatio, quality:cQ.quality || 0, reject:cQ.reject, warning:cQ.warning || '-', maxWidth:cQ.maxWidth},
-      tPeak:{y:tQ.y, absY:y0+tQ.y, score:tQ.score, detected:tDetected, width:tQ.width, left:y0+tQ.left, right:y0+tQ.right, drop:tQ.drop, sharpness:tQ.sharpness, shoulderRatio:tQ.shoulderRatio, shoulderMaxRatio:tQ.shoulderMaxRatio, nearShoulderRatio:tQ.nearShoulderRatio, quality:tQ.quality || 0, reject:tQ.reject, warning:tQ.warning || '-', maxWidth:tQ.maxWidth},
+      cPeak:{y:cQ.y, absY:y0+cQ.y, score:cQ.score, detected:cDetected, selected:cSelected, redContinuity:cRed, width:cQ.width, left:y0+cQ.left, right:y0+cQ.right, drop:cQ.drop, sharpness:cQ.sharpness, shoulderRatio:cQ.shoulderRatio, shoulderMaxRatio:cQ.shoulderMaxRatio, nearShoulderRatio:cQ.nearShoulderRatio, quality:cQ.quality || 0, reject:cQ.reject, warning:cQ.warning || '-', maxWidth:cQ.maxWidth},
+      tPeak:{y:tQ.y, absY:y0+tQ.y, score:tQ.score, detected:tDetected, selected:tSelected, redContinuity:tRed, width:tQ.width, left:y0+tQ.left, right:y0+tQ.right, drop:tQ.drop, sharpness:tQ.sharpness, shoulderRatio:tQ.shoulderRatio, shoulderMaxRatio:tQ.shoulderMaxRatio, nearShoulderRatio:tQ.nearShoulderRatio, quality:tQ.quality || 0, reject:tQ.reject, warning:tQ.warning || '-', maxWidth:tQ.maxWidth},
       rejectedPeaks:allPeaks.filter(p=>!p.detected).slice(0,6).map(p=>`y${(y0+p.y).toFixed(0)}:${p.reject}`),
       peakDebug,
       allPeakCount:allPeaks.length,
@@ -2005,9 +2108,12 @@ scored.forEach((c,i)=>
       if (!(ct.selectedPeakCount || 0)) dbg += `<b style="color:#dc2626">No CT peak selected：C/T guide lines are hidden.</b><br>`;
       if (ct.zone) dbg += `CT Analyze Zone=x${ct.zone.x}, y${ct.zone.y}, w=${ct.zone.w}, h=${ct.zone.h} / ratio=${(ct.zone.widthRatio*100).toFixed(1)}% / xRatio=${(ct.zone.startRatio*100).toFixed(1)}-${(ct.zone.endRatio*100).toFixed(1)}%<br>`;
       dbg += `Dynamic Peaks=${ct.allPeakCount || 0} / Selected=${ct.selectedPeakCount || 0} / CandidateFloor=${(ct.candidateFloor || 0).toFixed(1)} / MinSep=${ct.minSep || 0}<br>`;
-      dbg += `C Score=${ct.cPeak.score.toFixed(1)} / C Y=${ct.cPeak.absY.toFixed(0)} / C Detected=${ct.cPeak.detected ? 'YES' : 'NO'} / C Range=${ct.cRange.start}-${ct.cRange.end}<br>`;
+      dbg += `C Score=${ct.cPeak.score.toFixed(1)} / C Y=${ct.cPeak.absY.toFixed(0)} / C Detected=${ct.cPeak.detected ? 'YES' : 'NO'} / C Selected=${ct.cPeak.selected ? 'YES' : 'NO'} / C Range=${ct.cRange.start}-${ct.cRange.end}<br>`;
+      dbg += `C Red Continuity=${ct.cPeak.redContinuity.ok ? 'YES' : 'NO'} / Run=${ct.cPeak.redContinuity.run}/${ct.cPeak.redContinuity.minRun} / Ratio=${ct.cPeak.redContinuity.ratio.toFixed(2)}<br>`;
       dbg += `C Width=${ct.cPeak.width} / MaxWidth=${ct.cPeak.maxWidth} / Drop=${ct.cPeak.drop.toFixed(1)} / Sharpness=${ct.cPeak.sharpness.toFixed(2)} / Quality=${(ct.cPeak.quality || 0).toFixed(1)} / Shoulder=${ct.cPeak.shoulderRatio.toFixed(2)} / NearShoulder=${ct.cPeak.nearShoulderRatio.toFixed(2)} / Reject=${ct.cPeak.reject}<br>`;
-      dbg += `T Score=${ct.tPeak.score.toFixed(1)} / T Y=${ct.tPeak.absY.toFixed(0)} / T Detected=${ct.tPeak.detected ? 'YES' : 'NO'} / T Range=${ct.tRange.start}-${ct.tRange.end}<br>`;
+      dbg += `T Score=${ct.tPeak.score.toFixed(1)} / T Y=${ct.tPeak.absY.toFixed(0)} / T Detected=${ct.tPeak.detected ? 'YES' : 'NO'} / T Selected=${ct.tPeak.selected ? 'YES' : 'NO'} / T Range=${ct.tRange.start}-${ct.tRange.end}<br>`;
+      dbg += `T Relative Threshold=${ct.tThreshold.toFixed(1)} / T/C Ratio=${ct.tcRatio.toFixed(2)}<br>`;
+      dbg += `T Red Continuity=${ct.tPeak.redContinuity.ok ? 'YES' : 'NO'} / Run=${ct.tPeak.redContinuity.run}/${ct.tPeak.redContinuity.minRun} / Ratio=${ct.tPeak.redContinuity.ratio.toFixed(2)}<br>`;
       dbg += `T Width=${ct.tPeak.width} / MaxWidth=${ct.tPeak.maxWidth} / Drop=${ct.tPeak.drop.toFixed(1)} / Sharpness=${ct.tPeak.sharpness.toFixed(2)} / Quality=${(ct.tPeak.quality || 0).toFixed(1)} / Shoulder=${ct.tPeak.shoulderRatio.toFixed(2)} / NearShoulder=${ct.tPeak.nearShoulderRatio.toFixed(2)} / Reject=${ct.tPeak.reject}<br>`;
       if (ct.rejectedPeaks && ct.rejectedPeaks.length) dbg += `Rejected Peaks=${ct.rejectedPeaks.join(', ')}<br>`;
       if (ct.peakDebug && ct.peakDebug.length) dbg += `Peak Candidates：${ct.peakDebug.join(' | ')}<br>`;

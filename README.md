@@ -1,3 +1,7 @@
-# ASAP Check v31.12
+# ASAP Check v31.13
 
-CT score-only selection: shape filters are warnings only; only below-threshold rejects peaks.
+CT relative threshold + red continuity check.
+
+- C detected = selected peak + score >= global threshold + red continuity
+- T detected = selected peak + score >= min(threshold*0.65, C score*0.35) + red continuity
+- Outer frame / Window / S well / waveform drawing unchanged.
