@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v30.5-s-hole-direction';
+  const VERSION = 'v30.6-s-zone-simple';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -470,6 +470,78 @@
     return {cx, cy, rx:W*0.17, ry:W*0.20, r:W*0.20, source:'fallback-sample-ratio-not-detected'};
   }
 
+
+
+  // v30.6：最簡化方向判斷。
+  // 不再全圖找 S 洞，避免整張卡匣 contour 干擾。
+  // 只在固定比例的 S 洞區域內比較「暗部＋邊緣變化」，哪一端比較像 S 洞就決定方向。
+  function scoreFixedSampleZone(cropCanvas, box, W, H) {
+    const ctx = cropCanvas.getContext('2d', {willReadFrequently:true});
+    const data = ctx.getImageData(0, 0, W, H).data;
+    const x0 = clamp(Math.floor(box.x), 0, W - 1);
+    const x1 = clamp(Math.ceil(box.x + box.w), 0, W);
+    const y0 = clamp(Math.floor(box.y), 0, H - 1);
+    const y1 = clamp(Math.ceil(box.y + box.h), 0, H);
+
+    let n = 0, sum = 0, sum2 = 0, dark = 0, edge = 0;
+    const lumAt = (x,y) => {
+      const i = (y * W + x) * 4;
+      return 0.299 * data[i] + 0.587 * data[i+1] + 0.114 * data[i+2];
+    };
+
+    for (let y = y0 + 1; y < y1 - 1; y++) {
+      for (let x = x0 + 1; x < x1 - 1; x++) {
+        const yy = lumAt(x, y);
+        sum += yy;
+        sum2 += yy * yy;
+        n++;
+      }
+    }
+
+    const mean = sum / Math.max(1, n);
+    const variance = Math.max(0, sum2 / Math.max(1, n) - mean * mean);
+    const std = Math.sqrt(variance);
+
+    for (let y = y0 + 2; y < y1 - 2; y++) {
+      for (let x = x0 + 2; x < x1 - 2; x++) {
+        const c = lumAt(x, y);
+        const gx = Math.abs(c - lumAt(x + 2, y));
+        const gy = Math.abs(c - lumAt(x, y + 2));
+        if (c < mean - 10 || c < 145) dark++;
+        if (gx + gy > 28) edge++;
+      }
+    }
+
+    const total = Math.max(1, (x1 - x0 - 4) * (y1 - y0 - 4));
+    const darkRatio = dark / total;
+    const edgeRatio = edge / total;
+
+    // S 洞區會同時有暗部、橢圓邊緣與內部紋理；單純白塑膠區分數較低。
+    const score = std * 85 + darkRatio * 5200 + edgeRatio * 7600;
+
+    return {score, mean, std, darkRatio, edgeRatio, box};
+  }
+
+  function fixedSampleFromBox(box, W, H, source, zoneScore) {
+    return {
+      cx: box.cx,
+      cy: box.cy,
+      rx: Math.max(8, W * 0.17),
+      ry: Math.max(8, W * 0.20),
+      r: Math.max(8, W * 0.20),
+      x: box.cx - W * 0.17,
+      y: box.cy - W * 0.20,
+      w: W * 0.34,
+      h: W * 0.40,
+      source,
+      circ: 0.70,
+      fill: 0.50,
+      align: 1.00,
+      score: zoneScore ? zoneScore.score : 0,
+      zoneScore
+    };
+  }
+
   function drawRoiSearchBox(ctx, box, label, color) {
     if (!box) return;
     ctx.save();
@@ -654,12 +726,12 @@
         let reject = '';
         if (!insideBox(cx, cy, box)) reject = 'outside-s-template';
         if (!reject && win && overlapArea(r, win) > rectArea * 0.05) reject = 'overlap-window';
-        if (!reject && br.width < W * 0.10) reject = 'too-narrow';
+        if (!reject && br.width < W * 0.16) reject = 'too-narrow';
         if (!reject && br.width > W * 0.58) reject = 'too-wide';
-        if (!reject && br.height < W * 0.12) reject = 'too-short';
+        if (!reject && br.height < W * 0.16) reject = 'too-short';
         if (!reject && br.height > W * 0.68) reject = 'too-tall';
         if (!reject && (wh < 0.42 || wh > 1.95)) reject = 'bad-aspect';
-        if (!reject && circ < 0.14) reject = 'low-circularity';
+        if (!reject && circ < 0.20) reject = 'low-circularity';
         if (!reject && (fill < 0.08 || fill > 0.92)) reject = 'bad-fill';
 
         const ideal = W * 0.32;
@@ -681,80 +753,6 @@
     candidates.sort((a,b)=>b.score-a.score);
     debug.sort((a,b)=>b.score-a.score);
     return {sample:candidates[0] || null, count:candidates.length, debug:debug.slice(0,10), search:{top:box.y,bottom:box.y+box.h,winCx,maxDx:W*0.28, box}};
-  }
-
-
-  function findSampleByEdgeInBox(norm, W, H, box, win, orientation) {
-    const blur = new cv.Mat();
-    const edge = new cv.Mat();
-    const kClose = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(7,7));
-    const contours = new cv.MatVector();
-    const hierarchy = new cv.Mat();
-    const candidates = [];
-    const debug = [];
-    const winCx = win ? win.x + win.w/2 : box.cx;
-
-    try {
-      cv.GaussianBlur(norm, blur, new cv.Size(5,5), 0);
-      cv.Canny(blur, edge, 22, 78);
-      cv.morphologyEx(edge, edge, cv.MORPH_CLOSE, kClose);
-      cv.findContours(edge, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
-
-      for (let i=0; i<contours.size(); i++) {
-        const cnt = contours.get(i);
-        const area = cv.contourArea(cnt);
-        const br = cv.boundingRect(cnt);
-        const cx = br.x + br.width / 2;
-        const cy = br.y + br.height / 2;
-        const rectArea = Math.max(1, br.width * br.height);
-        const wh = br.width / Math.max(1, br.height);
-        const peri = cv.arcLength(cnt, true);
-        const circ = peri > 0 ? 4 * Math.PI * area / (peri * peri) : 0;
-        const fill = area / rectArea;
-        const dx = Math.abs(cx - winCx);
-        const align = 1 - Math.min(1, dx / Math.max(1, W * 0.30));
-        const centerDx = Math.abs(cx - box.cx) / Math.max(1, box.w/2);
-        const centerDy = Math.abs(cy - box.cy) / Math.max(1, box.h/2);
-        const centerScore = 1 - Math.min(1, Math.hypot(centerDx, centerDy) / 1.30);
-
-        // S hole must be closer to one outer end of the cassette.
-        // normal: closer to bottom frame. inverted: closer to top frame.
-        const distToTop = cy;
-        const distToBottom = H - cy;
-        const endScore = orientation === 'inverted'
-          ? 1 - Math.min(1, distToTop / Math.max(1, H * 0.48))
-          : 1 - Math.min(1, distToBottom / Math.max(1, H * 0.48));
-
-        let reject = '';
-        if (!insideBox(cx, cy, box)) reject = 'outside-s-template';
-        if (!reject && br.width < W * 0.09) reject = 'too-narrow';
-        if (!reject && br.width > W * 0.46) reject = 'too-wide';
-        if (!reject && br.height < W * 0.10) reject = 'too-short';
-        if (!reject && br.height > W * 0.56) reject = 'too-tall';
-        if (!reject && (wh < 0.32 || wh > 2.20)) reject = 'bad-aspect';
-        if (!reject && circ < 0.10) reject = 'low-circularity';
-        if (!reject && endScore < 0.12) reject = 'not-near-outer-frame';
-
-        const idealW = W * 0.24;
-        const idealH = W * 0.30;
-        const sizeScore = 1 - Math.min(1, (Math.abs(br.width-idealW)/idealW + Math.abs(br.height-idealH)/idealH) / 2.4);
-        const score = rectArea * (0.45 + circ * 1.6) * (0.35 + fill) * (0.70 + align * 1.4) * (0.60 + centerScore) * (0.75 + endScore * 1.8) * (0.55 + sizeScore);
-
-        const item = {x:br.x,y:br.y,w:br.width,h:br.height,cx,cy,circ,fill,align,centerScore,endScore,sizeScore,score,reject:reject||'PASS'};
-        debug.push(item);
-        if (!reject) {
-          candidates.push({cx,cy,rx:br.width/2,ry:br.height/2,r:Math.max(br.width,br.height)/2,x:br.x,y:br.y,w:br.width,h:br.height,source:'sample-edge-near-outer-frame',circ,fill,align,centerScore,endScore,score});
-        }
-        cnt.delete();
-      }
-    }
-    finally {
-      blur.delete(); edge.delete(); kClose.delete(); contours.delete(); hierarchy.delete();
-    }
-
-    candidates.sort((a,b)=>b.score-a.score);
-    debug.sort((a,b)=>b.score-a.score);
-    return {sample:candidates[0] || null, count:candidates.length, debug:debug.slice(0,10), search:{top:box.y,bottom:box.y+box.h,winCx,maxDx:W*0.30, box}};
   }
 
   function templateScore(name, win, sample, W, H) {
@@ -802,33 +800,42 @@
 
   function evaluateInternalTemplate(cropCanvas, norm, W, H, name) {
     const isNormal = name === 'normal';
+
+    // Window 固定用比例，不再依賴 contour。
     const windowBox = isNormal ? makeRatioBox(W,H,0.20,0.20,0.72,0.58) : makeRatioBox(W,H,0.20,0.42,0.72,0.80);
-    const sampleBox = isNormal ? makeRatioBox(W,H,0.16,0.48,0.76,0.86) : makeRatioBox(W,H,0.16,0.14,0.76,0.52);
+
+    // S 洞只在上下固定區域比較，不再全圖找。
+    // normal：S 洞在下方且靠近外框；inverted：S 洞在上方且靠近外框。
+    const sampleBox = isNormal ? makeRatioBox(W,H,0.22,0.58,0.78,0.82) : makeRatioBox(W,H,0.22,0.18,0.78,0.42);
 
     const rw = findRedWindowInBox(cropCanvas, windowBox, W, H);
-    const wf = findWindowByRatioBox(norm, W, H, windowBox);
+    const wf = {win:null, count:0, debug:[{x:Math.round(windowBox.x),y:Math.round(windowBox.y),w:Math.round(windowBox.w),h:Math.round(windowBox.h),aspect:windowBox.h/Math.max(1,windowBox.w),fill:1,centerScore:1,score:0,reject:'fixed-ratio-window'}]};
 
-    // v30.3：不能用紅線決定 Window 框。紅線只作為確認訊號。
-    let win = wf.win || fallbackWindowFromGeometry(W, H, name);
-    if (win) win = makeWindowSafe(win, W, H);
-
-    const sfRatio = findSampleByRatioBox(norm, W, H, sampleBox, win);
-    const sfEdge = findSampleByEdgeInBox(norm, W, H, sampleBox, win, name);
-    const sampleChoices = [];
-    if (sfRatio.sample) sampleChoices.push(sfRatio.sample);
-    if (sfEdge.sample) sampleChoices.push(sfEdge.sample);
-    sampleChoices.sort((a,b)=>(b.score||0)-(a.score||0));
-    const sample = sampleChoices[0] || null;
-    const sf = {
-      count: sfRatio.count + sfEdge.count,
-      debug: (sfRatio.debug || []).concat(sfEdge.debug || []).sort((a,b)=>(b.score||0)-(a.score||0)).slice(0,10),
-      search: sfEdge.search || sfRatio.search
-    };
-    const ts = templateScore(name, win, sample, W, H);
-    if (sample && sample.source && sample.source.indexOf('near-outer-frame') >= 0) {
-      ts.score += 2600;
-      ts.hasOuterEndSample = true;
+    let win = fallbackWindowFromGeometry(W, H, name);
+    if (win) {
+      win.source = 'fixed-ratio-window';
+      win = makeWindowSafe(win, W, H);
     }
+
+    const sZone = scoreFixedSampleZone(cropCanvas, sampleBox, W, H);
+    const sampleThreshold = 900;
+    const sample = sZone.score >= sampleThreshold
+      ? fixedSampleFromBox(sampleBox, W, H, 'sample-s-zone-confirmed', sZone)
+      : null;
+
+    const sf = {
+      count: sample ? 1 : 0,
+      debug: [{
+        x:Math.round(sampleBox.x), y:Math.round(sampleBox.y), w:Math.round(sampleBox.w), h:Math.round(sampleBox.h),
+        circ:0.70, fill:0.50, align:1.00, score:Math.round(sZone.score),
+        reject: sample ? 'PASS-fixed-s-zone' : 'weak-s-zone'
+      }],
+      search:{top:sampleBox.y,bottom:sampleBox.y+sampleBox.h,winCx:sampleBox.cx,maxDx:sampleBox.w/2,box:sampleBox,zoneScore:sZone}
+    };
+
+    const ts = templateScore(name, win, sample, W, H);
+    ts.score += Math.min(5200, sZone.score * 1.2);
+    ts.sZoneScore = sZone.score;
     if (rw) {
       ts.score += 1600;
       ts.hasRedWindow = true;
@@ -875,17 +882,7 @@
 
     const normal = evaluateInternalTemplate(cropCanvas, norm, W, H, 'normal');
     const inverted = evaluateInternalTemplate(cropCanvas, norm, W, H, 'inverted');
-
-    const normalRealS = !!(normal.sample && normal.sample.source && !normal.sample.source.includes('fallback'));
-    const invertedRealS = !!(inverted.sample && inverted.sample.source && !inverted.sample.source.includes('fallback'));
-    let chosen;
-
-    // v30.5：S hole is the direction reference.
-    // If a real S hole is found in only one end-zone, use it to define cassette direction.
-    // If both or neither are found, fall back to the template score.
-    if (normalRealS && !invertedRealS) chosen = normal;
-    else if (invertedRealS && !normalRealS) chosen = inverted;
-    else chosen = normal.templateScore.score >= inverted.templateScore.score ? normal : inverted;
+    const chosen = normal.templateScore.score >= inverted.templateScore.score ? normal : inverted;
 
     const win = chosen.window || fallbackWindowFromGeometry(W, H, chosen.name);
     const sample = chosen.sample || fallbackSampleByWindow(W, H, win, chosen.name);
@@ -912,7 +909,6 @@
       normalTemplate: normal,
       invertedTemplate: inverted,
       chosenTemplate: chosen.name,
-      directionBySHole: !!(chosen.sample && chosen.sample.source && !chosen.sample.source.includes('fallback')),
       needsRotation180: chosen.name === 'inverted',
       roiMetrics: {
         winCx, winCy, sampleCx, sampleCy, alignDx, alignScore, yGap, windowAboveSample,
@@ -1425,7 +1421,7 @@ scored.forEach((c,i)=>
       dbg +=
       `ROI Metrics：align=${f.roiMetrics.alignScore.toFixed(2)}, dx=${f.roiMetrics.alignDx.toFixed(0)}, yGap=${f.roiMetrics.yGap.toFixed(0)}, windowAboveS=${f.roiMetrics.windowAboveSample ? 'YES' : 'NO'}<br>`;
       if (f.chosenTemplate) {
-        dbg += `ROI Template：chosen=${f.chosenTemplate} / S-direction=${f.directionBySHole ? 'YES' : 'NO'} / normal=${f.roiMetrics.normalScore.toFixed(0)} / inverted=${f.roiMetrics.invertedScore.toFixed(0)} / rotate180=${f.orientationCorrected ? 'YES' : 'NO'}<br>`;
+        dbg += `ROI Template：chosen=${f.chosenTemplate} / normal=${f.roiMetrics.normalScore.toFixed(0)} / inverted=${f.roiMetrics.invertedScore.toFixed(0)} / rotate180=${f.orientationCorrected ? 'YES' : 'NO'}<br>`;
       }
     }
 
