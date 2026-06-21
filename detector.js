@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v31.21-negative-platform-t-gate';
+  const VERSION = 'v31.29-ct-order-minimal-fix';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -1452,7 +1452,7 @@
 
     // 顯示用 fallback：即使沒有 detected，也列出 C/T 區域附近最強峰，方便 debug。
     const cFallbackRange = {start:Math.round(h*0.08), end:Math.round(h*0.55)};
-    const tFallbackRange = {start:Math.round(h*0.44), end:Math.round(h*0.76)};
+    const tFallbackRange = {start:Math.round(h*0.34), end:Math.round(h*0.92)};
     function fallbackPeak(label, range) {
       const raw = maxInRange(positive, range.start, range.end);
       const q = qualifyPeak(positive, raw, threshold, range, h, label);
@@ -1475,7 +1475,19 @@
     const cSelected = selected.includes(cQ);
     const tSelected = selected.includes(tQ);
     const cRed = refinePeakToRedLine(cQ.y, cFallbackRange);
-    const tRed = refinePeakToRedLine(tQ.y, tFallbackRange, 'faintT');
+    // v31.29：T refine 不能回頭吸到 C 線。
+    // 先用原始 C/T 位置建立動態 T 搜尋範圍，只允許在 C 下方合理距離內找真正 T 線。
+    const preTMinGap = Math.max(12, Math.round(h * 0.10));
+    const preTMaxGap = Math.max(preTMinGap + 12, Math.round(h * 0.62));
+    const tRefineRange = {
+      start: Math.max(tFallbackRange.start, Math.round(cQ.y + preTMinGap)),
+      end: Math.min(tFallbackRange.end, Math.round(cQ.y + preTMaxGap), h - 1)
+    };
+    if (tRefineRange.end <= tRefineRange.start + 2) {
+      tRefineRange.start = tFallbackRange.start;
+      tRefineRange.end = tFallbackRange.end;
+    }
+    const tRed = refinePeakToRedLine(tQ.y, tRefineRange, 'faintT');
 
     // refine 後，把實際畫線/Debug 的 y 改成真正連續線段的位置。
     // score 保留原 peak score，因為它代表波峰強度；y 則改成紅線中心。
@@ -1538,8 +1550,8 @@
     // 這可避免把 C 線下方的背景陰影、試紙槽底部平台或 W 框底部亮度變化誤判成 T。
     const tGapFromC = (tQ && cQ) ? (tQ.y - cQ.y) : -9999;
     const tMinGap = Math.max(16, Math.round(h * 0.12));
-    const tMaxGap = Math.max(tMinGap + 12, Math.round(h * 0.38));
-    const tMaxYFromWindow = Math.round(h * 0.76);
+    const tMaxGap = Math.max(tMinGap + 12, Math.round(h * 0.62));
+    const tMaxYFromWindow = Math.round(h * 0.92);
     const tPositionOk = !!(
       tQ && cQ &&
       tGapFromC >= tMinGap &&
