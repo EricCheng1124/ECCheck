@@ -123,15 +123,27 @@
     const areaW = area.w || W;
     const areaH = area.h || H;
 
-    const fontSize = Math.max(14, Math.round(Math.min(W, H) / 23));
-    const pad = Math.max(12, Math.round(fontSize * 0.75));
-    const lineH = Math.round(fontSize * 1.45);
+    // v31.22：資訊框不可再被右側區域裁切。
+    // 先用較大的字，再依照 side area 寬度自動縮小，確保 Region/GPS 完整顯示。
+    let fontSize = Math.max(13, Math.round(Math.min(W, H) / 24));
+    let pad = Math.max(10, Math.round(fontSize * 0.70));
+    let lineH = Math.round(fontSize * 1.42);
 
     ctx.save();
     ctx.font = `900 ${fontSize}px sans-serif`;
 
-    const textW = Math.max(...lines.map(t => ctx.measureText(t).width));
-    const boxW = Math.min(areaW - pad * 2, textW + pad * 2.4);
+    let textW = Math.max(...lines.map(t => ctx.measureText(t).width));
+    const maxBoxW = Math.max(80, areaW - pad * 2);
+
+    while (textW + pad * 2.4 > maxBoxW && fontSize > 10) {
+      fontSize -= 1;
+      pad = Math.max(8, Math.round(fontSize * 0.68));
+      lineH = Math.round(fontSize * 1.40);
+      ctx.font = `900 ${fontSize}px sans-serif`;
+      textW = Math.max(...lines.map(t => ctx.measureText(t).width));
+    }
+
+    const boxW = Math.min(maxBoxW, textW + pad * 2.4);
     const boxH = lineH * lines.length + pad * 1.6;
 
     const x = Math.round(x0 + Math.max(pad, (areaW - boxW) / 2));
@@ -179,7 +191,7 @@
 
     const cropW = cropCanvas.width;
     const cropH = cropCanvas.height;
-    const sideW = Math.max(190, Math.round(cropW * 0.72));
+    const sideW = Math.max(260, Math.round(cropW * 0.95));
     const gap = Math.max(16, Math.round(cropW * 0.055));
     const W = cropW + gap + sideW;
     const H = cropH;
@@ -208,7 +220,7 @@
     ctx.restore();
 
     if (canvas.width && canvas.height) {
-      const thumbW = Math.max(110, Math.round(sideW * 0.72));
+      const thumbW = Math.max(120, Math.round(sideW * 0.62));
       const thumbH = Math.round(canvas.height * thumbW / Math.max(1, canvas.width));
       const pad = Math.max(10, Math.round(sideW * 0.045));
       const x = cropW + gap + Math.round((sideW - thumbW) / 2);

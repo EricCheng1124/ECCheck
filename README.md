@@ -1,3 +1,3 @@
-# ASAP Check v31.21
+# ASAP Check v31.22
 
-Negative platform T-gate fix + layout overlay fix.
+Fix metadata box clipping: wider right panel + auto-fit text.
