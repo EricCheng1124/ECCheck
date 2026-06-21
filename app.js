@@ -108,70 +108,138 @@
     return { date, time };
   }
 
-  function drawMetadataOverlay(ctx, W, H) {
+  function drawMetadataOverlay(ctx, W, H, opt) {
     const ts = getTimestampParts();
     const lines = [
-      `Result: ${lastResultText || 'Invalid'}`,
-      `Date: ${ts.date}`,
-      `Time: ${ts.time}`,
-      `Region: ${getRegionText()}`
+      `Result : ${lastResultText || 'Invalid'}`,
+      `Date   : ${ts.date}`,
+      `Time   : ${ts.time}`,
+      `Region : ${getRegionText()}`
     ];
 
-    const fontSize = Math.max(10, Math.round(W / 28));
-    const pad = Math.max(6, Math.round(W * 0.025));
+    const area = opt || {};
+    const x0 = area.x || 0;
+    const y0 = area.y || 0;
+    const areaW = area.w || W;
+    const areaH = area.h || H;
+
+    const fontSize = Math.max(14, Math.round(Math.min(W, H) / 23));
+    const pad = Math.max(12, Math.round(fontSize * 0.75));
+    const lineH = Math.round(fontSize * 1.45);
+
     ctx.save();
-    ctx.font = `700 ${fontSize}px sans-serif`;
+    ctx.font = `900 ${fontSize}px sans-serif`;
 
     const textW = Math.max(...lines.map(t => ctx.measureText(t).width));
-    const boxW = Math.min(W - pad * 2, textW + pad * 2);
-    const lineH = Math.round(fontSize * 1.35);
-    const boxH = lineH * lines.length + pad * 1.4;
-    const x = pad;
-    const y = Math.max(pad, Math.round(H - boxH - pad));
+    const boxW = Math.min(areaW - pad * 2, textW + pad * 2.4);
+    const boxH = lineH * lines.length + pad * 1.6;
 
-    ctx.fillStyle = 'rgba(255,255,255,0.88)';
-    ctx.fillRect(x, y, boxW, boxH);
-    ctx.strokeStyle = 'rgba(17,24,39,0.45)';
-    ctx.lineWidth = Math.max(1, Math.round(W / 260));
-    ctx.strokeRect(x, y, boxW, boxH);
+    const x = Math.round(x0 + Math.max(pad, (areaW - boxW) / 2));
+    const y = Math.round(y0 + Math.max(pad, areaH - boxH - pad));
+    const r = Math.max(10, Math.round(fontSize * 0.65));
 
-    ctx.fillStyle = '#111827';
+    ctx.shadowColor = 'rgba(15, 23, 42, 0.28)';
+    ctx.shadowBlur = Math.round(fontSize * 0.7);
+    ctx.shadowOffsetY = Math.round(fontSize * 0.25);
+
+    ctx.fillStyle = 'rgba(15, 88, 180, 0.92)';
+    roundRect(ctx, x, y, boxW, boxH, r);
+    ctx.fill();
+
+    ctx.shadowColor = 'transparent';
+    ctx.lineWidth = Math.max(2, Math.round(fontSize / 7));
+    ctx.strokeStyle = 'rgba(91, 201, 255, 0.95)';
+    roundRect(ctx, x, y, boxW, boxH, r);
+    ctx.stroke();
+
+    ctx.fillStyle = '#ffffff';
     for (let i = 0; i < lines.length; i++) {
       ctx.fillText(lines[i], x + pad, y + pad + fontSize + i * lineH);
     }
     ctx.restore();
   }
 
+  function roundRect(ctx, x, y, w, h, r) {
+    r = Math.min(r, w / 2, h / 2);
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.lineTo(x + w - r, y);
+    ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+    ctx.lineTo(x + w, y + h - r);
+    ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+    ctx.lineTo(x + r, y + h);
+    ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+    ctx.lineTo(x, y + r);
+    ctx.quadraticCurveTo(x, y, x + r, y);
+    ctx.closePath();
+  }
+
   function renderCombinedDetectionView() {
     if (!combinedCanvas || !cropCanvas || !canvas || !cropCanvas.width || !cropCanvas.height) return;
 
-    const W = cropCanvas.width;
-    const H = cropCanvas.height;
+    const cropW = cropCanvas.width;
+    const cropH = cropCanvas.height;
+    const sideW = Math.max(190, Math.round(cropW * 0.72));
+    const gap = Math.max(16, Math.round(cropW * 0.055));
+    const W = cropW + gap + sideW;
+    const H = cropH;
+
     combinedCanvas.width = W;
     combinedCanvas.height = H;
 
     const ctx = combinedCanvas.getContext('2d');
     ctx.clearRect(0, 0, W, H);
-    ctx.drawImage(cropCanvas, 0, 0, W, H);
+
+    const grad = ctx.createLinearGradient(0, 0, W, H);
+    grad.addColorStop(0, '#f8fbff');
+    grad.addColorStop(1, '#eaf3ff');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, W, H);
+
+    ctx.drawImage(cropCanvas, 0, 0, cropW, cropH);
+
+    ctx.save();
+    ctx.strokeStyle = 'rgba(37, 99, 235, 0.18)';
+    ctx.lineWidth = Math.max(1, Math.round(cropW / 260));
+    ctx.beginPath();
+    ctx.moveTo(cropW + gap / 2, Math.round(cropH * 0.08));
+    ctx.lineTo(cropW + gap / 2, Math.round(cropH * 0.92));
+    ctx.stroke();
+    ctx.restore();
 
     if (canvas.width && canvas.height) {
-      const thumbW = Math.max(58, Math.round(W * 0.24));
+      const thumbW = Math.max(110, Math.round(sideW * 0.72));
       const thumbH = Math.round(canvas.height * thumbW / Math.max(1, canvas.width));
-      const pad = Math.max(5, Math.round(W * 0.02));
-      const x = pad;
+      const pad = Math.max(10, Math.round(sideW * 0.045));
+      const x = cropW + gap + Math.round((sideW - thumbW) / 2);
       const y = pad;
+      const r = Math.max(10, Math.round(thumbW * 0.045));
 
       ctx.save();
-      ctx.fillStyle = 'rgba(255,255,255,0.88)';
-      ctx.fillRect(x - 2, y - 2, thumbW + 4, thumbH + 4);
-      ctx.strokeStyle = 'rgba(22,163,74,0.95)';
-      ctx.lineWidth = Math.max(1, Math.round(W / 180));
-      ctx.strokeRect(x - 2, y - 2, thumbW + 4, thumbH + 4);
+      ctx.shadowColor = 'rgba(15, 23, 42, 0.18)';
+      ctx.shadowBlur = 12;
+      ctx.shadowOffsetY = 4;
+      ctx.fillStyle = 'rgba(255,255,255,0.96)';
+      roundRect(ctx, x - 5, y - 5, thumbW + 10, thumbH + 10, r);
+      ctx.fill();
+      ctx.shadowColor = 'transparent';
+      ctx.strokeStyle = 'rgba(45, 212, 191, 0.95)';
+      ctx.lineWidth = Math.max(2, Math.round(cropW / 150));
+      roundRect(ctx, x - 5, y - 5, thumbW + 10, thumbH + 10, r);
+      ctx.stroke();
       ctx.drawImage(canvas, x, y, thumbW, thumbH);
+      ctx.fillStyle = '#0f172a';
+      ctx.font = `900 ${Math.max(11, Math.round(sideW / 18))}px sans-serif`;
+      ctx.fillText('Original Image', x, y + thumbH + Math.max(16, Math.round(sideW / 12)));
       ctx.restore();
     }
 
-    drawMetadataOverlay(ctx, W, H);
+    drawMetadataOverlay(ctx, W, H, {
+      x: cropW + gap,
+      y: Math.round(cropH * 0.30),
+      w: sideW,
+      h: Math.round(cropH * 0.68)
+    });
   }
 
   function updateTexts() {
