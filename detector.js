@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v31.14-ct-refine-red-line';
+  const VERSION = 'v31.15-ct-scan-real-red-line';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -1097,11 +1097,16 @@
     // 目的：峰值可能落在紅線邊緣/陰影/肩峰，必須 refine 到真正 C/T 線中心後再畫線與判斷。
     function rowLineContinuity(absY) {
       const yy = clamp(Math.round(absY), 0, Math.max(0, H - 1));
-      const minRun = Math.max(3, Math.round((x1 - x0) * 0.16));
-      const minRatio = 0.14;
 
-      // 用上下鄰近列估背景，讓「淡粉紅線」和「偏灰暗線」都能被視為線段。
-      const bgGap = Math.max(5, Math.round(H * 0.010));
+      // v31.15：不要只看原本很窄的 x0~x1。
+      // 真正 C/T 線可能稍微偏左或偏右，所以用較寬的判讀窗橫向區域回頭找「水平粉紅線」。
+      const lx0 = clamp(Math.floor(win.x + win.w * 0.18), 0, W - 1);
+      const lx1 = clamp(Math.ceil(win.x + win.w * 0.88), lx0 + 1, W);
+      const lineW = Math.max(1, lx1 - lx0);
+      const minRun = Math.max(3, Math.round(lineW * 0.13));
+      const minRatio = 0.10;
+
+      const bgGap = Math.max(5, Math.round(H * 0.012));
       const bgYs = [
         clamp(yy - bgGap, 0, H - 1),
         clamp(yy + bgGap, 0, H - 1)
@@ -1115,8 +1120,9 @@
       let total = 0;
       let redScoreSum = 0;
       let darkScoreSum = 0;
+      let contrastSum = 0;
 
-      for (let xx = x0; xx < x1; xx++) {
+      for (let xx = lx0; xx < lx1; xx++) {
         const idx = (yy * W + xx) * 4;
         const r = data[idx];
         const g = data[idx + 1];
@@ -1124,35 +1130,42 @@
         const yLum = 0.299 * r + 0.587 * g + 0.114 * b;
 
         let bgLum = 0;
+        let bgRed = 0;
         for (const by of bgYs) {
           const bi = (by * W + xx) * 4;
-          bgLum += 0.299 * data[bi] + 0.587 * data[bi + 1] + 0.114 * data[bi + 2];
+          const br = data[bi], bgc = data[bi + 1], bb = data[bi + 2];
+          bgLum += 0.299 * br + 0.587 * bgc + 0.114 * bb;
+          bgRed += (br - Math.max(bgc, bb) * 0.82) + (br - bgc) * 0.16 + (br - bb) * 0.10;
         }
         bgLum /= bgYs.length;
+        bgRed /= bgYs.length;
 
-        const redScore = (r - (g + b) * 0.50) + (r - g) * 0.18 + (r - b) * 0.12;
+        // 粉紅/紅線分數：比舊版更偏向「顏色」，避免把灰色陰影當 C/T 線。
+        const redScore = (r - Math.max(g, b) * 0.82) + (r - g) * 0.16 + (r - b) * 0.10;
         const darkScore = bgLum - yLum;
+        const redContrast = redScore - bgRed;
 
-        // 放寬紅色條件：真實淡線常是灰粉/紫灰，不一定鮮紅。
         const redLike =
-          yLum > 38 &&
-          r > 48 &&
-          redScore > 2.2 &&
-          r >= g * 0.985 &&
-          r >= b * 0.985;
+          yLum > 45 &&
+          r > 55 &&
+          redScore > 2.0 &&
+          redContrast > 0.8 &&
+          r >= g * 0.975 &&
+          r >= b * 0.955;
 
-        // 補一個暗線條件：只要這一列相對上下背景連續變暗，也算線段。
-        // 這可以處理 T 線很淡、肉眼看是灰粉但 redScore 不高的情況。
+        // 暗線只能當輔助，必須同時有一點點紅/粉紅傾向，避免視窗陰影誤判。
         const darkLike =
           yLum > 35 &&
-          darkScore > 4.0 &&
-          r >= g * 0.94 &&
-          r >= b * 0.94;
+          darkScore > 5.0 &&
+          redScore > 0.6 &&
+          r >= g * 0.955 &&
+          r >= b * 0.935;
 
         const lineLike = redLike || darkLike;
         total++;
         redScoreSum += Math.max(0, redScore);
         darkScoreSum += Math.max(0, darkScore);
+        contrastSum += Math.max(0, redContrast);
 
         if (redLike) redCount++;
         if (darkLike) darkCount++;
@@ -1171,9 +1184,13 @@
       const darkRatio = darkCount / Math.max(1, total);
       const redAvg = redScoreSum / Math.max(1, total);
       const darkAvg = darkScoreSum / Math.max(1, total);
+      const contrastAvg = contrastSum / Math.max(1, total);
+
+      // 必須真的有粉紅連續性；純暗線不直接通過。
+      const ok = (maxRun >= minRun || ratio >= minRatio) && (redRatio >= 0.035 || redAvg >= 2.2 || contrastAvg >= 1.2);
 
       return {
-        ok: maxRun >= minRun || ratio >= minRatio,
+        ok,
         y: yy,
         run: maxRun,
         minRun,
@@ -1186,24 +1203,34 @@
         lineCount,
         redAvg,
         darkAvg,
-        score: maxRun * 2.0 + ratio * 18.0 + redAvg * 0.35 + darkAvg * 0.45
+        contrastAvg,
+        x0: lx0,
+        x1: lx1,
+        score: maxRun * 2.2 + ratio * 22.0 + redRatio * 28.0 + redAvg * 0.55 + contrastAvg * 0.80 + darkAvg * 0.18
       };
     }
 
     function refinePeakToRedLine(localY, localRange) {
       const absCenter = y0 + localY;
-      const searchRadius = Math.max(8, Math.round(h * 0.060));
-      const startY = clamp(Math.round(absCenter - searchRadius), y0, y1 - 1);
-      const endY = clamp(Math.round(absCenter + searchRadius), y0, y1 - 1);
+
+      // v31.15：真正回頭找線，不再只在 peak 附近 ±一點點找。
+      // 先掃整個 C/T 合理範圍，因為 peak 可能落在陰影或肩峰，不一定在線中心。
+      const rangeStart = localRange ? localRange.start : 0;
+      const rangeEnd = localRange ? localRange.end : h - 1;
+      const startY = clamp(y0 + rangeStart, y0, y1 - 1);
+      const endY = clamp(y0 + rangeEnd, y0, y1 - 1);
 
       let best = null;
       for (let yy = startY; yy <= endY; yy++) {
         const local = yy - y0;
-        if (localRange && (local < localRange.start || local > localRange.end)) continue;
         const cont = rowLineContinuity(yy);
         const profileScore = positive[local] || 0;
-        const distancePenalty = Math.abs(yy - absCenter) * 0.18;
-        const totalScore = cont.score + profileScore * 0.42 - distancePenalty;
+
+        // 距離 peak 太遠可扣分，但不禁止，因為這次目的就是回頭修正錯峰。
+        const distancePenalty = Math.abs(yy - absCenter) * 0.045;
+
+        // 周圍紅線連續性權重大於 profile，避免又被波峰肩膀帶走。
+        const totalScore = cont.score * 1.35 + profileScore * 0.22 - distancePenalty;
         const item = Object.assign({}, cont, {
           localY: local,
           absY: yy,
@@ -1229,8 +1256,6 @@
         });
       }
 
-      // 只要在搜尋範圍內找到連續線段，就用 refine 後的位置。
-      // 若沒有找到，仍回傳最佳列，Debug 會顯示 NO。
       return best;
     }
 
@@ -1491,7 +1516,7 @@
     );
 
     return {
-      source:'ct-combined-pink-dark-profile-v31-14-refine-red-line',
+      source:'ct-combined-pink-dark-profile-v31-15-scan-real-red-line',
       x0, x1, y0, y1, h,
       zone:{x:x0, y:y0, w:Math.max(1, x1-x0), h:Math.max(1, y1-y0), startRatio:ctStartRatio, endRatio:ctEndRatio, widthRatio:ctEndRatio-ctStartRatio, topThirdY:Math.round(topThirdY), topThirdPadding:topThirdPadding, yLimitedByTopThird:(ctY0Float > windowInnerTop + 0.5)},
       raw, profile:positive, baseline:bg, rawBaseline, rawMedian, rawMax, pinkMax, darkMax, combinedMax, selectedMode, lumBackground, lumMedian, mean:stat.mean, std:stat.std,

@@ -1,3 +1,3 @@
-# ASAP Check v31.14
+# ASAP Check v31.15
 
-CT refine red-line: peak selected first, then search around the peak to align C/T guide lines to the best continuous red/dark horizontal segment. T uses relative threshold plus refined continuity.
+CT scan real red line: after peak detection, scan the full C/T range to find the real continuous horizontal pink/red line.
