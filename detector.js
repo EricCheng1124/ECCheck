@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v31.8-ct-dynamic-peak-picker';
+  const VERSION = 'v31.9-ct-no-fake-lines-local-baseline';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -1125,11 +1125,23 @@
     }
 
     const smoothed = smoothProfile(raw, Math.max(2, Math.round(h*0.012)));
-    const bg = median(smoothed);
+
+    // v31.9：改用 local/low-percentile baseline，避免整段 profile 被壓到 Baseline=0 後又亂畫假 C/T。
+    // 這裡不是直接用 median 扣背景，而是用較低分位數當背景；若背景很低，仍保留 raw peak 形狀給除錯。
+    function percentile(arr, p) {
+      if (!arr || !arr.length) return 0;
+      const a = arr.slice().sort((x,y)=>x-y);
+      const idx = Math.max(0, Math.min(a.length-1, Math.floor((a.length-1)*p)));
+      return a[idx];
+    }
+    const rawBaseline = percentile(smoothed, 0.20);
+    const rawMedian = median(smoothed);
+    const rawMax = Math.max(1, ...smoothed);
+    const bg = Math.max(0, Math.min(rawBaseline, rawMedian));
     const positive = smoothed.map(v=>Math.max(0, v-bg));
     const stat = meanStd(positive);
     const maxScore = Math.max(1, ...positive);
-    const threshold = Math.max(6.5, stat.mean + stat.std * 1.65, maxScore * 0.18);
+    const threshold = Math.max(5.8, stat.mean + stat.std * 1.35, maxScore * 0.15);
 
     const fullRange = {start:0, end:h-1};
     const minSep = Math.max(10, Math.round(h * 0.13));
@@ -1234,8 +1246,10 @@
 
     cQ.label = 'C';
     tQ.label = 'T';
-    cQ.detected = !!(selected.includes(cQ) || (selected.length >= 2 && cQ.quality > 0));
-    tQ.detected = !!(selected.includes(tQ) || (selected.length >= 2 && tQ.quality > 0));
+    // v31.9：只有 Dynamic Peak selected 才能被視為 detected。
+    // fallback peak 只做 Debug，不再被畫成 C/T 線，也不參與結果。
+    cQ.detected = selected.includes(cQ);
+    tQ.detected = selected.includes(tQ);
 
     // 防呆：單峰若在下半部，只能算 T-like，沒有 C，所以 Invalid。
     if (selected.length === 1 && selected[0].y > upperLimit) {
@@ -1261,7 +1275,7 @@
       source:'ct-red-profile-dynamic-peaks-v31-8',
       x0, x1, y0, y1, h,
       zone:{x:x0, y:y0, w:Math.max(1, x1-x0), h:Math.max(1, y1-y0), startRatio:ctStartRatio, endRatio:ctEndRatio, widthRatio:ctEndRatio-ctStartRatio, topThirdY:Math.round(topThirdY), topThirdPadding:topThirdPadding, yLimitedByTopThird:(ctY0Float > windowInnerTop + 0.5)},
-      raw, profile:positive, baseline:bg, mean:stat.mean, std:stat.std,
+      raw, profile:positive, baseline:bg, rawBaseline, rawMedian, rawMax, mean:stat.mean, std:stat.std,
       maxScore, threshold, candidateFloor, minSep,
       cRange, tRange,
       cPeak:{y:cQ.y, absY:y0+cQ.y, score:cQ.score, detected:cDetected, width:cQ.width, left:y0+cQ.left, right:y0+cQ.right, drop:cQ.drop, sharpness:cQ.sharpness, shoulderRatio:cQ.shoulderRatio, shoulderMaxRatio:cQ.shoulderMaxRatio, nearShoulderRatio:cQ.nearShoulderRatio, quality:cQ.quality || 0, reject:cQ.reject, maxWidth:cQ.maxWidth},
@@ -1325,8 +1339,15 @@
       ctx.font = `${Math.max(9, Math.round(W/28))}px sans-serif`;
       ctx.fillText(`${label} ${Math.round(p.score)}`, axisX + 2, clamp(p.absY - 3, 10, H-4));
     }
-    drawPeak(ct.cPeak, ct.cPeak.detected ? 'C' : 'C?', 'rgba(22,163,74,0.95)');
-    drawPeak(ct.tPeak, ct.tPeak.detected ? 'T' : 'T?', 'rgba(168,85,247,0.95)');
+    // v31.9：沒選到 Dynamic Peak 就不畫假 C/T 標線，避免標到空白處。
+    if (ct.cPeak && ct.cPeak.detected) drawPeak(ct.cPeak, 'C', 'rgba(22,163,74,0.95)');
+    if (ct.tPeak && ct.tPeak.detected) drawPeak(ct.tPeak, 'T', 'rgba(168,85,247,0.95)');
+
+    if ((!ct.cPeak || !ct.cPeak.detected) && (!ct.tPeak || !ct.tPeak.detected)) {
+      ctx.font = `${Math.max(9, Math.round(W/31))}px sans-serif`;
+      ctx.fillStyle = 'rgba(220,38,38,0.90)';
+      ctx.fillText('No CT peak selected', Math.max(2, axisX-2), Math.min(H-8, ct.y0+14));
+    }
 
     ctx.font = `${Math.max(9, Math.round(W/30))}px sans-serif`;
     ctx.fillStyle = 'rgba(15,23,42,0.95)';
@@ -1947,7 +1968,9 @@ scored.forEach((c,i)=>
       const ct = f.ctAnalysis;
       dbg += `<b>CT Line Analysis</b><br>`;
       dbg += `Result=${ct.result} / Peak Count=${ct.peakCount} / Threshold=${ct.threshold.toFixed(1)} / Baseline=${ct.baseline.toFixed(1)} / Max=${ct.maxScore.toFixed(1)}<br>`;
-      if (ct.zone) dbg += `CT Analyze Zone=x${ct.zone.x}, y${ct.zone.y}, w${ct.zone.w}, h${ct.zone.h} / ratio=${(ct.zone.widthRatio*100).toFixed(1)}% / xRatio=${(ct.zone.startRatio*100).toFixed(1)}-${(ct.zone.endRatio*100).toFixed(1)}%<br>`;
+      dbg += `RawBaseline=${(ct.rawBaseline || 0).toFixed(1)} / RawMedian=${(ct.rawMedian || 0).toFixed(1)} / RawMax=${(ct.rawMax || 0).toFixed(1)}<br>`;
+      if (!(ct.selectedPeakCount || 0)) dbg += `<b style="color:#dc2626">No CT peak selected：C/T guide lines are hidden.</b><br>`;
+      if (ct.zone) dbg += `CT Analyze Zone=x${ct.zone.x}, y${ct.zone.y}, w=${ct.zone.w}, h=${ct.zone.h} / ratio=${(ct.zone.widthRatio*100).toFixed(1)}% / xRatio=${(ct.zone.startRatio*100).toFixed(1)}-${(ct.zone.endRatio*100).toFixed(1)}%<br>`;
       dbg += `Dynamic Peaks=${ct.allPeakCount || 0} / Selected=${ct.selectedPeakCount || 0} / CandidateFloor=${(ct.candidateFloor || 0).toFixed(1)} / MinSep=${ct.minSep || 0}<br>`;
       dbg += `C Score=${ct.cPeak.score.toFixed(1)} / C Y=${ct.cPeak.absY.toFixed(0)} / C Detected=${ct.cPeak.detected ? 'YES' : 'NO'} / C Range=${ct.cRange.start}-${ct.cRange.end}<br>`;
       dbg += `C Width=${ct.cPeak.width} / MaxWidth=${ct.cPeak.maxWidth} / Drop=${ct.cPeak.drop.toFixed(1)} / Sharpness=${ct.cPeak.sharpness.toFixed(2)} / Quality=${(ct.cPeak.quality || 0).toFixed(1)} / Shoulder=${ct.cPeak.shoulderRatio.toFixed(2)} / NearShoulder=${ct.cPeak.nearShoulderRatio.toFixed(2)} / Reject=${ct.cPeak.reject}<br>`;

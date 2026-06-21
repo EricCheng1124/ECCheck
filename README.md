@@ -1,3 +1,6 @@
-# ASAP Check v31.8
+# ASAP Check v31.9
 
-CT line analysis changed to dynamic peak picking. It searches all peaks in the CT zone first, then assigns upper peak as C and lower peak as T. Shoulder/platform is now a quality penalty instead of direct rejection.
+- No fake C/T guide lines when Dynamic Peaks=0.
+- Adds raw/local baseline debug.
+- Uses lower-percentile baseline for CT profile.
+- Keeps v31.8 dynamic peak picker and clean UI.
