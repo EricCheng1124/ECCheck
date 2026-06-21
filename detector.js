@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v31.4-ct-center-27-zone';
+  const VERSION = 'v31.5-ct-zone-below-top-third';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -1098,8 +1098,16 @@
 
     const x0 = clamp(Math.floor(win.x + win.w * ctStartRatio), 0, W-1);
     const x1 = clamp(Math.ceil(win.x + win.w * ctEndRatio), 0, W);
-    const y0 = clamp(Math.floor(win.y + win.h * 0.04), 0, H-1);
-    const y1 = clamp(Math.ceil(win.y + win.h * 0.96), 0, H);
+
+    // v31.5：CT 分析高度不能超過 Top S 分界線。
+    // 原因：Top third 以上容易吃到卡匣槽壁、反光與非試紙區，會產生胖波形。
+    // 因此 CT zone 的起點取「Window 上緣內縮」與「Top third 線下方」兩者較低者。
+    const topThirdY = H / 3;
+    const topThirdPadding = Math.max(4, Math.round(H * 0.008));
+    const windowInnerTop = win.y + win.h * 0.04;
+    const ctY0Float = Math.max(windowInnerTop, topThirdY + topThirdPadding);
+    const y0 = clamp(Math.floor(ctY0Float), 0, H-1);
+    const y1 = clamp(Math.ceil(win.y + win.h * 0.96), y0 + 1, H);
     const h = Math.max(1, y1-y0);
 
     const raw = [];
@@ -1143,9 +1151,9 @@
     else result = 'Invalid';
 
     return {
-      source:'ct-red-profile-center-27-zone',
+      source:'ct-red-profile-center-27-zone-below-top-third',
       x0, x1, y0, y1, h,
-      zone:{x:x0, y:y0, w:Math.max(1, x1-x0), h:Math.max(1, y1-y0), startRatio:ctStartRatio, endRatio:ctEndRatio, widthRatio:ctEndRatio-ctStartRatio},
+      zone:{x:x0, y:y0, w:Math.max(1, x1-x0), h:Math.max(1, y1-y0), startRatio:ctStartRatio, endRatio:ctEndRatio, widthRatio:ctEndRatio-ctStartRatio, topThirdY:Math.round(topThirdY), topThirdPadding:topThirdPadding, yLimitedByTopThird:(ctY0Float > windowInnerTop + 0.5)},
       raw, profile:positive, baseline:bg, mean:stat.mean, std:stat.std,
       maxScore, threshold,
       cRange, tRange,
