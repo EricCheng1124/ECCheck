@@ -198,7 +198,16 @@
     if (uiOk) {
       resultEl.classList.add('ok');
       const sampleFallback = r.features && r.features.sampleSource && r.features.sampleSource.indexOf('fallback') >= 0;
-      if (r.outerOnlyOk) {
+      const sampleConfirmed = !!(r.sampleConfirmed || (r.features && r.features.sampleSource && r.features.sampleSource.indexOf('sample-s-zone-confirmed') >= 0));
+      const fixedWindowConfirmed = !!(r.features && r.features.windowSource && r.features.windowSource.indexOf('fixed-ratio-window') >= 0);
+
+      // v30.7：先判斷 S Well 是否已由 S-zone 確認，再判斷 outerOnly。
+      // v30.6 的演算法已經 realSample=YES，但 UI 仍被 outerOnlyOk 文字蓋掉。
+      if (sampleConfirmed && fixedWindowConfirmed) {
+        resultEl.textContent = 'Outer frame, Window, and S Well detected.';
+      } else if (sampleConfirmed) {
+        resultEl.textContent = 'Outer frame and S Well detected. Window is fixed by ratio.';
+      } else if (r.outerOnlyOk) {
         resultEl.textContent = 'Outer frame detected. Window/S Well not confirmed yet.';
       } else if (r.partialMessage || sampleFallback) {
         resultEl.textContent = 'Outer frame and Window detected. S Well not confirmed yet.';

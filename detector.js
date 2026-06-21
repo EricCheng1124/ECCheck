@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v30.6-s-zone-simple';
+  const VERSION = 'v30.7-s-zone-ui-debug';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -1357,6 +1357,7 @@ function candidateFeatureScore(srcCanvas, cand)
         (bestHasTrustedRedWindow || bestHasRealSample)
       );
       const outerOnlyOk = !!(
+        !bestHasTrustedFeature &&
         bestOuterGeometryOk &&
         best.outerScore >= 9000 &&
         bestAreaRatio >= 0.075 &&
@@ -1385,6 +1386,8 @@ dbg += 'Bright Foreground: included as candidate source<br>';
 dbg += 'Raw Candidates: ' + rawCands.length + '<br>';
 dbg += 'Scored Candidates: ' + scored.length + '<br>';
 dbg += 'Final Gate: outer=' + (bestOuterGeometryOk ? 'PASS' : 'FAIL') + ' / trustedFeature=' + (bestHasTrustedFeature ? 'PASS' : 'FAIL') + ' / redWindow=' + (bestHasTrustedRedWindow ? 'YES' : 'NO') + ' / realSample=' + (bestHasRealSample ? 'YES' : 'NO') + '<br>';
+dbg += 'UI Status: ' + (bestHasRealSample ? 'FULL PASS - S Well confirmed' : (outerOnlyOk ? 'OUTER ONLY' : (partialMessage ? 'PARTIAL' : (bestOk ? 'PASS' : 'FAIL')))) + '<br>';
+dbg += 'Detection Mode: window=' + ((features && features.windowSource) ? features.windowSource : '-') + ' / sample=' + ((features && features.sampleSource) ? features.sampleSource : '-') + ' / orientation=' + ((features && features.orientation) ? features.orientation : '-') + '<br>';
 dbg += 'Final Reason: ' + (bestOk ? (outerOnlyOk ? 'outer-only-ok, Window/S Well not confirmed yet' : (partialMessage ? 'outer+red-window-ok, S Well not confirmed yet' : 'outer+real-feature-ok')) : failReason) + '<br>';
 dbg += 'Final Force: finalGate=' + (forceOkByFinalGate ? 'YES' : 'NO') + ' / strongCandidate=' + (forceOkByStrongCandidate ? 'YES' : 'NO') + ' / outerOnly=' + (outerOnlyOk ? 'YES' : 'NO') + '<br>';
 dbg += 'Best Gate Detail: areaRatio=' + (bestAreaRatio*100).toFixed(2) + '% / ratio=' + best.ratio.toFixed(2) + ' / outerScore=' + Math.round(best.outerScore||0) + ' / appearance=' + (bestAppearanceOk ? 'PASS':'FAIL') + ' / center=' + (bestCenterOk ? 'PASS':'FAIL') + '<br><hr>';
@@ -1461,7 +1464,7 @@ scored.forEach((c,i)=>
 result={
     version:VERSION,
     ok:bestOk,
-    reason:bestOk ? (outerOnlyOk ? best.method+'+outer-only-pass' : (partialMessage ? best.method+'+red-window-outer-pass' : best.method+'+real-feature-gate')) : failReason,
+    reason:bestOk ? (bestHasRealSample ? best.method+'+s-zone-real-feature-gate' : (outerOnlyOk ? best.method+'+outer-only-pass' : (partialMessage ? best.method+'+red-window-outer-pass' : best.method+'+real-feature-gate'))) : failReason,
     ratio:best.ratio,
     areaRatio:best.rectArea/imgArea,
     fill:best.fill,
