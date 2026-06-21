@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v31.11-ct-pink-dark-combined';
+  const VERSION = 'v31.12-ct-score-only-shape-warning';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -1042,15 +1042,18 @@
     const maxShoulderMaxRatio = 0.55;    // v31.3：旁邊有尖刺，直接排除
     const maxNearShoulderRatio = 0.50;   // v31.3：主峰旁邊有胖平台，直接排除
 
+    // v31.12：Shape Filter 改成 Warning，不再否決 C/T。
+    // 目前實測主要問題是「已抓到真正線段，但被 shoulder / width / quality 誤殺」。
+    // 因此唯一硬性淘汰條件只保留 below-threshold。
+    const warnings = [];
+    if (shoulderRatio > maxShoulderRatio) warnings.push('shoulder-too-fat');
+    if (shoulderMaxRatio > maxShoulderMaxRatio) warnings.push('shoulder-spike-nearby');
+    if (nearShoulderRatio > maxNearShoulderRatio) warnings.push('near-shoulder-platform');
+    if (drop < minDrop) warnings.push('low-side-drop');
+    if (sharpness < minSharpness) warnings.push('not-sharp');
+
     let reject = '';
     if (score < threshold) reject = 'below-threshold';
-    // v31.10：不再用 width 直接判死刑。
-    // 實測發現背景斜坡會把真正 C 線算成很寬，造成誤殺。
-    else if (shoulderRatio > maxShoulderRatio) reject = 'shoulder-too-fat';
-    else if (shoulderMaxRatio > maxShoulderMaxRatio) reject = 'shoulder-spike-nearby';
-    else if (nearShoulderRatio > maxNearShoulderRatio) reject = 'near-shoulder-platform';
-    else if (drop < minDrop) reject = 'low-side-drop';
-    else if (sharpness < minSharpness) reject = 'not-sharp';
 
     return {
       y,
@@ -1077,6 +1080,7 @@
       softMaxWidth,
       detected: !reject,
       reject: reject || 'PASS',
+      warning: warnings.length ? warnings.join(',') : '-',
       label
     };
   }
@@ -1214,15 +1218,16 @@
     const allPeaks = rawPeaks.map(p => {
       const q = qualifyPeak(positive, p, threshold, fullRange, h, 'P');
       const quality = calcQuality(q);
+      // v31.12：動態峰只用 score / threshold 決定是否可選。
+      // quality、shoulder、width 只做排序輔助與 warning，不再直接 reject。
       let reject = '';
-      if (q.score < candidateFloor) reject = 'below-candidate-floor';
-      else if (quality < Math.max(3.6, threshold * 0.42)) reject = 'low-shape-quality';
+      if (q.score < threshold) reject = 'below-threshold';
       return Object.assign({}, q, {
         quality,
         detected: !reject,
         reject: reject || 'PASS'
       });
-    }).sort((a,b)=>b.quality-a.quality);
+    }).sort((a,b)=>b.score-a.score);
 
     const selected = [];
     for (const p of allPeaks) {
@@ -1245,7 +1250,7 @@
         for (let j=i+1; j<selected.length; j++) {
           const dy = selected[j].y - selected[i].y;
           if (dy < minSep) continue;
-          const pairScore = selected[i].quality + selected[j].quality + Math.min(1, dy / Math.max(1, h*0.28)) * threshold * 0.25;
+          const pairScore = selected[i].score + selected[j].score + Math.min(1, dy / Math.max(1, h*0.28)) * threshold * 0.25;
           if (pairScore > bestPairScore) { bestPairScore = pairScore; bestPair = [selected[i], selected[j]]; }
         }
       }
@@ -1296,18 +1301,18 @@
     const tRange = {start:tFallbackRange.start, end:tFallbackRange.end};
 
     const peakDebug = allPeaks.slice(0, 8).map(p =>
-      `y=${(y0+p.y).toFixed(0)}, score=${p.score.toFixed(1)}, q=${p.quality.toFixed(1)}, w=${p.width}, shoulder=${p.shoulderRatio.toFixed(2)}, near=${p.nearShoulderRatio.toFixed(2)}, ${p.reject}`
+      `y=${(y0+p.y).toFixed(0)}, score=${p.score.toFixed(1)}, q=${p.quality.toFixed(1)}, w=${p.width}, shoulder=${p.shoulderRatio.toFixed(2)}, near=${p.nearShoulderRatio.toFixed(2)}, reject=${p.reject}, warning=${p.warning || '-'}`
     );
 
     return {
-      source:'ct-combined-pink-dark-profile-v31-11',
+      source:'ct-combined-pink-dark-profile-v31-12-score-only',
       x0, x1, y0, y1, h,
       zone:{x:x0, y:y0, w:Math.max(1, x1-x0), h:Math.max(1, y1-y0), startRatio:ctStartRatio, endRatio:ctEndRatio, widthRatio:ctEndRatio-ctStartRatio, topThirdY:Math.round(topThirdY), topThirdPadding:topThirdPadding, yLimitedByTopThird:(ctY0Float > windowInnerTop + 0.5)},
       raw, profile:positive, baseline:bg, rawBaseline, rawMedian, rawMax, pinkMax, darkMax, combinedMax, selectedMode, lumBackground, lumMedian, mean:stat.mean, std:stat.std,
       maxScore, threshold, candidateFloor, minSep,
       cRange, tRange,
-      cPeak:{y:cQ.y, absY:y0+cQ.y, score:cQ.score, detected:cDetected, width:cQ.width, left:y0+cQ.left, right:y0+cQ.right, drop:cQ.drop, sharpness:cQ.sharpness, shoulderRatio:cQ.shoulderRatio, shoulderMaxRatio:cQ.shoulderMaxRatio, nearShoulderRatio:cQ.nearShoulderRatio, quality:cQ.quality || 0, reject:cQ.reject, maxWidth:cQ.maxWidth},
-      tPeak:{y:tQ.y, absY:y0+tQ.y, score:tQ.score, detected:tDetected, width:tQ.width, left:y0+tQ.left, right:y0+tQ.right, drop:tQ.drop, sharpness:tQ.sharpness, shoulderRatio:tQ.shoulderRatio, shoulderMaxRatio:tQ.shoulderMaxRatio, nearShoulderRatio:tQ.nearShoulderRatio, quality:tQ.quality || 0, reject:tQ.reject, maxWidth:tQ.maxWidth},
+      cPeak:{y:cQ.y, absY:y0+cQ.y, score:cQ.score, detected:cDetected, width:cQ.width, left:y0+cQ.left, right:y0+cQ.right, drop:cQ.drop, sharpness:cQ.sharpness, shoulderRatio:cQ.shoulderRatio, shoulderMaxRatio:cQ.shoulderMaxRatio, nearShoulderRatio:cQ.nearShoulderRatio, quality:cQ.quality || 0, reject:cQ.reject, warning:cQ.warning || '-', maxWidth:cQ.maxWidth},
+      tPeak:{y:tQ.y, absY:y0+tQ.y, score:tQ.score, detected:tDetected, width:tQ.width, left:y0+tQ.left, right:y0+tQ.right, drop:tQ.drop, sharpness:tQ.sharpness, shoulderRatio:tQ.shoulderRatio, shoulderMaxRatio:tQ.shoulderMaxRatio, nearShoulderRatio:tQ.nearShoulderRatio, quality:tQ.quality || 0, reject:tQ.reject, warning:tQ.warning || '-', maxWidth:tQ.maxWidth},
       rejectedPeaks:allPeaks.filter(p=>!p.detected).slice(0,6).map(p=>`y${(y0+p.y).toFixed(0)}:${p.reject}`),
       peakDebug,
       allPeakCount:allPeaks.length,
