@@ -1,5 +1,5 @@
-# ASAP Check v31.5
+# ASAP Check v31.6
 
-- CT Analyze Zone uses Window center 27% width.
-- CT Analyze Zone Y starts below the Top S one-third boundary.
-- Prevents waveform from being calculated above the Top S line.
+- Extended Window ratio downward after orientation correction.
+- CT zone now follows the extended Window so T line stays inside the analysis range.
+- Version cache updated to v31.6.

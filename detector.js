@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v31.5-ct-zone-below-top-third';
+  const VERSION = 'v31.6-window-extended-after-rotation';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -447,19 +447,20 @@
   }
 
   function fallbackWindowFromGeometry(W,H, orientation) {
-    // v30.3：Window 是內部小試紙槽，不是紅線外推的大框。
-    // normal：Window 在中上段；inverted：Window 在中下段。
+    // v31.6：Window 是定位用的大範圍試紙槽，不是只框住舊版狹窄比例。
+    // 翻轉校正後，真正 T 線可能落在舊 Window 下緣外，因此 normal Window 向下延伸。
+    // normal：Window 在中上段但下緣延伸到約 62%H；inverted：保持上下對稱，用於旋轉前評分。
     const w = Math.round(W * 0.21);
-    const h = Math.round(H * 0.30);
+    const h = Math.round(H * 0.38);
     const cx = Math.round(W * 0.50);
-    const cy = orientation === 'inverted' ? Math.round(H * 0.61) : Math.round(H * 0.39);
+    const cy = orientation === 'inverted' ? Math.round(H * 0.57) : Math.round(H * 0.43);
     return {
       x: clamp(cx - w/2, 0, W-1),
       y: clamp(cy - h/2, 0, H-1),
       w: clamp(w, 1, W),
       h: clamp(h, 1, H),
       cx, cy,
-      source:'fallback-slot-window-ratio'
+      source:'fixed-ratio-window-extended'
     };
   }
 
@@ -877,14 +878,14 @@
 
     // 注意：這裡是在「尚未旋轉前」的位置。若 inverted，S 洞在上、Window 在下。
     const windowBox = isInverted
-      ? makeRatioBox(W,H,0.20,0.42,0.72,0.80)
-      : makeRatioBox(W,H,0.20,0.20,0.72,0.58);
+      ? makeRatioBox(W,H,0.20,0.38,0.72,0.76)
+      : makeRatioBox(W,H,0.20,0.24,0.72,0.62);
 
     const sampleBox = directionAnalysis.chosenBox;
 
     let win = fallbackWindowFromGeometry(W, H, name);
     if (win) {
-      win.source = 'fixed-ratio-window';
+      win.source = 'fixed-ratio-window-extended';
       win = makeWindowSafe(win, W, H);
     }
 
@@ -895,7 +896,7 @@
       count: 1,
       debug: [{
         x:Math.round(windowBox.x), y:Math.round(windowBox.y), w:Math.round(windowBox.w), h:Math.round(windowBox.h),
-        aspect:windowBox.h/Math.max(1,windowBox.w), fill:1, centerScore:1, score:0, reject:'fixed-ratio-window'
+        aspect:windowBox.h/Math.max(1,windowBox.w), fill:1, centerScore:1, score:0, reject:'fixed-ratio-window-extended'
       }]
     };
 
