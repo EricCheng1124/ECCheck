@@ -110,11 +110,12 @@
 
   function drawMetadataOverlay(ctx, W, H, opt) {
     const ts = getTimestampParts();
+    const regionText = getRegionText();
     const lines = [
       `Result : ${lastResultText || 'Invalid'}`,
       `Date   : ${ts.date}`,
       `Time   : ${ts.time}`,
-      `Region : ${getRegionText()}`
+      `GPS    : ${regionText}`
     ];
 
     const area = opt || {};
@@ -125,7 +126,7 @@
 
     // v31.22：資訊框不可再被右側區域裁切。
     // 先用較大的字，再依照 side area 寬度自動縮小，確保 Region/GPS 完整顯示。
-    let fontSize = Math.max(13, Math.round(Math.min(W, H) / 24));
+    let fontSize = Math.max(18, Math.round(Math.min(W, H) / 18));
     let pad = Math.max(10, Math.round(fontSize * 0.70));
     let lineH = Math.round(fontSize * 1.42);
 
@@ -135,7 +136,7 @@
     let textW = Math.max(...lines.map(t => ctx.measureText(t).width));
     const maxBoxW = Math.max(80, areaW - pad * 2);
 
-    while (textW + pad * 2.4 > maxBoxW && fontSize > 10) {
+    while (textW + pad * 2.4 > maxBoxW && fontSize > 15) {
       fontSize -= 1;
       pad = Math.max(8, Math.round(fontSize * 0.68));
       lineH = Math.round(fontSize * 1.40);
@@ -191,7 +192,7 @@
 
     const cropW = cropCanvas.width;
     const cropH = cropCanvas.height;
-    const sideW = Math.max(260, Math.round(cropW * 0.95));
+    const sideW = Math.max(340, Math.round(cropW * 1.18));
     const gap = Math.max(16, Math.round(cropW * 0.055));
     const W = cropW + gap + sideW;
     const H = cropH;

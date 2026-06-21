@@ -1452,7 +1452,7 @@
 
     // 顯示用 fallback：即使沒有 detected，也列出 C/T 區域附近最強峰，方便 debug。
     const cFallbackRange = {start:Math.round(h*0.08), end:Math.round(h*0.55)};
-    const tFallbackRange = {start:Math.round(h*0.42), end:Math.round(h*0.92)};
+    const tFallbackRange = {start:Math.round(h*0.44), end:Math.round(h*0.76)};
     function fallbackPeak(label, range) {
       const raw = maxInRange(positive, range.start, range.end);
       const q = qualifyPeak(positive, raw, threshold, range, h, label);
@@ -1533,6 +1533,20 @@
       !(tQuality < 3.2 && tShoulder > 0.88 && tNearShoulder > 0.88)
     );
 
+    // v31.23：T 線位置保險。
+    // T 一定要在 C 線下方一段合理距離，且不能落到 Window/slot 太底部。
+    // 這可避免把 C 線下方的背景陰影、試紙槽底部平台或 W 框底部亮度變化誤判成 T。
+    const tGapFromC = (tQ && cQ) ? (tQ.y - cQ.y) : -9999;
+    const tMinGap = Math.max(16, Math.round(h * 0.12));
+    const tMaxGap = Math.max(tMinGap + 12, Math.round(h * 0.38));
+    const tMaxYFromWindow = Math.round(h * 0.76);
+    const tPositionOk = !!(
+      tQ && cQ &&
+      tGapFromC >= tMinGap &&
+      tGapFromC <= tMaxGap &&
+      tQ.y <= tMaxYFromWindow
+    );
+
     const tShapeOk = (tWeakShapeOk || tStrongShapeOk) && !tHardPlatformReject;
 
     const tDetected = !!(
@@ -1541,7 +1555,8 @@
       cDetected &&
       tQ.score >= tThreshold &&
       tRed.ok &&
-      tShapeOk
+      tShapeOk &&
+      tPositionOk
     );
 
     cQ.detected = cDetected;
@@ -1557,6 +1572,7 @@
     else if (!tRed.ok) tQ.reject = 'no-red-continuity';
     else if (tHardPlatformReject) tQ.reject = 'platform-false-t';
     else if (!tShapeOk) tQ.reject = 'bad-t-shape-platform';
+    else if (!tPositionOk) tQ.reject = 'bad-t-position';
     else tQ.reject = 'PASS';
 
     // 防呆：單峰若在下半部，只能算 T-like，沒有 C，所以 Invalid。
@@ -2282,6 +2298,7 @@ scored.forEach((c,i)=>
       dbg += `C Width=${ct.cPeak.width} / HalfWidth=${ct.cPeak.halfWidth || ct.cPeak.width} / MaxWidth=${ct.cPeak.maxWidth} / Drop=${ct.cPeak.drop.toFixed(1)} / Sharpness=${ct.cPeak.sharpness.toFixed(2)} / Quality=${(ct.cPeak.quality || 0).toFixed(1)} / Shoulder=${ct.cPeak.shoulderRatio.toFixed(2)} / NearShoulder=${ct.cPeak.nearShoulderRatio.toFixed(2)} / Reject=${ct.cPeak.reject}<br>`;
       dbg += `T Score=${ct.tPeak.score.toFixed(1)} / T Y=${ct.tPeak.absY.toFixed(0)} / T Detected=${ct.tPeak.detected ? 'YES' : 'NO'} / T Selected=${ct.tPeak.selected ? 'YES' : 'NO'} / T Range=${ct.tRange.start}-${ct.tRange.end}<br>`;
       dbg += `T Relative Threshold=${ct.tThreshold.toFixed(1)} / T/C Ratio=${ct.tcRatio.toFixed(2)}<br>`;
+      if (ct.tPositionGate) dbg += `T Position Gate：gap=${ct.tPositionGate.gap} / allow=${ct.tPositionGate.minGap}-${ct.tPositionGate.maxGap} / maxY=${ct.tPositionGate.maxY} / ok=${ct.tPositionGate.ok ? 'YES' : 'NO'}<br>`;
       dbg += `T Red Continuity=${ct.tPeak.redContinuity.ok ? 'YES' : 'NO'} / Run=${ct.tPeak.redContinuity.run}/${ct.tPeak.redContinuity.minRun} / Ratio=${ct.tPeak.redContinuity.ratio.toFixed(2)}<br>`;
       dbg += `T Width=${ct.tPeak.width} / HalfWidth=${ct.tPeak.halfWidth || ct.tPeak.width} / MaxWidth=${ct.tPeak.maxWidth} / Drop=${ct.tPeak.drop.toFixed(1)} / Sharpness=${ct.tPeak.sharpness.toFixed(2)} / Quality=${(ct.tPeak.quality || 0).toFixed(1)} / Shoulder=${ct.tPeak.shoulderRatio.toFixed(2)} / NearShoulder=${ct.tPeak.nearShoulderRatio.toFixed(2)} / Reject=${ct.tPeak.reject}<br>`;
       if (ct.rejectedPeaks && ct.rejectedPeaks.length) dbg += `Rejected Peaks=${ct.rejectedPeaks.join(', ')}<br>`;
