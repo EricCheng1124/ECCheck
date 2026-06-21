@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v31.30-ct-wide-sampling-fix';
+  const VERSION = 'v31.31-ct-peak-debug-only';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -1398,16 +1398,54 @@
       return peaks;
     }
 
-    const rawPeaks = findLocalPeaks(positive);
+    // v31.31：Debug only，不改判斷結果。
+    // 目的：確認同一條線是否被 pink/dark/combined 重複建立成 peak，造成 C/T 取到同一個 y。
+    const pinkPeakProfile = pinkPositive.slice();
+    const darkPeakProfile = darkSmooth.map(v => v * darkWeight);
+    const combinedPeakProfile = positive.slice();
+
+    function peakSourceAt(y) {
+      const pink = pinkPeakProfile[y] || 0;
+      const dark = darkPeakProfile[y] || 0;
+      const combined = combinedPeakProfile[y] || 0;
+      let source = 'combined';
+      if (pink >= dark) source = dark > pink * 0.60 ? 'mixed-pink' : 'pink';
+      else source = pink > dark * 0.60 ? 'mixed-dark' : 'dark';
+      return {source, pink, dark, combined};
+    }
+
+    function summarizeRawPeaks(peaks, profile, sourceName) {
+      return peaks.slice(0, 10).map(p => {
+        const src = peakSourceAt(p.y);
+        return `y=${(y0+p.y).toFixed(0)}, local=${p.y}, score=${(profile[p.y] || p.score || 0).toFixed(1)}, source=${sourceName}, pink=${src.pink.toFixed(1)}, dark=${src.dark.toFixed(1)}, combined=${src.combined.toFixed(1)}`;
+      });
+    }
+
+    const rawPinkPeaks = findLocalPeaks(pinkPeakProfile);
+    const rawDarkPeaks = findLocalPeaks(darkPeakProfile);
+    const rawCombinedPeaks = findLocalPeaks(combinedPeakProfile);
+
+    const rawPeakDebug = {
+      pink: summarizeRawPeaks(rawPinkPeaks, pinkPeakProfile, 'pink'),
+      dark: summarizeRawPeaks(rawDarkPeaks, darkPeakProfile, 'dark'),
+      combined: summarizeRawPeaks(rawCombinedPeaks, combinedPeakProfile, 'combined')
+    };
+
+    const rawPeaks = rawCombinedPeaks;
     const allPeaks = rawPeaks.map(p => {
       const q = qualifyPeak(positive, p, threshold, fullRange, h, 'P');
       const quality = calcQuality(q);
+      const src = peakSourceAt(p.y);
       // v31.12：動態峰只用 score / threshold 決定是否可選。
       // quality、shoulder、width 只做排序輔助與 warning，不再直接 reject。
       let reject = '';
       if (q.score < threshold) reject = 'below-threshold';
       return Object.assign({}, q, {
         quality,
+        peakSource: src.source,
+        pinkScore: src.pink,
+        darkScore: src.dark,
+        combinedScore: src.combined,
         detected: !reject,
         reject: reject || 'PASS'
       });
@@ -1599,7 +1637,11 @@
     const tRange = {start:tFallbackRange.start, end:tFallbackRange.end};
 
     const peakDebug = allPeaks.slice(0, 8).map(p =>
-      `y=${(y0+p.y).toFixed(0)}, score=${p.score.toFixed(1)}, q=${p.quality.toFixed(1)}, selected=${p.selected ? 'YES' : 'NO'}, w=${p.width}, shoulder=${p.shoulderRatio.toFixed(2)}, near=${p.nearShoulderRatio.toFixed(2)}, reject=${p.reject}, warning=${p.warning || '-'}`
+      `y=${(y0+p.y).toFixed(0)}, local=${p.y}, score=${p.score.toFixed(1)}, q=${p.quality.toFixed(1)}, src=${p.peakSource || '-'}, pink=${(p.pinkScore || 0).toFixed(1)}, dark=${(p.darkScore || 0).toFixed(1)}, combined=${(p.combinedScore || 0).toFixed(1)}, selected=${p.selected ? 'YES' : 'NO'}, w=${p.width}, shoulder=${p.shoulderRatio.toFixed(2)}, near=${p.nearShoulderRatio.toFixed(2)}, reject=${p.reject}, warning=${p.warning || '-'}`
+    );
+
+    const selectedDebug = selected.slice(0, 8).map(p =>
+      `y=${(y0+p.y).toFixed(0)}, local=${p.y}, score=${p.score.toFixed(1)}, src=${p.peakSource || '-'}, reject=${p.reject}`
     );
 
     return {
@@ -1612,6 +1654,8 @@
       cPeak:{y:cQ.y, absY:y0+cQ.y, score:cQ.score, detected:cDetected, selected:cSelected, redContinuity:cRed, width:cQ.width, left:y0+cQ.left, right:y0+cQ.right, drop:cQ.drop, sharpness:cQ.sharpness, shoulderRatio:cQ.shoulderRatio, shoulderMaxRatio:cQ.shoulderMaxRatio, nearShoulderRatio:cQ.nearShoulderRatio, quality:cQ.quality || 0, reject:cQ.reject, warning:cQ.warning || '-', maxWidth:cQ.maxWidth},
       tPeak:{y:tQ.y, absY:y0+tQ.y, score:tQ.score, detected:tDetected, selected:tSelected, redContinuity:tRed, width:tQ.width, left:y0+tQ.left, right:y0+tQ.right, drop:tQ.drop, sharpness:tQ.sharpness, shoulderRatio:tQ.shoulderRatio, shoulderMaxRatio:tQ.shoulderMaxRatio, nearShoulderRatio:tQ.nearShoulderRatio, quality:tQ.quality || 0, reject:tQ.reject, warning:tQ.warning || '-', maxWidth:tQ.maxWidth},
       rejectedPeaks:allPeaks.filter(p=>!p.detected).slice(0,6).map(p=>`y${(y0+p.y).toFixed(0)}:${p.reject}`),
+      rawPeakDebug,
+      selectedDebug,
       peakDebug,
       allPeakCount:allPeaks.length,
       selectedPeakCount:selected.length,
@@ -2303,6 +2347,12 @@ scored.forEach((c,i)=>
       if (!(ct.selectedPeakCount || 0)) dbg += `<b style="color:#dc2626">No CT peak selected：C/T guide lines are hidden.</b><br>`;
       if (ct.zone) dbg += `CT Analyze Zone=x${ct.zone.x}, y${ct.zone.y}, w=${ct.zone.w}, h=${ct.zone.h} / ratio=${(ct.zone.widthRatio*100).toFixed(1)}% / xRatio=${(ct.zone.startRatio*100).toFixed(1)}-${(ct.zone.endRatio*100).toFixed(1)}%<br>`;
       dbg += `Dynamic Peaks=${ct.allPeakCount || 0} / Selected=${ct.selectedPeakCount || 0} / CandidateFloor=${(ct.candidateFloor || 0).toFixed(1)} / MinSep=${ct.minSep || 0}<br>`;
+      if (ct.rawPeakDebug) {
+        if (ct.rawPeakDebug.pink && ct.rawPeakDebug.pink.length) dbg += `Raw Pink Peaks：${ct.rawPeakDebug.pink.join(' | ')}<br>`;
+        if (ct.rawPeakDebug.dark && ct.rawPeakDebug.dark.length) dbg += `Raw Dark Peaks：${ct.rawPeakDebug.dark.join(' | ')}<br>`;
+        if (ct.rawPeakDebug.combined && ct.rawPeakDebug.combined.length) dbg += `Raw Combined Peaks：${ct.rawPeakDebug.combined.join(' | ')}<br>`;
+      }
+      if (ct.selectedDebug && ct.selectedDebug.length) dbg += `Selected Peaks After Merge：${ct.selectedDebug.join(' | ')}<br>`;
       dbg += `C Score=${ct.cPeak.score.toFixed(1)} / C Y=${ct.cPeak.absY.toFixed(0)} / C Detected=${ct.cPeak.detected ? 'YES' : 'NO'} / C Selected=${ct.cPeak.selected ? 'YES' : 'NO'} / C Range=${ct.cRange.start}-${ct.cRange.end}<br>`;
       dbg += `C Red Continuity=${ct.cPeak.redContinuity.ok ? 'YES' : 'NO'} / Run=${ct.cPeak.redContinuity.run}/${ct.cPeak.redContinuity.minRun} / Ratio=${ct.cPeak.redContinuity.ratio.toFixed(2)}<br>`;
       dbg += `C Width=${ct.cPeak.width} / HalfWidth=${ct.cPeak.halfWidth || ct.cPeak.width} / MaxWidth=${ct.cPeak.maxWidth} / Drop=${ct.cPeak.drop.toFixed(1)} / Sharpness=${ct.cPeak.sharpness.toFixed(2)} / Quality=${(ct.cPeak.quality || 0).toFixed(1)} / Shoulder=${ct.cPeak.shoulderRatio.toFixed(2)} / NearShoulder=${ct.cPeak.nearShoulderRatio.toFixed(2)} / Reject=${ct.cPeak.reject}<br>`;
