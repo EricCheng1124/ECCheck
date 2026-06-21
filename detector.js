@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v31.20-halfwidth-t-gate-auto-gps';
+  const VERSION = 'v31.21-negative-platform-t-gate';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -1496,29 +1496,44 @@
 
     const tcRatio = cQ && cQ.score > 0 ? tQ.score / cQ.score : 0;
 
-    // v31.19：T 線加回 shape gate。
-    // 目的：保留淡 T 線，但排除大面積陰影/底色平台造成的假 T。
-    // 真 T 可以淡，但仍應該具備一定 sharpness / quality，且不能寬到像整片平台。
+    // v31.21：T 線加回「平台假線」硬性過濾。
+    // 問題樣本：T 位置肉眼無色帶，但背景/陰影形成寬平台，會讓 T score 過門檻。
+    // 真 T 線可以很淡，但仍應是窄、局部、相對尖的色帶；若 width/shoulder/nearShoulder 過大，直接排除。
     const tCoreWidth = tQ ? (tQ.halfWidth || tQ.width || 9999) : 9999;
     const tCoreSharpness = tQ ? (tQ.halfSharpness || tQ.sharpness || 0) : 0;
+    const tQuality = tQ ? (tQ.quality || 0) : 0;
+    const tShoulder = tQ ? (tQ.shoulderRatio || 0) : 0;
+    const tNearShoulder = tQ ? (tQ.nearShoulderRatio || 0) : 0;
+    const tMaxWidth = tQ ? (tQ.maxWidth || 1) : 1;
 
-    // v31.20：T shape gate 改看 half-width 核心寬度，不再看容易被背景緩坡放大的 full width。
-    // 這樣清楚陽性的 T 線不會因 full width=100+ 被誤殺；真正平台型假 T 仍會因 core 太寬/太鈍被踢掉。
+    const tHardPlatformReject = !!(
+      tQ &&
+      (
+        tCoreWidth > Math.max(40, tMaxWidth * 3.4) ||
+        (tQuality < 4.0 && tShoulder > 0.90) ||
+        (tQuality < 4.0 && tNearShoulder > 0.90) ||
+        (tCoreSharpness < 0.35 && (tShoulder > 0.85 || tNearShoulder > 0.85))
+      )
+    );
+
     const tWeakShapeOk = !!(
       tQ &&
+      !tHardPlatformReject &&
       tCoreSharpness >= 0.85 &&
-      tCoreWidth <= Math.max(12, (tQ.maxWidth || 1) * 2.4) &&
-      ((tQ.quality || 0) >= 1.8 || tcRatio >= 0.55)
+      tCoreWidth <= Math.max(12, tMaxWidth * 2.4) &&
+      (tQuality >= 1.8 || tcRatio >= 0.55)
     );
 
     const tStrongShapeOk = !!(
       tQ &&
+      !tHardPlatformReject &&
       tcRatio >= 0.45 &&
       tCoreSharpness >= 0.55 &&
-      tCoreWidth <= Math.max(16, (tQ.maxWidth || 1) * 3.2)
+      tCoreWidth <= Math.max(16, tMaxWidth * 3.2) &&
+      !(tQuality < 3.2 && tShoulder > 0.88 && tNearShoulder > 0.88)
     );
 
-    const tShapeOk = tWeakShapeOk || tStrongShapeOk;
+    const tShapeOk = (tWeakShapeOk || tStrongShapeOk) && !tHardPlatformReject;
 
     const tDetected = !!(
       tQ &&
@@ -1540,6 +1555,7 @@
     if (!tSelected) tQ.reject = 'not-selected';
     else if (tQ.score < tThreshold) tQ.reject = 'below-relative-threshold';
     else if (!tRed.ok) tQ.reject = 'no-red-continuity';
+    else if (tHardPlatformReject) tQ.reject = 'platform-false-t';
     else if (!tShapeOk) tQ.reject = 'bad-t-shape-platform';
     else tQ.reject = 'PASS';
 

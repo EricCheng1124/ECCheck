@@ -1,3 +1,3 @@
-# ASAP Check v31.20
+# ASAP Check v31.21
 
-Half-width T shape gate + auto GPS metadata overlay.
+Negative platform T-gate fix + layout overlay fix.
