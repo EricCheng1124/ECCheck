@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v31.1-ct-narrow-peak-filter';
+  const VERSION = 'v31.2-ct-shoulder-filter';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -999,16 +999,55 @@
     const drop = score - sideBase;
     const sharpness = score / Math.max(1, width);
 
+    // v31.2：除了峰本身不能太寬，也要檢查主峰旁邊是否有「胖肩峰」。
+    // 真正 C/T 線通常是單一乾淨尖峰；試紙槽邊緣常會在主峰旁邊拖一坨高訊號。
+    const coreRadius = Math.max(2, Math.round(h * 0.010));
+    const shoulderInner = Math.max(coreRadius + 2, Math.round(h * 0.026));
+    const shoulderOuter = Math.max(shoulderInner + 5, Math.round(h * 0.090));
+
+    function avgRange(a, b) {
+      a = Math.max(range.start, Math.floor(a));
+      b = Math.min(range.end, profile.length - 1, Math.ceil(b));
+      if (b < a) return {avg:0, max:0, n:0};
+      let sum = 0, maxv = 0, n = 0;
+      for (let i=a; i<=b; i++) {
+        const v = Math.max(0, profile[i] || 0);
+        sum += v;
+        if (v > maxv) maxv = v;
+        n++;
+      }
+      return {avg:n ? sum/n : 0, max:maxv, n};
+    }
+
+    const leftShoulder = avgRange(y - shoulderOuter, y - shoulderInner);
+    const rightShoulder = avgRange(y + shoulderInner, y + shoulderOuter);
+    const shoulderAvg = Math.max(leftShoulder.avg, rightShoulder.avg);
+    const shoulderMax = Math.max(leftShoulder.max, rightShoulder.max);
+    const shoulderRatio = shoulderAvg / Math.max(1, score);
+    const shoulderMaxRatio = shoulderMax / Math.max(1, score);
+
+    // 也檢查峰值附近之外是否形成連續平台。
+    const nearLeft = avgRange(y - shoulderInner, y - coreRadius - 1);
+    const nearRight = avgRange(y + coreRadius + 1, y + shoulderInner);
+    const nearShoulderAvg = Math.max(nearLeft.avg, nearRight.avg);
+    const nearShoulderRatio = nearShoulderAvg / Math.max(1, score);
+
     // 真正 C/T 線是薄線，試紙邊緣通常是寬峰或平台。
     const maxWidth = Math.max(4, Math.round(h * 0.055));
     const softMaxWidth = Math.max(6, Math.round(h * 0.075));
     const minDrop = Math.max(2.2, threshold * 0.18);
     const minSharpness = Math.max(0.38, threshold / Math.max(12, maxWidth * 2.4));
+    const maxShoulderRatio = 0.42;
+    const maxShoulderMaxRatio = 0.62;
+    const maxNearShoulderRatio = 0.68;
 
     let reject = '';
     if (score < threshold) reject = 'below-threshold';
     else if (width > softMaxWidth) reject = 'too-wide-edge';
     else if (width > maxWidth && drop < threshold * 0.55) reject = 'wide-flat-edge';
+    else if (shoulderRatio > maxShoulderRatio) reject = 'shoulder-too-fat';
+    else if (shoulderMaxRatio > maxShoulderMaxRatio) reject = 'shoulder-spike-nearby';
+    else if (nearShoulderRatio > maxNearShoulderRatio && drop < threshold * 0.95) reject = 'near-shoulder-platform';
     else if (drop < minDrop) reject = 'low-side-drop';
     else if (sharpness < minSharpness) reject = 'not-sharp';
 
@@ -1024,6 +1063,15 @@
       sideBase,
       drop,
       sharpness,
+      shoulderAvg,
+      shoulderMax,
+      shoulderRatio,
+      shoulderMaxRatio,
+      nearShoulderAvg,
+      nearShoulderRatio,
+      shoulderInner,
+      shoulderOuter,
+      maxShoulderRatio,
       maxWidth,
       softMaxWidth,
       detected: !reject,
@@ -1091,8 +1139,8 @@
       raw, profile:positive, baseline:bg, mean:stat.mean, std:stat.std,
       maxScore, threshold,
       cRange, tRange,
-      cPeak:{y:cQ.y, absY:y0+cQ.y, score:cQ.score, detected:cDetected, width:cQ.width, left:y0+cQ.left, right:y0+cQ.right, drop:cQ.drop, sharpness:cQ.sharpness, reject:cQ.reject, maxWidth:cQ.maxWidth},
-      tPeak:{y:tQ.y, absY:y0+tQ.y, score:tQ.score, detected:tDetected, width:tQ.width, left:y0+tQ.left, right:y0+tQ.right, drop:tQ.drop, sharpness:tQ.sharpness, reject:tQ.reject, maxWidth:tQ.maxWidth},
+      cPeak:{y:cQ.y, absY:y0+cQ.y, score:cQ.score, detected:cDetected, width:cQ.width, left:y0+cQ.left, right:y0+cQ.right, drop:cQ.drop, sharpness:cQ.sharpness, shoulderRatio:cQ.shoulderRatio, shoulderMaxRatio:cQ.shoulderMaxRatio, nearShoulderRatio:cQ.nearShoulderRatio, reject:cQ.reject, maxWidth:cQ.maxWidth},
+      tPeak:{y:tQ.y, absY:y0+tQ.y, score:tQ.score, detected:tDetected, width:tQ.width, left:y0+tQ.left, right:y0+tQ.right, drop:tQ.drop, sharpness:tQ.sharpness, shoulderRatio:tQ.shoulderRatio, shoulderMaxRatio:tQ.shoulderMaxRatio, nearShoulderRatio:tQ.nearShoulderRatio, reject:tQ.reject, maxWidth:tQ.maxWidth},
       rejectedPeaks:[cQ, tQ].filter(p=>!p.detected).map(p=>`${p.label}:${p.reject}`),
       peakCount:(cDetected?1:0)+(tDetected?1:0),
       result
@@ -1758,9 +1806,9 @@ scored.forEach((c,i)=>
       dbg += `<b>CT Line Analysis</b><br>`;
       dbg += `Result=${ct.result} / Peak Count=${ct.peakCount} / Threshold=${ct.threshold.toFixed(1)} / Baseline=${ct.baseline.toFixed(1)} / Max=${ct.maxScore.toFixed(1)}<br>`;
       dbg += `C Score=${ct.cPeak.score.toFixed(1)} / C Y=${ct.cPeak.absY.toFixed(0)} / C Detected=${ct.cPeak.detected ? 'YES' : 'NO'} / C Range=${ct.cRange.start}-${ct.cRange.end}<br>`;
-      dbg += `C Width=${ct.cPeak.width} / MaxWidth=${ct.cPeak.maxWidth} / Drop=${ct.cPeak.drop.toFixed(1)} / Sharpness=${ct.cPeak.sharpness.toFixed(2)} / Reject=${ct.cPeak.reject}<br>`;
+      dbg += `C Width=${ct.cPeak.width} / MaxWidth=${ct.cPeak.maxWidth} / Drop=${ct.cPeak.drop.toFixed(1)} / Sharpness=${ct.cPeak.sharpness.toFixed(2)} / Shoulder=${ct.cPeak.shoulderRatio.toFixed(2)} / NearShoulder=${ct.cPeak.nearShoulderRatio.toFixed(2)} / Reject=${ct.cPeak.reject}<br>`;
       dbg += `T Score=${ct.tPeak.score.toFixed(1)} / T Y=${ct.tPeak.absY.toFixed(0)} / T Detected=${ct.tPeak.detected ? 'YES' : 'NO'} / T Range=${ct.tRange.start}-${ct.tRange.end}<br>`;
-      dbg += `T Width=${ct.tPeak.width} / MaxWidth=${ct.tPeak.maxWidth} / Drop=${ct.tPeak.drop.toFixed(1)} / Sharpness=${ct.tPeak.sharpness.toFixed(2)} / Reject=${ct.tPeak.reject}<br>`;
+      dbg += `T Width=${ct.tPeak.width} / MaxWidth=${ct.tPeak.maxWidth} / Drop=${ct.tPeak.drop.toFixed(1)} / Sharpness=${ct.tPeak.sharpness.toFixed(2)} / Shoulder=${ct.tPeak.shoulderRatio.toFixed(2)} / NearShoulder=${ct.tPeak.nearShoulderRatio.toFixed(2)} / Reject=${ct.tPeak.reject}<br>`;
       if (ct.rejectedPeaks && ct.rejectedPeaks.length) dbg += `Rejected Peaks=${ct.rejectedPeaks.join(', ')}<br>`;
     }
 
