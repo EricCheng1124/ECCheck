@@ -1,3 +1,3 @@
-# ASAP Check v31.24
+# ASAP Check v31.25
 
-CT duplicate peak lock: T line cannot reuse the same peak as C line. Adds same-as-c-peak rejection and cache-busted index references.
+CT order pairing lock: ignores top window-edge false peaks, pairs C first then T below with reasonable gap.
