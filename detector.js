@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v31.21-negative-platform-t-gate';
+  const VERSION = 'v31.24-ct-duplicate-peak-lock';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -1549,6 +1549,19 @@
 
     const tShapeOk = (tWeakShapeOk || tStrongShapeOk) && !tHardPlatformReject;
 
+    // v31.24：C/T 不可使用同一個 peak。
+    // 手機/電腦縮放後，refinePeakToRedLine 有機會把 C peak 與 T peak 都吸到同一條 C 線，
+    // 造成同圖在不同裝置判讀不同。這裡做硬性保險：
+    // 1) T 必須在 C 下方；2) C/T 必須有最小距離；3) C/T 線段不可大幅重疊。
+    const ctSamePeakReject = !!(
+      cQ && tQ &&
+      (
+        Math.abs(tQ.y - cQ.y) < tMinGap ||
+        tQ.y <= cQ.y ||
+        Math.max(0, Math.min(cQ.right || cQ.y, tQ.right || tQ.y) - Math.max(cQ.left || cQ.y, tQ.left || tQ.y)) > Math.min(cQ.width || 1, tQ.width || 1) * 0.35
+      )
+    );
+
     const tDetected = !!(
       tQ &&
       tSelected &&
@@ -1556,7 +1569,8 @@
       tQ.score >= tThreshold &&
       tRed.ok &&
       tShapeOk &&
-      tPositionOk
+      tPositionOk &&
+      !ctSamePeakReject
     );
 
     cQ.detected = cDetected;
@@ -1573,6 +1587,7 @@
     else if (tHardPlatformReject) tQ.reject = 'platform-false-t';
     else if (!tShapeOk) tQ.reject = 'bad-t-shape-platform';
     else if (!tPositionOk) tQ.reject = 'bad-t-position';
+    else if (ctSamePeakReject) tQ.reject = 'same-as-c-peak';
     else tQ.reject = 'PASS';
 
     // 防呆：單峰若在下半部，只能算 T-like，沒有 C，所以 Invalid。
@@ -1600,7 +1615,7 @@
       maxScore, threshold, tThreshold, tcRatio, candidateFloor, minSep,
       cRange, tRange,
       cPeak:{y:cQ.y, absY:y0+cQ.y, score:cQ.score, detected:cDetected, selected:cSelected, redContinuity:cRed, width:cQ.width, left:y0+cQ.left, right:y0+cQ.right, drop:cQ.drop, sharpness:cQ.sharpness, shoulderRatio:cQ.shoulderRatio, shoulderMaxRatio:cQ.shoulderMaxRatio, nearShoulderRatio:cQ.nearShoulderRatio, quality:cQ.quality || 0, reject:cQ.reject, warning:cQ.warning || '-', maxWidth:cQ.maxWidth},
-      tPeak:{y:tQ.y, absY:y0+tQ.y, score:tQ.score, detected:tDetected, selected:tSelected, redContinuity:tRed, width:tQ.width, left:y0+tQ.left, right:y0+tQ.right, drop:tQ.drop, sharpness:tQ.sharpness, shoulderRatio:tQ.shoulderRatio, shoulderMaxRatio:tQ.shoulderMaxRatio, nearShoulderRatio:tQ.nearShoulderRatio, quality:tQ.quality || 0, reject:tQ.reject, warning:tQ.warning || '-', maxWidth:tQ.maxWidth},
+      tPeak:{y:tQ.y, absY:y0+tQ.y, score:tQ.score, detected:tDetected, selected:tSelected, redContinuity:tRed, width:tQ.width, left:y0+tQ.left, right:y0+tQ.right, drop:tQ.drop, sharpness:tQ.sharpness, shoulderRatio:tQ.shoulderRatio, shoulderMaxRatio:tQ.shoulderMaxRatio, nearShoulderRatio:tQ.nearShoulderRatio, quality:tQ.quality || 0, reject:tQ.reject, warning:tQ.warning || '-', maxWidth:tQ.maxWidth, sameAsCReject:ctSamePeakReject, gapFromC:tGapFromC, minGap:tMinGap},
       rejectedPeaks:allPeaks.filter(p=>!p.detected).slice(0,6).map(p=>`y${(y0+p.y).toFixed(0)}:${p.reject}`),
       peakDebug,
       allPeakCount:allPeaks.length,
