@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v30.7-s-zone-ui-debug';
+  const VERSION = 'v30.8-third-score-direction';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -472,54 +472,127 @@
 
 
 
-  // v30.6：最簡化方向判斷。
-  // 不再全圖找 S 洞，避免整張卡匣 contour 干擾。
-  // 只在固定比例的 S 洞區域內比較「暗部＋邊緣變化」，哪一端比較像 S 洞就決定方向。
-  function scoreFixedSampleZone(cropCanvas, box, W, H) {
+  // v30.8：三等分方向判斷。
+  // 不追求精準圈出 S 洞，只比較外框 ROI 上三分之一與下三分之一，
+  // 哪一段比較有 S 洞的「中央凹槽 / 橢圓邊緣 / 局部暗部」特徵，就用來決定方向。
+  function scoreThirdSampleZone(cropCanvas, box, W, H) {
     const ctx = cropCanvas.getContext('2d', {willReadFrequently:true});
     const data = ctx.getImageData(0, 0, W, H).data;
-    const x0 = clamp(Math.floor(box.x), 0, W - 1);
-    const x1 = clamp(Math.ceil(box.x + box.w), 0, W);
+
+    // 只看中間區域，降低左右文字、下方橫向溝槽、桌面陰影的干擾。
+    const x0 = clamp(Math.floor(Math.max(box.x, W * 0.25)), 0, W - 1);
+    const x1 = clamp(Math.ceil(Math.min(box.x + box.w, W * 0.75)), 0, W);
     const y0 = clamp(Math.floor(box.y), 0, H - 1);
     const y1 = clamp(Math.ceil(box.y + box.h), 0, H);
 
-    let n = 0, sum = 0, sum2 = 0, dark = 0, edge = 0;
     const lumAt = (x,y) => {
       const i = (y * W + x) * 4;
       return 0.299 * data[i] + 0.587 * data[i+1] + 0.114 * data[i+2];
     };
 
-    for (let y = y0 + 1; y < y1 - 1; y++) {
-      for (let x = x0 + 1; x < x1 - 1; x++) {
-        const yy = lumAt(x, y);
-        sum += yy;
-        sum2 += yy * yy;
-        n++;
-      }
-    }
-
-    const mean = sum / Math.max(1, n);
-    const variance = Math.max(0, sum2 / Math.max(1, n) - mean * mean);
-    const std = Math.sqrt(variance);
-
+    let n = 0, sum = 0, sum2 = 0;
     for (let y = y0 + 2; y < y1 - 2; y++) {
       for (let x = x0 + 2; x < x1 - 2; x++) {
-        const c = lumAt(x, y);
-        const gx = Math.abs(c - lumAt(x + 2, y));
-        const gy = Math.abs(c - lumAt(x, y + 2));
-        if (c < mean - 10 || c < 145) dark++;
-        if (gx + gy > 28) edge++;
+        const yy = lumAt(x,y);
+        sum += yy; sum2 += yy * yy; n++;
       }
     }
 
-    const total = Math.max(1, (x1 - x0 - 4) * (y1 - y0 - 4));
-    const darkRatio = dark / total;
-    const edgeRatio = edge / total;
+    const mean = sum / Math.max(1,n);
+    const std = Math.sqrt(Math.max(0, sum2 / Math.max(1,n) - mean * mean));
 
-    // S 洞區會同時有暗部、橢圓邊緣與內部紋理；單純白塑膠區分數較低。
-    const score = std * 85 + darkRatio * 5200 + edgeRatio * 7600;
+    let weightedEdge = 0;
+    let weightedDark = 0;
+    let weightedVertical = 0;
+    let weightedHorizontal = 0;
+    let weightSum = 0;
+    const rowEdge = new Array(Math.max(1, y1 - y0)).fill(0);
 
-    return {score, mean, std, darkRatio, edgeRatio, box};
+    for (let y = y0 + 3; y < y1 - 3; y++) {
+      for (let x = x0 + 3; x < x1 - 3; x++) {
+        const c = lumAt(x,y);
+        const gx = Math.abs(lumAt(x+2,y) - lumAt(x-2,y));
+        const gy = Math.abs(lumAt(x,y+2) - lumAt(x,y-2));
+        const edge = gx + gy;
+
+        // S 洞通常靠近卡匣中線；越靠中心權重越高。
+        const wx = Math.max(0, 1 - Math.abs(x - W * 0.50) / Math.max(1, W * 0.25));
+        const wy = Math.max(0.35, 1 - Math.abs(y - box.cy) / Math.max(1, box.h * 0.62));
+        const w = wx * wy;
+
+        weightSum += w;
+        if (edge > 24) {
+          weightedEdge += edge * w;
+          rowEdge[y - y0] += w;
+        }
+        if (c < mean - 8 || c < 150) weightedDark += w;
+        if (gx > 16) weightedVertical += w;
+        if (gy > 16) weightedHorizontal += w;
+      }
+    }
+
+    const edgeRatio = weightedEdge / Math.max(1, weightSum * 80);
+    const darkRatio = weightedDark / Math.max(1, weightSum);
+    const verticalRatio = weightedVertical / Math.max(1, weightSum);
+    const horizontalRatio = weightedHorizontal / Math.max(1, weightSum);
+
+    // S 洞是凹槽/橢圓，通常同時有 vertical 與 horizontal 邊緣；
+    // 單純底部橫線會 horizontal 高但 vertical 不足，所以用 balancedEdge 抑制。
+    const balancedEdge = Math.min(verticalRatio, horizontalRatio) * 2.0 + Math.min(edgeRatio, 1.6);
+
+    // 懲罰「很多橫線集中在少數 row」的情況，避免底部溝槽誤判為 S 洞。
+    const maxRowEdge = Math.max(...rowEdge);
+    const rowPenalty = Math.min(1800, maxRowEdge * 140);
+
+    const rawScore =
+      std * 48 +
+      darkRatio * 3600 +
+      balancedEdge * 3100 +
+      verticalRatio * 1700 +
+      horizontalRatio * 800 -
+      rowPenalty;
+
+    const score = Math.max(0, rawScore);
+
+    return {
+      score, mean, std, darkRatio, edgeRatio, verticalRatio, horizontalRatio,
+      balancedEdge, rowPenalty, box, x0, x1, y0, y1
+    };
+  }
+
+  function analyzeThirdDirection(cropCanvas, W, H) {
+    const topBox = makeRatioBox(W, H, 0.12, 0.00, 0.88, 0.34);
+    const bottomBox = makeRatioBox(W, H, 0.12, 0.66, 0.88, 1.00);
+    const top = scoreThirdSampleZone(cropCanvas, topBox, W, H);
+    const bottom = scoreThirdSampleZone(cropCanvas, bottomBox, W, H);
+
+    const topScore = top.score;
+    const bottomScore = bottom.score;
+    const diff = Math.abs(topScore - bottomScore);
+    const ratio = Math.max(topScore, bottomScore) / Math.max(1, Math.min(topScore, bottomScore));
+
+    let direction = 'unknown';
+    let rotate180 = false;
+
+    // 不需要非常準，只要上下分數有明顯差距就決定方向。
+    if (topScore > bottomScore * 1.08 && diff > 450) {
+      direction = 'inverted';
+      rotate180 = true;
+    } else if (bottomScore > topScore * 1.08 && diff > 450) {
+      direction = 'normal';
+      rotate180 = false;
+    } else {
+      // 差距不大時仍選高分者，但標記 low-confidence。
+      direction = topScore > bottomScore ? 'inverted-low-confidence' : 'normal-low-confidence';
+      rotate180 = topScore > bottomScore;
+    }
+
+    const chosenBox = rotate180 ? topBox : bottomBox;
+    const chosenScore = rotate180 ? top : bottom;
+
+    return {
+      top, bottom, topScore, bottomScore, diff, ratio, direction, rotate180, chosenBox, chosenScore
+    };
   }
 
   function fixedSampleFromBox(box, W, H, source, zoneScore) {
@@ -798,18 +871,16 @@
     return {score, hasWin, hasSample, alignScore, gapScore, relationOk, yGap};
   }
 
-  function evaluateInternalTemplate(cropCanvas, norm, W, H, name) {
-    const isNormal = name === 'normal';
+  function makeFixedInternalByDirection(cropCanvas, W, H, directionAnalysis) {
+    const isInverted = !!directionAnalysis.rotate180;
+    const name = isInverted ? 'inverted' : 'normal';
 
-    // Window 固定用比例，不再依賴 contour。
-    const windowBox = isNormal ? makeRatioBox(W,H,0.20,0.20,0.72,0.58) : makeRatioBox(W,H,0.20,0.42,0.72,0.80);
+    // 注意：這裡是在「尚未旋轉前」的位置。若 inverted，S 洞在上、Window 在下。
+    const windowBox = isInverted
+      ? makeRatioBox(W,H,0.20,0.42,0.72,0.80)
+      : makeRatioBox(W,H,0.20,0.20,0.72,0.58);
 
-    // S 洞只在上下固定區域比較，不再全圖找。
-    // normal：S 洞在下方且靠近外框；inverted：S 洞在上方且靠近外框。
-    const sampleBox = isNormal ? makeRatioBox(W,H,0.22,0.58,0.78,0.82) : makeRatioBox(W,H,0.22,0.18,0.78,0.42);
-
-    const rw = findRedWindowInBox(cropCanvas, windowBox, W, H);
-    const wf = {win:null, count:0, debug:[{x:Math.round(windowBox.x),y:Math.round(windowBox.y),w:Math.round(windowBox.w),h:Math.round(windowBox.h),aspect:windowBox.h/Math.max(1,windowBox.w),fill:1,centerScore:1,score:0,reject:'fixed-ratio-window'}]};
+    const sampleBox = directionAnalysis.chosenBox;
 
     let win = fallbackWindowFromGeometry(W, H, name);
     if (win) {
@@ -817,25 +888,33 @@
       win = makeWindowSafe(win, W, H);
     }
 
-    const sZone = scoreFixedSampleZone(cropCanvas, sampleBox, W, H);
-    const sampleThreshold = 900;
-    const sample = sZone.score >= sampleThreshold
-      ? fixedSampleFromBox(sampleBox, W, H, 'sample-s-zone-confirmed', sZone)
-      : null;
+    const rw = findRedWindowInBox(cropCanvas, windowBox, W, H);
+    const sample = fixedSampleFromBox(sampleBox, W, H, 'sample-third-score-confirmed', directionAnalysis.chosenScore);
+
+    const wf = {
+      count: 1,
+      debug: [{
+        x:Math.round(windowBox.x), y:Math.round(windowBox.y), w:Math.round(windowBox.w), h:Math.round(windowBox.h),
+        aspect:windowBox.h/Math.max(1,windowBox.w), fill:1, centerScore:1, score:0, reject:'fixed-ratio-window'
+      }]
+    };
 
     const sf = {
-      count: sample ? 1 : 0,
+      count: 1,
       debug: [{
         x:Math.round(sampleBox.x), y:Math.round(sampleBox.y), w:Math.round(sampleBox.w), h:Math.round(sampleBox.h),
-        circ:0.70, fill:0.50, align:1.00, score:Math.round(sZone.score),
-        reject: sample ? 'PASS-fixed-s-zone' : 'weak-s-zone'
+        circ:0.70, fill:0.50, align:1.00, score:Math.round(directionAnalysis.chosenScore.score),
+        reject:'PASS-third-s-zone'
       }],
-      search:{top:sampleBox.y,bottom:sampleBox.y+sampleBox.h,winCx:sampleBox.cx,maxDx:sampleBox.w/2,box:sampleBox,zoneScore:sZone}
+      search:{
+        top:sampleBox.y, bottom:sampleBox.y+sampleBox.h, winCx:sampleBox.cx, maxDx:sampleBox.w/2,
+        box:sampleBox, zoneScore:directionAnalysis.chosenScore
+      }
     };
 
     const ts = templateScore(name, win, sample, W, H);
-    ts.score += Math.min(5200, sZone.score * 1.2);
-    ts.sZoneScore = sZone.score;
+    ts.score += Math.min(6200, directionAnalysis.chosenScore.score * 1.15);
+    ts.thirdDirection = directionAnalysis;
     if (rw) {
       ts.score += 1600;
       ts.hasRedWindow = true;
@@ -857,20 +936,37 @@
       sampleSearch: sf.search || null,
       windowSearchBox: windowBox,
       sampleSearchBox: sampleBox,
-      templateScore: ts
+      templateScore: ts,
+      directionAnalysis
     };
   }
 
   function drawInternalFeatures(ctx, W, H, f) {
-    // v30.2：裁切圖只畫外框、Window、S Well，不再畫黑底 ROI Only 或大範圍搜尋框。
     ctx.save();
     ctx.strokeStyle = 'rgba(34,197,94,0.98)';
     ctx.lineWidth = Math.max(3, W/160);
     ctx.strokeRect(1, 1, W-2, H-2);
+
+    // v30.8：畫出三等分參考線，方便確認 S 洞方向判斷依據。
+    ctx.setLineDash([6,4]);
+    ctx.strokeStyle = 'rgba(245,158,11,0.95)';
+    ctx.lineWidth = Math.max(1, W/220);
+    ctx.beginPath();
+    ctx.moveTo(2, H/3); ctx.lineTo(W-2, H/3);
+    ctx.moveTo(2, H*2/3); ctx.lineTo(W-2, H*2/3);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    if (f.directionAnalysis) {
+      ctx.fillStyle = 'rgba(245,158,11,0.95)';
+      ctx.font = `${Math.max(9, Math.round(W / 24))}px sans-serif`;
+      ctx.fillText(`Top S ${Math.round(f.directionAnalysis.topScore)}`, 5, Math.max(12, H/3 - 6));
+      ctx.fillText(`Bottom S ${Math.round(f.directionAnalysis.bottomScore)}`, 5, Math.min(H-8, H*2/3 + 16));
+    }
     ctx.restore();
 
-    if (f.window) drawRect(ctx, f.window, 'rgba(37,99,235,0.95)', f.window.source && f.window.source.includes('fallback') ? 'Window/slot' : 'Window/slot');
-    if (f.sample) drawEllipseMark(ctx, f.sample, 'rgba(168,85,247,0.95)', 'S well');
+    if (f.window) drawRect(ctx, f.window, 'rgba(37,99,235,0.95)', 'Window/slot');
+    if (f.sample) drawEllipseMark(ctx, f.sample, 'rgba(168,85,247,0.95)', 'S zone');
   }
 
   function findInternalFeaturesOnCrop(cropCanvas, draw) {
@@ -878,11 +974,9 @@
     const W = src.cols;
     const H = src.rows;
     const ctx = cropCanvas.getContext('2d');
-    const norm = makeNormalizedGray(src);
 
-    const normal = evaluateInternalTemplate(cropCanvas, norm, W, H, 'normal');
-    const inverted = evaluateInternalTemplate(cropCanvas, norm, W, H, 'inverted');
-    const chosen = normal.templateScore.score >= inverted.templateScore.score ? normal : inverted;
+    const directionAnalysis = analyzeThirdDirection(cropCanvas, W, H);
+    const chosen = makeFixedInternalByDirection(cropCanvas, W, H, directionAnalysis);
 
     const win = chosen.window || fallbackWindowFromGeometry(W, H, chosen.name);
     const sample = chosen.sample || fallbackSampleByWindow(W, H, win, chosen.name);
@@ -895,6 +989,9 @@
     const windowAboveSample = !!(win && sample && winCy < sampleCy);
     const yGap = sampleCy - winCy;
 
+    const normalScore = directionAnalysis.bottomScore;
+    const invertedScore = directionAnalysis.topScore;
+
     const out = {
       window: win,
       sample,
@@ -906,21 +1003,22 @@
       redWindow: chosen.redWindow || null,
       sampleDebug: chosen.sampleDebug || [],
       sampleSearch: chosen.sampleSearch || null,
-      normalTemplate: normal,
-      invertedTemplate: inverted,
+      normalTemplate: {name:'normal', templateScore:{score:normalScore}},
+      invertedTemplate: {name:'inverted', templateScore:{score:invertedScore}},
       chosenTemplate: chosen.name,
-      needsRotation180: chosen.name === 'inverted',
+      needsRotation180: directionAnalysis.rotate180,
+      directionAnalysis,
       roiMetrics: {
         winCx, winCy, sampleCx, sampleCy, alignDx, alignScore, yGap, windowAboveSample,
         windowSearchBox: chosen.windowSearchBox,
         sampleSearchBox: chosen.sampleSearchBox,
-        normalScore: normal.templateScore.score,
-        invertedScore: inverted.templateScore.score
+        normalScore,
+        invertedScore
       }
     };
 
     if (draw) drawInternalFeatures(ctx, W, H, out);
-    src.delete(); norm.delete();
+    src.delete();
     return out;
   }
 
@@ -928,8 +1026,6 @@
     let f = findInternalFeaturesOnCrop(cropCanvas,false);
     let orientationCorrected = false;
 
-    // v30.2：不再用單一「S 是否在 Window 上方」直接翻轉。
-    // 先跑 normal / inverted 兩套比例模板，只有 inverted 分數比較高才旋轉。
     if (f.needsRotation180) {
       rotateCanvas180(cropCanvas);
       orientationCorrected = true;
@@ -939,6 +1035,7 @@
     const finalF = findInternalFeaturesOnCrop(cropCanvas,true);
     finalF.orientationCorrected = orientationCorrected;
     finalF.orientation = finalF.chosenTemplate === 'normal' ? 'window-above-sample' : 'sample-above-window';
+    finalF.directionBeforeRotation = f.directionAnalysis ? f.directionAnalysis.direction : '-';
     return finalF;
   }
 
@@ -1425,6 +1522,12 @@ scored.forEach((c,i)=>
       `ROI Metrics：align=${f.roiMetrics.alignScore.toFixed(2)}, dx=${f.roiMetrics.alignDx.toFixed(0)}, yGap=${f.roiMetrics.yGap.toFixed(0)}, windowAboveS=${f.roiMetrics.windowAboveSample ? 'YES' : 'NO'}<br>`;
       if (f.chosenTemplate) {
         dbg += `ROI Template：chosen=${f.chosenTemplate} / normal=${f.roiMetrics.normalScore.toFixed(0)} / inverted=${f.roiMetrics.invertedScore.toFixed(0)} / rotate180=${f.orientationCorrected ? 'YES' : 'NO'}<br>`;
+        if (f.directionAnalysis) {
+          const da = f.directionAnalysis;
+          dbg += `Direction Analysis：Top S Score=${da.topScore.toFixed(0)} / Bottom S Score=${da.bottomScore.toFixed(0)} / diff=${da.diff.toFixed(0)} / ratio=${da.ratio.toFixed(2)} / decision=${da.direction} / rotate180=${da.rotate180 ? 'YES' : 'NO'}<br>`;
+          dbg += `Top Detail：std=${da.top.std.toFixed(1)}, dark=${da.top.darkRatio.toFixed(2)}, edge=${da.top.edgeRatio.toFixed(2)}, vertical=${da.top.verticalRatio.toFixed(2)}, horizontal=${da.top.horizontalRatio.toFixed(2)}, rowPenalty=${da.top.rowPenalty.toFixed(0)}<br>`;
+          dbg += `Bottom Detail：std=${da.bottom.std.toFixed(1)}, dark=${da.bottom.darkRatio.toFixed(2)}, edge=${da.bottom.edgeRatio.toFixed(2)}, vertical=${da.bottom.verticalRatio.toFixed(2)}, horizontal=${da.bottom.horizontalRatio.toFixed(2)}, rowPenalty=${da.bottom.rowPenalty.toFixed(0)}<br>`;
+        }
       }
     }
 
@@ -1464,7 +1567,7 @@ scored.forEach((c,i)=>
 result={
     version:VERSION,
     ok:bestOk,
-    reason:bestOk ? (bestHasRealSample ? best.method+'+s-zone-real-feature-gate' : (outerOnlyOk ? best.method+'+outer-only-pass' : (partialMessage ? best.method+'+red-window-outer-pass' : best.method+'+real-feature-gate'))) : failReason,
+    reason:bestOk ? (bestHasRealSample ? best.method+'+third-score-real-feature-gate' : (outerOnlyOk ? best.method+'+outer-only-pass' : (partialMessage ? best.method+'+red-window-outer-pass' : best.method+'+real-feature-gate'))) : failReason,
     ratio:best.ratio,
     areaRatio:best.rectArea/imgArea,
     fill:best.fill,

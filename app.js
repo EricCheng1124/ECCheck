@@ -14,6 +14,7 @@
   const galleryInput = document.getElementById('galleryInput');
   const canvas = document.getElementById('canvas');
   const cropCanvas = document.getElementById('cropCanvas');
+  const roiCanvas = document.getElementById('roiCanvas');
   const resultEl = document.getElementById('result');
   const detailEl = document.getElementById('detail');
   const debugGray=document.getElementById('debugGray');
@@ -150,9 +151,88 @@
   }
 
 
-  function clearRoiOnlyView() { }
+  function clearRoiOnlyView() {
+    if (!roiCanvas) return;
+    const ctx = roiCanvas.getContext('2d');
+    roiCanvas.width = Math.max(1, cropCanvas ? cropCanvas.width : 1);
+    roiCanvas.height = Math.max(1, cropCanvas ? cropCanvas.height : 1);
+    ctx.clearRect(0, 0, roiCanvas.width, roiCanvas.height);
+  }
 
-  function renderRoiOnlyView(r) { }
+  function renderRoiOnlyView(r) {
+    if (!roiCanvas || !cropCanvas || !cropCanvas.width || !cropCanvas.height) return;
+
+    const W = cropCanvas.width;
+    const H = cropCanvas.height;
+    roiCanvas.width = W;
+    roiCanvas.height = H;
+
+    const ctx = roiCanvas.getContext('2d');
+    ctx.clearRect(0, 0, W, H);
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, W, H);
+
+    const f = r && r.features ? r.features : null;
+
+    // Outer frame
+    ctx.save();
+    ctx.strokeStyle = 'rgba(34,197,94,0.98)';
+    ctx.lineWidth = Math.max(3, W / 160);
+    ctx.strokeRect(2, 2, W - 4, H - 4);
+
+    // Third guide lines for S direction scoring
+    ctx.setLineDash([6,4]);
+    ctx.strokeStyle = 'rgba(245,158,11,0.95)';
+    ctx.lineWidth = Math.max(1, W / 220);
+    ctx.beginPath();
+    ctx.moveTo(2, H / 3); ctx.lineTo(W - 2, H / 3);
+    ctx.moveTo(2, H * 2 / 3); ctx.lineTo(W - 2, H * 2 / 3);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    if (f && f.directionAnalysis) {
+      ctx.fillStyle = 'rgba(245,158,11,0.95)';
+      ctx.font = `${Math.max(10, Math.round(W / 24))}px sans-serif`;
+      ctx.fillText(`Top S ${Math.round(f.directionAnalysis.topScore)}`, 6, Math.max(14, H / 3 - 6));
+      ctx.fillText(`Bottom S ${Math.round(f.directionAnalysis.bottomScore)}`, 6, Math.min(H - 8, H * 2 / 3 + 18));
+    }
+    ctx.restore();
+
+    // Window box
+    if (f && f.window) {
+      const win = f.window;
+      ctx.save();
+      ctx.strokeStyle = 'rgba(37,99,235,0.98)';
+      ctx.fillStyle = 'rgba(37,99,235,0.98)';
+      ctx.lineWidth = Math.max(2, W / 180);
+      ctx.strokeRect(win.x, win.y, win.w, win.h);
+      ctx.font = `${Math.max(10, Math.round(W / 28))}px sans-serif`;
+      ctx.fillText('Window', win.x + 2, Math.max(13, win.y - 4));
+      ctx.restore();
+    }
+
+    // S zone ellipse
+    if (f && f.sample) {
+      const s = f.sample;
+      const rx = s.rx || s.r || W * 0.17;
+      const ry = s.ry || s.r || W * 0.20;
+      ctx.save();
+      ctx.strokeStyle = 'rgba(168,85,247,0.98)';
+      ctx.fillStyle = 'rgba(168,85,247,0.98)';
+      ctx.lineWidth = Math.max(2, W / 180);
+      ctx.beginPath();
+      ctx.ellipse(s.cx, s.cy, rx, ry, 0, 0, Math.PI * 2);
+      ctx.stroke();
+      const cross = Math.max(7, W / 24);
+      ctx.beginPath();
+      ctx.moveTo(s.cx - cross, s.cy); ctx.lineTo(s.cx + cross, s.cy);
+      ctx.moveTo(s.cx, s.cy - cross); ctx.lineTo(s.cx, s.cy + cross);
+      ctx.stroke();
+      ctx.font = `${Math.max(10, Math.round(W / 28))}px sans-serif`;
+      ctx.fillText('S zone', s.cx + cross + 3, s.cy + 4);
+      ctx.restore();
+    }
+  }
 
   function formatFeatures(f) {
     if (!f) return '<br>Internal features: not executed';
