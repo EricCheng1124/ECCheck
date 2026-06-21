@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v31.3-ct-hard-shoulder-filter';
+  const VERSION = 'v31.4-ct-center-27-zone';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -1087,8 +1087,17 @@
     const ctx = cropCanvas.getContext('2d', {willReadFrequently:true});
     const data = ctx.getImageData(0,0,W,H).data;
 
-    const x0 = clamp(Math.floor(win.x + win.w * 0.28), 0, W-1);
-    const x1 = clamp(Math.ceil(win.x + win.w * 0.72), 0, W);
+    // v31.4：CT 不再使用整個 Window 寬度，避免把試紙槽左右邊壁與反光肩峰算進去。
+    // 第一層取 Window 中央 30%，第二層在 30% 內再縮 90%，最後有效寬度約為 Window 的 27%。
+    const centerBandStart = 0.35;
+    const centerBandWidth = 0.30;
+    const innerKeep = 0.90;
+    const innerMargin = centerBandWidth * (1 - innerKeep) / 2;
+    const ctStartRatio = centerBandStart + innerMargin;       // 0.365
+    const ctEndRatio = centerBandStart + centerBandWidth - innerMargin; // 0.635
+
+    const x0 = clamp(Math.floor(win.x + win.w * ctStartRatio), 0, W-1);
+    const x1 = clamp(Math.ceil(win.x + win.w * ctEndRatio), 0, W);
     const y0 = clamp(Math.floor(win.y + win.h * 0.04), 0, H-1);
     const y1 = clamp(Math.ceil(win.y + win.h * 0.96), 0, H);
     const h = Math.max(1, y1-y0);
@@ -1134,8 +1143,9 @@
     else result = 'Invalid';
 
     return {
-      source:'ct-red-profile-hard-shoulder-filter',
+      source:'ct-red-profile-center-27-zone',
       x0, x1, y0, y1, h,
+      zone:{x:x0, y:y0, w:Math.max(1, x1-x0), h:Math.max(1, y1-y0), startRatio:ctStartRatio, endRatio:ctEndRatio, widthRatio:ctEndRatio-ctStartRatio},
       raw, profile:positive, baseline:bg, mean:stat.mean, std:stat.std,
       maxScore, threshold,
       cRange, tRange,
@@ -1231,6 +1241,20 @@
     ctx.restore();
 
     if (f.window) drawRect(ctx, f.window, 'rgba(37,99,235,0.95)', 'Window/slot');
+
+    // v31.4：青色框是實際 CT Analyze Zone；橘色波形只根據這個窄帶計算。
+    if (f.ctAnalysis && f.ctAnalysis.zone) {
+      const z = f.ctAnalysis.zone;
+      ctx.save();
+      ctx.strokeStyle = 'rgba(6,182,212,0.98)';
+      ctx.fillStyle = 'rgba(6,182,212,0.98)';
+      ctx.lineWidth = Math.max(1.5, W/210);
+      ctx.strokeRect(z.x, z.y, z.w, z.h);
+      ctx.font = `${Math.max(8, Math.round(W/34))}px sans-serif`;
+      ctx.fillText('CT zone', z.x + 2, Math.max(10, z.y - 3));
+      ctx.restore();
+    }
+
     if (f.sample) drawEllipseMark(ctx, f.sample, 'rgba(168,85,247,0.95)', 'S zone');
     if (f.window && f.ctAnalysis) drawCTWaveform(ctx, W, H, f.window, f.ctAnalysis);
   }
@@ -1805,6 +1829,7 @@ scored.forEach((c,i)=>
       const ct = f.ctAnalysis;
       dbg += `<b>CT Line Analysis</b><br>`;
       dbg += `Result=${ct.result} / Peak Count=${ct.peakCount} / Threshold=${ct.threshold.toFixed(1)} / Baseline=${ct.baseline.toFixed(1)} / Max=${ct.maxScore.toFixed(1)}<br>`;
+      if (ct.zone) dbg += `CT Analyze Zone=x${ct.zone.x}, y${ct.zone.y}, w${ct.zone.w}, h${ct.zone.h} / ratio=${(ct.zone.widthRatio*100).toFixed(1)}% / xRatio=${(ct.zone.startRatio*100).toFixed(1)}-${(ct.zone.endRatio*100).toFixed(1)}%<br>`;
       dbg += `C Score=${ct.cPeak.score.toFixed(1)} / C Y=${ct.cPeak.absY.toFixed(0)} / C Detected=${ct.cPeak.detected ? 'YES' : 'NO'} / C Range=${ct.cRange.start}-${ct.cRange.end}<br>`;
       dbg += `C Width=${ct.cPeak.width} / MaxWidth=${ct.cPeak.maxWidth} / Drop=${ct.cPeak.drop.toFixed(1)} / Sharpness=${ct.cPeak.sharpness.toFixed(2)} / Shoulder=${ct.cPeak.shoulderRatio.toFixed(2)} / NearShoulder=${ct.cPeak.nearShoulderRatio.toFixed(2)} / Reject=${ct.cPeak.reject}<br>`;
       dbg += `T Score=${ct.tPeak.score.toFixed(1)} / T Y=${ct.tPeak.absY.toFixed(0)} / T Detected=${ct.tPeak.detected ? 'YES' : 'NO'} / T Range=${ct.tRange.start}-${ct.tRange.end}<br>`;

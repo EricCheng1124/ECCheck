@@ -1,6 +1,7 @@
-# ASAP Check v31.3
+# ASAP Check v31.4
 
-- Harder CT shoulder filter
-- Rejects fat side shoulders near a peak
-- Thresholds: Shoulder > 0.35, NearShoulder > 0.50, ShoulderMax > 0.55
-- Access code: ASAP
+- CT Analyze Zone changed to Window center 30%, then inner 90% (effective 27% width).
+- Cyan CT zone is drawn on cropped cassette.
+- CT waveform is calculated only from CT zone.
+- Debug prints CT Analyze Zone coordinates and ratios.
+- Access code: ASAP.
