@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v31.9-ct-no-fake-lines-local-baseline';
+  const VERSION = 'v31.10-ct-no-width-kill';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -1044,8 +1044,8 @@
 
     let reject = '';
     if (score < threshold) reject = 'below-threshold';
-    else if (width > softMaxWidth) reject = 'too-wide-edge';
-    else if (width > maxWidth && drop < threshold * 0.55) reject = 'wide-flat-edge';
+    // v31.10：不再用 width 直接判死刑。
+    // 實測發現背景斜坡會把真正 C 線算成很寬，造成誤殺。
     else if (shoulderRatio > maxShoulderRatio) reject = 'shoulder-too-fat';
     else if (shoulderMaxRatio > maxShoulderMaxRatio) reject = 'shoulder-spike-nearby';
     else if (nearShoulderRatio > maxNearShoulderRatio) reject = 'near-shoulder-platform';
@@ -1151,8 +1151,8 @@
       // v31.8：shoulder 不再直接 reject，而是扣分。
       // 原因：淡線旁邊也可能有小平台，直接 reject 會漏掉真正 C/T。
       let quality = q.score;
-      if (q.width > q.softMaxWidth) quality *= 0.20;
-      else if (q.width > q.maxWidth) quality *= 0.62;
+      // v31.10：Width 僅保留 Debug，不再扣分。
+      // 主要用 score / shoulder / drop 來決定峰值品質。
       quality *= Math.max(0.18, 1 - q.shoulderRatio * 0.55);
       quality *= Math.max(0.18, 1 - q.nearShoulderRatio * 0.38);
       quality *= Math.max(0.22, 1 - Math.max(0, q.shoulderMaxRatio - 0.55) * 0.55);
@@ -1187,7 +1187,6 @@
       const quality = calcQuality(q);
       let reject = '';
       if (q.score < candidateFloor) reject = 'below-candidate-floor';
-      else if (q.width > q.softMaxWidth) reject = 'too-wide-edge';
       else if (quality < Math.max(3.6, threshold * 0.42)) reject = 'low-shape-quality';
       return Object.assign({}, q, {
         quality,
@@ -1272,7 +1271,7 @@
     );
 
     return {
-      source:'ct-red-profile-dynamic-peaks-v31-8',
+      source:'ct-red-profile-dynamic-peaks-v31-10-no-width-kill',
       x0, x1, y0, y1, h,
       zone:{x:x0, y:y0, w:Math.max(1, x1-x0), h:Math.max(1, y1-y0), startRatio:ctStartRatio, endRatio:ctEndRatio, widthRatio:ctEndRatio-ctStartRatio, topThirdY:Math.round(topThirdY), topThirdPadding:topThirdPadding, yLimitedByTopThird:(ctY0Float > windowInnerTop + 0.5)},
       raw, profile:positive, baseline:bg, rawBaseline, rawMedian, rawMax, mean:stat.mean, std:stat.std,
