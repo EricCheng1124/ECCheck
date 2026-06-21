@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v31.2-ct-shoulder-filter';
+  const VERSION = 'v31.3-ct-hard-shoulder-filter';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -1037,9 +1037,9 @@
     const softMaxWidth = Math.max(6, Math.round(h * 0.075));
     const minDrop = Math.max(2.2, threshold * 0.18);
     const minSharpness = Math.max(0.38, threshold / Math.max(12, maxWidth * 2.4));
-    const maxShoulderRatio = 0.42;
-    const maxShoulderMaxRatio = 0.62;
-    const maxNearShoulderRatio = 0.68;
+    const maxShoulderRatio = 0.35;       // v31.3：肩峰平均太高，直接排除
+    const maxShoulderMaxRatio = 0.55;    // v31.3：旁邊有尖刺，直接排除
+    const maxNearShoulderRatio = 0.50;   // v31.3：主峰旁邊有胖平台，直接排除
 
     let reject = '';
     if (score < threshold) reject = 'below-threshold';
@@ -1047,7 +1047,7 @@
     else if (width > maxWidth && drop < threshold * 0.55) reject = 'wide-flat-edge';
     else if (shoulderRatio > maxShoulderRatio) reject = 'shoulder-too-fat';
     else if (shoulderMaxRatio > maxShoulderMaxRatio) reject = 'shoulder-spike-nearby';
-    else if (nearShoulderRatio > maxNearShoulderRatio && drop < threshold * 0.95) reject = 'near-shoulder-platform';
+    else if (nearShoulderRatio > maxNearShoulderRatio) reject = 'near-shoulder-platform';
     else if (drop < minDrop) reject = 'low-side-drop';
     else if (sharpness < minSharpness) reject = 'not-sharp';
 
@@ -1134,7 +1134,7 @@
     else result = 'Invalid';
 
     return {
-      source:'ct-red-profile-window-center-narrow-peak',
+      source:'ct-red-profile-hard-shoulder-filter',
       x0, x1, y0, y1, h,
       raw, profile:positive, baseline:bg, mean:stat.mean, std:stat.std,
       maxScore, threshold,
