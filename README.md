@@ -1,3 +1,3 @@
-# ASAP Check v31.25
+# ASAP Check v31.26
 
-CT order pairing lock: ignores top window-edge false peaks, pairs C first then T below with reasonable gap.
+CT first-peak recovery: prevents missing the first C peak and pairing the second line as C.

@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v31.25-ct-order-pairing-lock';
+  const VERSION = 'v31.26-ct-first-peak-recovery';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -1382,12 +1382,19 @@
     function findLocalPeaks(profile) {
       const peaks = [];
       const guard = Math.max(2, Math.round(h * 0.010));
-      for (let y=guard; y<profile.length-guard; y++) {
+
+      // v31.26：允許靠近 CT zone 上緣的峰被抓到。
+      // 舊版從 guard 開始掃，若真正 C 線剛好落在分析區上緣附近，會被漏掉，
+      // 後面就會把第二條線誤配成 C。
+      for (let y=0; y<profile.length; y++) {
         const v = profile[y];
-        if (v < candidateFloor) continue;
+        if (v < candidateFloor * 0.72) continue;
         let isPeak = true;
-        for (let k=1; k<=guard; k++) {
-          if (profile[y-k] > v || profile[y+k] > v) { isPeak = false; break; }
+        const a = Math.max(0, y - guard);
+        const b = Math.min(profile.length - 1, y + guard);
+        for (let k=a; k<=b; k++) {
+          if (k === y) continue;
+          if (profile[k] > v + 0.05) { isPeak = false; break; }
         }
         if (!isPeak) continue;
         // 避免同一個寬峰產生太多相鄰小峰。
@@ -1421,13 +1428,15 @@
     // 或在不同裝置縮放後把同一條線重複配對。
     // 新邏輯：先排除太靠近 Window/slot 上緣的假峰，再找第一個有效 C，
     // 然後只在 C 下方合理距離內找 T。
-    const cFallbackRange = {start:Math.round(h*0.16), end:Math.round(h*0.56)};
-    const tFallbackRange = {start:Math.round(h*0.38), end:Math.round(h*0.82)};
-    const cTopGuard = Math.max(10, Math.round(h * 0.16));
-    const cBottomLimit = Math.round(h * 0.58);
-    const pairMinGap = Math.max(12, Math.round(h * 0.14));
-    const pairMaxGap = Math.max(pairMinGap + 8, Math.round(h * 0.50));
-    const tBottomLimit = Math.round(h * 0.84);
+    // v31.26：C 線可能很靠近 CT analyze zone 上緣，不能硬砍掉前 16%。
+    // 改成較寬的 C/T 搜尋帶，再靠「C 在上、T 在下、兩者距離合理」來配對。
+    const cFallbackRange = {start:Math.round(h*0.05), end:Math.round(h*0.52)};
+    const tFallbackRange = {start:Math.round(h*0.24), end:Math.round(h*0.84)};
+    const cTopGuard = Math.max(3, Math.round(h * 0.035));
+    const cBottomLimit = Math.round(h * 0.55);
+    const pairMinGap = Math.max(10, Math.round(h * 0.12));
+    const pairMaxGap = Math.max(pairMinGap + 8, Math.round(h * 0.52));
+    const tBottomLimit = Math.round(h * 0.86);
 
     function inRangeY(p, r) {
       return !!p && p.y >= r.start && p.y <= r.end;
@@ -1454,6 +1463,43 @@
     }
     dedupPeaks.sort((a,b)=>a.y-b.y);
 
+    // v31.26：補抓「波形有斜坡但 local peak 沒成立」的水平線。
+    // 這種情況常發生在手機縮放後，真正第一條 C 線在 CT zone 上緣附近，
+    // findLocalPeaks 可能漏掉；因此再用 rowLineContinuity 掃一次 C/T 合理範圍。
+    function addContinuitySeeds(range, mode, tag) {
+      const seeds = [];
+      const start = clamp(range.start, 0, h - 1);
+      const end = clamp(range.end, start, h - 1);
+      for (let ly = start; ly <= end; ly++) {
+        const cont = rowLineContinuity(y0 + ly, mode);
+        const ps = positive[ly] || 0;
+        const pass = cont.ok || ps >= candidateFloor * 0.72 || (cont.score >= 8.5 && ps >= candidateFloor * 0.45);
+        if (!pass) continue;
+        const total = ps * 1.0 + cont.score * 0.32;
+        const near = seeds.find(s => Math.abs(s.y - ly) < Math.max(4, Math.round(minSep * 0.45)));
+        if (near) {
+          if (total > near.total) Object.assign(near, {y:ly, score:Math.max(ps, candidateFloor*0.80), total, cont, tag});
+        } else {
+          seeds.push({y:ly, score:Math.max(ps, candidateFloor*0.80), total, cont, tag});
+        }
+      }
+
+      for (const seed of seeds.sort((a,b)=>b.total-a.total).slice(0,4)) {
+        if (dedupPeaks.some(p => Math.abs(p.y - seed.y) < Math.max(4, Math.round(minSep * 0.45)))) continue;
+        const q = qualifyPeak(positive, {y:seed.y, score:seed.score}, threshold, fullRange, h, tag);
+        q.quality = calcQuality(q);
+        q.detected = q.score >= candidateFloor * 0.72;
+        q.reject = q.score >= threshold ? 'PASS' : 'below-threshold';
+        q.continuitySeed = true;
+        q.continuity = seed.cont;
+        dedupPeaks.push(q);
+      }
+      dedupPeaks.sort((a,b)=>a.y-b.y);
+    }
+
+    addContinuitySeeds(cFallbackRange, undefined, 'C-seed');
+    addContinuitySeeds(tFallbackRange, 'faintT', 'T-seed');
+
     const selected = [];
     let cQ = null;
     let tQ = null;
@@ -1461,7 +1507,7 @@
 
     // 先找 C：不能太靠近 CT 分析區上緣，避免 Window 上緣陰影/槽邊界。
     const cCandidates = dedupPeaks.filter(p =>
-      p.score >= candidateFloor &&
+      p.score >= candidateFloor * 0.72 &&
       p.y >= cTopGuard &&
       p.y <= cBottomLimit &&
       inRangeY(p, cFallbackRange)
@@ -1473,7 +1519,7 @@
       const tCandidates = dedupPeaks.filter(t => {
         const gap = t.y - c.y;
         return t !== c &&
-          t.score >= candidateFloor &&
+          t.score >= candidateFloor * 0.62 &&
           gap >= pairMinGap &&
           gap <= pairMaxGap &&
           t.y <= tBottomLimit &&
@@ -1487,7 +1533,11 @@
         // C 位置優先由上到下，但仍保留分數與線形；T 分數可較低，避免淡陽性被殺掉。
         const cPositionBonus = (1 - Math.min(1, Math.abs(c.y - h * 0.36) / Math.max(1, h * 0.25))) * threshold * 0.18;
         const tPositionBonus = (1 - Math.min(1, Math.abs(t.y - h * 0.62) / Math.max(1, h * 0.30))) * threshold * 0.16;
-        const score = c.score * 1.18 + t.score * 1.05 + gapScore + cPositionBonus + tPositionBonus + lineShapeBonus(c) + lineShapeBonus(t);
+        // C/T 配對優先順序：位置關係 > 線形 > 強度。
+        // 對陽性快篩而言，第一條有效水平線應為 C，下一條合理距離線才是 T；
+        // 避免第二條分數較高時被誤當 C。
+        const upperCBonus = (1 - Math.min(1, c.y / Math.max(1, h * 0.55))) * threshold * 0.62;
+        const score = c.score * 0.92 + t.score * 0.96 + gapScore + cPositionBonus + tPositionBonus + upperCBonus + lineShapeBonus(c) + lineShapeBonus(t);
         if (score > bestPairScore) {
           bestPairScore = score;
           bestPair = [c, t];
@@ -1620,8 +1670,8 @@
     // 這可避免把 C 線下方的背景陰影、試紙槽底部平台或 W 框底部亮度變化誤判成 T。
     const tGapFromC = (tQ && cQ) ? (tQ.y - cQ.y) : -9999;
     const tMinGap = Math.max(16, Math.round(h * 0.12));
-    const tMaxGap = Math.max(tMinGap + 12, Math.round(h * 0.38));
-    const tMaxYFromWindow = Math.round(h * 0.76);
+    const tMaxGap = Math.max(tMinGap + 12, Math.round(h * 0.48));
+    const tMaxYFromWindow = Math.round(h * 0.82);
     const tPositionOk = !!(
       tQ && cQ &&
       tGapFromC >= tMinGap &&
@@ -1690,7 +1740,7 @@
     );
 
     return {
-      source:'ct-combined-pink-dark-profile-v31-25-order-pairing',
+      source:'ct-combined-pink-dark-profile-v31-26-first-peak-recovery',
       x0, x1, y0, y1, h,
       zone:{x:x0, y:y0, w:Math.max(1, x1-x0), h:Math.max(1, y1-y0), startRatio:ctStartRatio, endRatio:ctEndRatio, widthRatio:ctEndRatio-ctStartRatio, topThirdY:Math.round(topThirdY), topThirdPadding:topThirdPadding, yLimitedByTopThird:(ctY0Float > windowInnerTop + 0.5)},
       raw, profile:positive, baseline:bg, rawBaseline, rawMedian, rawMax, pinkMax, darkMax, combinedMax, selectedMode, lumBackground, lumMedian, mean:stat.mean, std:stat.std,
