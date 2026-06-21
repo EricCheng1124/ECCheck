@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v31.29-ct-order-minimal-fix';
+  const VERSION = 'v31.30-ct-wide-sampling-fix';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -1278,15 +1278,13 @@
       return best;
     }
 
-    // v31.8：CT 改成「全 CT zone 動態找峰」。
-    // 不再先硬切 C Range / T Range，避免 T 線因位置偏移而沒被選到。
-    // 流程：Window 中央 40% × 內部 90% → Top S 以下 → 找全部候選峰 → 依上下位置分配 C/T。
-    const centerBandStart = 0.30;
-    const centerBandWidth = 0.40;
-    const innerKeep = 0.90;
-    const innerMargin = centerBandWidth * (1 - innerKeep) / 2;
-    const ctStartRatio = centerBandStart + innerMargin;       // 0.32
-    const ctEndRatio = centerBandStart + centerBandWidth - innerMargin; // 0.68
+    // v31.30：CT 採樣區加寬。
+    // 原本只取 Window 中央 36%（約 12px），遇到 C/T 線些微傾斜或手機縮圖時，
+    // 很容易只掃到某一段，造成 C 線被削弱、T 線被放大。
+    // 這裡改成 Window 中央 60%（20%~80%），並保留原本的多 x 平均 profile。
+    // 重點：只加寬 CT sampling，不大改既有峰值/外框/S well 邏輯。
+    const ctStartRatio = 0.20;
+    const ctEndRatio = 0.80;
 
     const x0 = clamp(Math.floor(win.x + win.w * ctStartRatio), 0, W-1);
     const x1 = clamp(Math.ceil(win.x + win.w * ctEndRatio), 0, W);
