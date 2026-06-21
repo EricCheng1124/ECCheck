@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v31.32-ct-refine-merge-debug-only';
+  const VERSION = 'v31.33-ct-c-refine-guard-fix';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -1540,7 +1540,41 @@
     refineDebug.push(`BEFORE C id=${cQ.peakId || '-'} y=${(y0+cQ.y).toFixed(0)} local=${cQ.y} rawY=${(cQ.rawAbsY || (y0+cQ.y)).toFixed(0)} selected=${cSelected ? 'YES':'NO'} score=${cQ.score.toFixed(1)} src=${cQ.peakSource || '-'}`);
     refineDebug.push(`BEFORE T id=${tQ.peakId || '-'} y=${(y0+tQ.y).toFixed(0)} local=${tQ.y} rawY=${(tQ.rawAbsY || (y0+tQ.y)).toFixed(0)} selected=${tSelected ? 'YES':'NO'} score=${tQ.score.toFixed(1)} src=${tQ.peakSource || '-'}`);
 
-    const cRed = refinePeakToRedLine(cQ.y, cFallbackRange);
+    let cRed = refinePeakToRedLine(cQ.y, cFallbackRange);
+
+    // v31.33：C refine 防呆。
+    // 已經由配對邏輯選好的 C，不可以在 refine 時被吸到下方 T 線。
+    // 這次問題樣本：C rawY=201、T rawY=239，但 C REFINE 被拉到 239，導致 C/T 同點而判 Negative。
+    const cBeforeLocalY = cQ.y;
+    const cBeforeAbsY = y0 + cBeforeLocalY;
+    const tBeforeLocalYForGuard = tQ ? tQ.y : null;
+    const minRefineGapToT = Math.max(10, Math.round(h * 0.08));
+    const maxCRefineShift = Math.max(10, Math.round(h * 0.16));
+    let cRefineGuardReason = '';
+
+    if (cRed && cRed.ok) {
+      const cAfterLocalY = cRed.localY;
+      const cAfterAbsY = y0 + cAfterLocalY;
+      const shift = Math.abs(cAfterLocalY - cBeforeLocalY);
+      const hitTZone = tBeforeLocalYForGuard != null && cAfterLocalY >= (tBeforeLocalYForGuard - minRefineGapToT);
+      const tooFar = shift > maxCRefineShift;
+
+      if (hitTZone || tooFar) {
+        cRefineGuardReason = `${hitTZone ? 'hit-t-zone' : ''}${hitTZone && tooFar ? '+' : ''}${tooFar ? 'shift-too-far' : ''}`;
+        cRed = {
+          ...cRed,
+          ok: true,
+          localY: cBeforeLocalY,
+          absY: cBeforeAbsY,
+          offset: 0,
+          guardBlocked: true,
+          guardReason: cRefineGuardReason,
+          guardedFromAbsY: cAfterAbsY,
+          guardedFromLocalY: cAfterLocalY
+        };
+      }
+    }
+
     // v31.29：T refine 不能回頭吸到 C 線。
     // 先用原始 C/T 位置建立動態 T 搜尋範圍，只允許在 C 下方合理距離內找真正 T 線。
     const preTMinGap = Math.max(12, Math.round(h * 0.10));
@@ -1555,7 +1589,7 @@
     }
     const tRed = refinePeakToRedLine(tQ.y, tRefineRange, 'faintT');
 
-    refineDebug.push(`C REFINE range=${cFallbackRange.start}-${cFallbackRange.end} before=${(y0+cQ.y).toFixed(0)} after=${cRed ? cRed.absY : '-'} ok=${cRed && cRed.ok ? 'YES':'NO'} offset=${cRed ? cRed.offset : '-'} total=${cRed ? cRed.totalScore.toFixed(1) : '-'} cont=${cRed ? cRed.score.toFixed(1) : '-'} profile=${cRed ? cRed.profileScore.toFixed(1) : '-'}`);
+    refineDebug.push(`C REFINE range=${cFallbackRange.start}-${cFallbackRange.end} before=${(y0+cQ.y).toFixed(0)} after=${cRed ? cRed.absY : '-'} ok=${cRed && cRed.ok ? 'YES':'NO'} offset=${cRed ? cRed.offset : '-'} total=${cRed ? cRed.totalScore.toFixed(1) : '-'} cont=${cRed ? cRed.score.toFixed(1) : '-'} profile=${cRed ? cRed.profileScore.toFixed(1) : '-'} guard=${cRed && cRed.guardBlocked ? 'BLOCKED-'+cRed.guardReason+':'+cRed.guardedFromAbsY+'->'+cRed.absY : 'NO'}`);
     refineDebug.push(`T REFINE range=${tRefineRange.start}-${tRefineRange.end} before=${(y0+tQ.y).toFixed(0)} after=${tRed ? tRed.absY : '-'} ok=${tRed && tRed.ok ? 'YES':'NO'} offset=${tRed ? tRed.offset : '-'} total=${tRed ? tRed.totalScore.toFixed(1) : '-'} cont=${tRed ? tRed.score.toFixed(1) : '-'} profile=${tRed ? tRed.profileScore.toFixed(1) : '-'}`);
 
     // refine 後，把實際畫線/Debug 的 y 改成真正連續線段的位置。
