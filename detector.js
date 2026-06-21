@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v31.13-ct-relative-red-continuity';
+  const VERSION = 'v31.14-ct-refine-red-line';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -1092,68 +1092,146 @@
     const ctx = cropCanvas.getContext('2d', {willReadFrequently:true});
     const data = ctx.getImageData(0,0,W,H).data;
 
-    // v31.13：Peak 抓出後，再確認該 Y 附近是否有「連續紅色線段」。
-    // 目的：避免單點雜訊或局部陰影被 score 誤判成 C/T 線。
-    function checkRedContinuity(localY) {
-      const yyCenter = clamp(Math.round(localY), 0, Math.max(0, H - 1));
-      const yRadius = Math.max(1, Math.round(H * 0.004));
-      const minRun = Math.max(3, Math.round((x1 - x0) * 0.18));
-      const minRatio = 0.16;
+    // v31.14：Peak 抓出後，不只檢查 peak 當下那一列。
+    // 會回頭在 peak 附近上下搜尋，找真正「水平連續線段」的位置。
+    // 目的：峰值可能落在紅線邊緣/陰影/肩峰，必須 refine 到真正 C/T 線中心後再畫線與判斷。
+    function rowLineContinuity(absY) {
+      const yy = clamp(Math.round(absY), 0, Math.max(0, H - 1));
+      const minRun = Math.max(3, Math.round((x1 - x0) * 0.16));
+      const minRatio = 0.14;
 
-      let bestRun = 0;
-      let bestRatio = 0;
-      let bestRedCount = 0;
+      // 用上下鄰近列估背景，讓「淡粉紅線」和「偏灰暗線」都能被視為線段。
+      const bgGap = Math.max(5, Math.round(H * 0.010));
+      const bgYs = [
+        clamp(yy - bgGap, 0, H - 1),
+        clamp(yy + bgGap, 0, H - 1)
+      ];
 
-      for (let yy = yyCenter - yRadius; yy <= yyCenter + yRadius; yy++) {
-        if (yy < 0 || yy >= H) continue;
+      let run = 0;
+      let maxRun = 0;
+      let redCount = 0;
+      let darkCount = 0;
+      let lineCount = 0;
+      let total = 0;
+      let redScoreSum = 0;
+      let darkScoreSum = 0;
 
-        let run = 0;
-        let maxRun = 0;
-        let redCount = 0;
-        let total = 0;
+      for (let xx = x0; xx < x1; xx++) {
+        const idx = (yy * W + xx) * 4;
+        const r = data[idx];
+        const g = data[idx + 1];
+        const b = data[idx + 2];
+        const yLum = 0.299 * r + 0.587 * g + 0.114 * b;
 
-        for (let xx = x0; xx < x1; xx++) {
-          const idx = (yy * W + xx) * 4;
-          const r = data[idx];
-          const g = data[idx + 1];
-          const b = data[idx + 2];
-          const yLum = 0.299 * r + 0.587 * g + 0.114 * b;
-
-          // 放寬紅色條件：淡粉紅、灰紫紅都可以，但不能是純陰影。
-          const redScore = (r - (g + b) * 0.50) + (r - g) * 0.18 + (r - b) * 0.12;
-          const redLike =
-            yLum > 45 &&
-            r > 58 &&
-            redScore > 6 &&
-            r > g * 1.015 &&
-            r > b * 1.015;
-
-          total++;
-          if (redLike) {
-            redCount++;
-            run++;
-            if (run > maxRun) maxRun = run;
-          } else {
-            run = 0;
-          }
+        let bgLum = 0;
+        for (const by of bgYs) {
+          const bi = (by * W + xx) * 4;
+          bgLum += 0.299 * data[bi] + 0.587 * data[bi + 1] + 0.114 * data[bi + 2];
         }
+        bgLum /= bgYs.length;
 
-        const ratio = redCount / Math.max(1, total);
-        if (maxRun > bestRun || (maxRun === bestRun && ratio > bestRatio)) {
-          bestRun = maxRun;
-          bestRatio = ratio;
-          bestRedCount = redCount;
+        const redScore = (r - (g + b) * 0.50) + (r - g) * 0.18 + (r - b) * 0.12;
+        const darkScore = bgLum - yLum;
+
+        // 放寬紅色條件：真實淡線常是灰粉/紫灰，不一定鮮紅。
+        const redLike =
+          yLum > 38 &&
+          r > 48 &&
+          redScore > 2.2 &&
+          r >= g * 0.985 &&
+          r >= b * 0.985;
+
+        // 補一個暗線條件：只要這一列相對上下背景連續變暗，也算線段。
+        // 這可以處理 T 線很淡、肉眼看是灰粉但 redScore 不高的情況。
+        const darkLike =
+          yLum > 35 &&
+          darkScore > 4.0 &&
+          r >= g * 0.94 &&
+          r >= b * 0.94;
+
+        const lineLike = redLike || darkLike;
+        total++;
+        redScoreSum += Math.max(0, redScore);
+        darkScoreSum += Math.max(0, darkScore);
+
+        if (redLike) redCount++;
+        if (darkLike) darkCount++;
+
+        if (lineLike) {
+          lineCount++;
+          run++;
+          if (run > maxRun) maxRun = run;
+        } else {
+          run = 0;
         }
       }
 
+      const ratio = lineCount / Math.max(1, total);
+      const redRatio = redCount / Math.max(1, total);
+      const darkRatio = darkCount / Math.max(1, total);
+      const redAvg = redScoreSum / Math.max(1, total);
+      const darkAvg = darkScoreSum / Math.max(1, total);
+
       return {
-        ok: bestRun >= minRun || bestRatio >= minRatio,
-        run: bestRun,
+        ok: maxRun >= minRun || ratio >= minRatio,
+        y: yy,
+        run: maxRun,
         minRun,
-        ratio: bestRatio,
+        ratio,
         minRatio,
-        redCount: bestRedCount
+        redRatio,
+        darkRatio,
+        redCount,
+        darkCount,
+        lineCount,
+        redAvg,
+        darkAvg,
+        score: maxRun * 2.0 + ratio * 18.0 + redAvg * 0.35 + darkAvg * 0.45
       };
+    }
+
+    function refinePeakToRedLine(localY, localRange) {
+      const absCenter = y0 + localY;
+      const searchRadius = Math.max(8, Math.round(h * 0.060));
+      const startY = clamp(Math.round(absCenter - searchRadius), y0, y1 - 1);
+      const endY = clamp(Math.round(absCenter + searchRadius), y0, y1 - 1);
+
+      let best = null;
+      for (let yy = startY; yy <= endY; yy++) {
+        const local = yy - y0;
+        if (localRange && (local < localRange.start || local > localRange.end)) continue;
+        const cont = rowLineContinuity(yy);
+        const profileScore = positive[local] || 0;
+        const distancePenalty = Math.abs(yy - absCenter) * 0.18;
+        const totalScore = cont.score + profileScore * 0.42 - distancePenalty;
+        const item = Object.assign({}, cont, {
+          localY: local,
+          absY: yy,
+          profileScore,
+          totalScore,
+          offset: yy - absCenter,
+          searchStart:startY,
+          searchEnd:endY
+        });
+        if (!best || item.totalScore > best.totalScore) best = item;
+      }
+
+      if (!best) {
+        const cont = rowLineContinuity(absCenter);
+        best = Object.assign({}, cont, {
+          localY: Math.round(localY),
+          absY: y0 + Math.round(localY),
+          profileScore: positive[Math.round(localY)] || 0,
+          totalScore: cont.score,
+          offset: 0,
+          searchStart:startY,
+          searchEnd:endY
+        });
+      }
+
+      // 只要在搜尋範圍內找到連續線段，就用 refine 後的位置。
+      // 若沒有找到，仍回傳最佳列，Debug 會顯示 NO。
+      return best;
     }
 
     // v31.8：CT 改成「全 CT zone 動態找峰」。
@@ -1352,8 +1430,13 @@
     // T 線：改成相對 C 線門檻，避免淡 T 被全域 threshold 誤殺。
     const cSelected = selected.includes(cQ);
     const tSelected = selected.includes(tQ);
-    const cRed = checkRedContinuity(y0 + cQ.y);
-    const tRed = checkRedContinuity(y0 + tQ.y);
+    const cRed = refinePeakToRedLine(cQ.y, cFallbackRange);
+    const tRed = refinePeakToRedLine(tQ.y, tFallbackRange);
+
+    // refine 後，把實際畫線/Debug 的 y 改成真正連續線段的位置。
+    // score 保留原 peak score，因為它代表波峰強度；y 則改成紅線中心。
+    if (cRed && cRed.ok) cQ.y = cRed.localY;
+    if (tRed && tRed.ok) tQ.y = tRed.localY;
 
     const cDetected = !!(
       cQ &&
@@ -1408,7 +1491,7 @@
     );
 
     return {
-      source:'ct-combined-pink-dark-profile-v31-13-relative-red-continuity',
+      source:'ct-combined-pink-dark-profile-v31-14-refine-red-line',
       x0, x1, y0, y1, h,
       zone:{x:x0, y:y0, w:Math.max(1, x1-x0), h:Math.max(1, y1-y0), startRatio:ctStartRatio, endRatio:ctEndRatio, widthRatio:ctEndRatio-ctStartRatio, topThirdY:Math.round(topThirdY), topThirdPadding:topThirdPadding, yLimitedByTopThird:(ctY0Float > windowInnerTop + 0.5)},
       raw, profile:positive, baseline:bg, rawBaseline, rawMedian, rawMax, pinkMax, darkMax, combinedMax, selectedMode, lumBackground, lumMedian, mean:stat.mean, std:stat.std,

@@ -1,7 +1,3 @@
-# ASAP Check v31.13
+# ASAP Check v31.14
 
-CT relative threshold + red continuity check.
-
-- C detected = selected peak + score >= global threshold + red continuity
-- T detected = selected peak + score >= min(threshold*0.65, C score*0.35) + red continuity
-- Outer frame / Window / S well / waveform drawing unchanged.
+CT refine red-line: peak selected first, then search around the peak to align C/T guide lines to the best continuous red/dark horizontal segment. T uses relative threshold plus refined continuity.
