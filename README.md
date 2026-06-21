@@ -1,3 +1,3 @@
-# ASAP Check v31.26
+# ASAP Check v31.27
 
-CT first-peak recovery: prevents missing the first C peak and pairing the second line as C.
+Fix: earliest C peak priority and locked T refine range below C.

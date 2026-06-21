@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v31.26-ct-first-peak-recovery';
+  const VERSION = 'v31.27-ct-earliest-c-locked-t-refine';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -1533,11 +1533,12 @@
         // C 位置優先由上到下，但仍保留分數與線形；T 分數可較低，避免淡陽性被殺掉。
         const cPositionBonus = (1 - Math.min(1, Math.abs(c.y - h * 0.36) / Math.max(1, h * 0.25))) * threshold * 0.18;
         const tPositionBonus = (1 - Math.min(1, Math.abs(t.y - h * 0.62) / Math.max(1, h * 0.30))) * threshold * 0.16;
-        // C/T 配對優先順序：位置關係 > 線形 > 強度。
-        // 對陽性快篩而言，第一條有效水平線應為 C，下一條合理距離線才是 T；
-        // 避免第二條分數較高時被誤當 C。
-        const upperCBonus = (1 - Math.min(1, c.y / Math.max(1, h * 0.55))) * threshold * 0.62;
-        const score = c.score * 0.92 + t.score * 0.96 + gapScore + cPositionBonus + tPositionBonus + upperCBonus + lineShapeBonus(c) + lineShapeBonus(t);
+        // v31.27：C/T 配對改成「第一條有效線優先」。
+        // 這次問題的根因是第一個 C 峰分數較低，第二個 T 峰較高，
+        // 舊版仍可能把第二峰當 C，導致真正陽性被判 Negative。
+        // 因此 C 的位置順序權重要大於強度；強度只當輔助。
+        const earliestCBonus = (1 - Math.min(1, c.y / Math.max(1, cBottomLimit))) * threshold * 3.25;
+        const score = c.score * 0.32 + t.score * 0.88 + gapScore + cPositionBonus + tPositionBonus + earliestCBonus + lineShapeBonus(c) + lineShapeBonus(t);
         if (score > bestPairScore) {
           bestPairScore = score;
           bestPair = [c, t];
@@ -1607,11 +1608,21 @@
     const cSelected = selected.includes(cQ);
     const tSelected = selected.includes(tQ);
     const cRed = refinePeakToRedLine(cQ.y, cFallbackRange);
-    const tRed = refinePeakToRedLine(tQ.y, tFallbackRange, 'faintT');
 
     // refine 後，把實際畫線/Debug 的 y 改成真正連續線段的位置。
     // score 保留原 peak score，因為它代表波峰強度；y 則改成紅線中心。
     if (cRed && cRed.ok) cQ.y = cRed.localY;
+
+    // v31.27：T refine 必須鎖在 C 下方，不可再掃整個 T fallback range。
+    // 舊版 refinePeakToRedLine(tQ, tFallbackRange) 會把 T 吸回 C 線，
+    // 造成 T Y = C Y 或真正第一峰被忽略。
+    const lockedTRange = cQ ? {
+      start: clamp(Math.max(tFallbackRange.start, cQ.y + pairMinGap), 0, h - 1),
+      end: clamp(Math.min(tFallbackRange.end, cQ.y + pairMaxGap, tBottomLimit), 0, h - 1)
+    } : tFallbackRange;
+    if (lockedTRange.end < lockedTRange.start) lockedTRange.end = lockedTRange.start;
+
+    const tRed = refinePeakToRedLine(tQ.y, lockedTRange, 'faintT');
     if (tRed && tRed.ok) tQ.y = tRed.localY;
 
     const cDetected = !!(
@@ -1733,14 +1744,14 @@
     else result = 'Invalid';
 
     const cRange = {start:cFallbackRange.start, end:cFallbackRange.end};
-    const tRange = {start:tFallbackRange.start, end:tFallbackRange.end};
+    const tRange = {start:lockedTRange.start, end:lockedTRange.end};
 
     const peakDebug = allPeaks.slice(0, 8).map(p =>
       `y=${(y0+p.y).toFixed(0)}, score=${p.score.toFixed(1)}, q=${p.quality.toFixed(1)}, selected=${p.selected ? 'YES' : 'NO'}, w=${p.width}, shoulder=${p.shoulderRatio.toFixed(2)}, near=${p.nearShoulderRatio.toFixed(2)}, reject=${p.reject}, warning=${p.warning || '-'}`
     );
 
     return {
-      source:'ct-combined-pink-dark-profile-v31-26-first-peak-recovery',
+      source:'ct-combined-pink-dark-profile-v31-27-earliest-c-locked-t-refine',
       x0, x1, y0, y1, h,
       zone:{x:x0, y:y0, w:Math.max(1, x1-x0), h:Math.max(1, y1-y0), startRatio:ctStartRatio, endRatio:ctEndRatio, widthRatio:ctEndRatio-ctStartRatio, topThirdY:Math.round(topThirdY), topThirdPadding:topThirdPadding, yLimitedByTopThird:(ctY0Float > windowInnerTop + 0.5)},
       raw, profile:positive, baseline:bg, rawBaseline, rawMedian, rawMax, pinkMax, darkMax, combinedMax, selectedMode, lumBackground, lumMedian, mean:stat.mean, std:stat.std,
