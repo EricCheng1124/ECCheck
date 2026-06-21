@@ -1,5 +1,5 @@
 (function () {
-  const ACCESS_CODE = 'ASAP2026';
+  const ACCESS_CODE = 'ASAP';
   let cvReady = false;
   let lastImage = null;
 
