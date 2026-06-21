@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v31.7-ct-zone-36-clean-ui';
+  const VERSION = 'v31.8-ct-dynamic-peak-picker';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -1088,8 +1088,9 @@
     const ctx = cropCanvas.getContext('2d', {willReadFrequently:true});
     const data = ctx.getImageData(0,0,W,H).data;
 
-    // v31.7：CT 不再使用整個 Window 寬度，避免把試紙槽左右邊壁與反光肩峰算進去。
-    // 第一層取 Window 中央 40%，第二層在 40% 內再縮 90%，最後有效寬度約為 Window 的 36%。
+    // v31.8：CT 改成「全 CT zone 動態找峰」。
+    // 不再先硬切 C Range / T Range，避免 T 線因位置偏移而沒被選到。
+    // 流程：Window 中央 40% × 內部 90% → Top S 以下 → 找全部候選峰 → 依上下位置分配 C/T。
     const centerBandStart = 0.30;
     const centerBandWidth = 0.40;
     const innerKeep = 0.90;
@@ -1100,9 +1101,6 @@
     const x0 = clamp(Math.floor(win.x + win.w * ctStartRatio), 0, W-1);
     const x1 = clamp(Math.ceil(win.x + win.w * ctEndRatio), 0, W);
 
-    // v31.5：CT 分析高度不能超過 Top S 分界線。
-    // 原因：Top third 以上容易吃到卡匣槽壁、反光與非試紙區，會產生胖波形。
-    // 因此 CT zone 的起點取「Window 上緣內縮」與「Top third 線下方」兩者較低者。
     const topThirdY = H / 3;
     const topThirdPadding = Math.max(4, Math.round(H * 0.008));
     const windowInnerTop = win.y + win.h * 0.04;
@@ -1118,9 +1116,7 @@
         const idx = (yy*W + xx) * 4;
         const r = data[idx], g = data[idx+1], b = data[idx+2];
         const yLum = 0.299*r + 0.587*g + 0.114*b;
-        // 紅/粉線強度：紅色相對於 G/B 與亮度背景的差異。
         const redScore = (r - (g+b)*0.50) + (r-g)*0.18 + (r-b)*0.12;
-        // 避免白色背景被誤判；太暗也不直接加分。
         const lineScore = Math.max(0, redScore) * (yLum > 55 ? 1 : 0.55);
         sum += lineScore;
         n++;
@@ -1133,34 +1129,147 @@
     const positive = smoothed.map(v=>Math.max(0, v-bg));
     const stat = meanStd(positive);
     const maxScore = Math.max(1, ...positive);
-    const threshold = Math.max(7, stat.mean + stat.std * 2.0, maxScore * 0.22);
+    const threshold = Math.max(6.5, stat.mean + stat.std * 1.65, maxScore * 0.18);
 
-    // 目前使用固定 Window 比例，所以 C/T 也用 Window 內相對位置分區。
-    // C 區偏上，T 區偏下，中間稍微重疊，避免裁切誤差。
-    const cRange = {start:Math.round(h*0.12), end:Math.round(h*0.48)};
-    const tRange = {start:Math.round(h*0.45), end:Math.round(h*0.84)};
-    const cRawPeak = maxInRange(positive, cRange.start, cRange.end);
-    const tRawPeak = maxInRange(positive, tRange.start, tRange.end);
-    const cQ = qualifyPeak(positive, cRawPeak, threshold, cRange, h, 'C');
-    const tQ = qualifyPeak(positive, tRawPeak, threshold, tRange, h, 'T');
+    const fullRange = {start:0, end:h-1};
+    const minSep = Math.max(10, Math.round(h * 0.13));
+    const candidateFloor = Math.max(3.8, threshold * 0.58);
 
-    const cDetected = cQ.detected;
-    const tDetected = tQ.detected;
+    function calcQuality(q) {
+      // v31.8：shoulder 不再直接 reject，而是扣分。
+      // 原因：淡線旁邊也可能有小平台，直接 reject 會漏掉真正 C/T。
+      let quality = q.score;
+      if (q.width > q.softMaxWidth) quality *= 0.20;
+      else if (q.width > q.maxWidth) quality *= 0.62;
+      quality *= Math.max(0.18, 1 - q.shoulderRatio * 0.55);
+      quality *= Math.max(0.18, 1 - q.nearShoulderRatio * 0.38);
+      quality *= Math.max(0.22, 1 - Math.max(0, q.shoulderMaxRatio - 0.55) * 0.55);
+      quality *= Math.min(1.25, Math.max(0.55, q.drop / Math.max(2.0, threshold * 0.42)));
+      return Math.max(0, quality);
+    }
+
+    function findLocalPeaks(profile) {
+      const peaks = [];
+      const guard = Math.max(2, Math.round(h * 0.010));
+      for (let y=guard; y<profile.length-guard; y++) {
+        const v = profile[y];
+        if (v < candidateFloor) continue;
+        let isPeak = true;
+        for (let k=1; k<=guard; k++) {
+          if (profile[y-k] > v || profile[y+k] > v) { isPeak = false; break; }
+        }
+        if (!isPeak) continue;
+        // 避免同一個寬峰產生太多相鄰小峰。
+        if (peaks.length && y - peaks[peaks.length-1].y < Math.max(3, guard*2)) {
+          if (v > peaks[peaks.length-1].score) peaks[peaks.length-1] = {y, score:v};
+        } else {
+          peaks.push({y, score:v});
+        }
+      }
+      return peaks;
+    }
+
+    const rawPeaks = findLocalPeaks(positive);
+    const allPeaks = rawPeaks.map(p => {
+      const q = qualifyPeak(positive, p, threshold, fullRange, h, 'P');
+      const quality = calcQuality(q);
+      let reject = '';
+      if (q.score < candidateFloor) reject = 'below-candidate-floor';
+      else if (q.width > q.softMaxWidth) reject = 'too-wide-edge';
+      else if (quality < Math.max(3.6, threshold * 0.42)) reject = 'low-shape-quality';
+      return Object.assign({}, q, {
+        quality,
+        detected: !reject,
+        reject: reject || 'PASS'
+      });
+    }).sort((a,b)=>b.quality-a.quality);
+
+    const selected = [];
+    for (const p of allPeaks) {
+      if (!p.detected) continue;
+      if (selected.some(s=>Math.abs(s.y - p.y) < minSep)) continue;
+      selected.push(p);
+      if (selected.length >= 3) break;
+    }
+    selected.sort((a,b)=>a.y-b.y);
+
+    let cQ = null;
+    let tQ = null;
+    const upperLimit = h * 0.58;
+
+    if (selected.length >= 2) {
+      // 取上下距離足夠的前兩個峰；上方 = C，下方 = T。
+      let bestPair = null;
+      let bestPairScore = -Infinity;
+      for (let i=0; i<selected.length; i++) {
+        for (let j=i+1; j<selected.length; j++) {
+          const dy = selected[j].y - selected[i].y;
+          if (dy < minSep) continue;
+          const pairScore = selected[i].quality + selected[j].quality + Math.min(1, dy / Math.max(1, h*0.28)) * threshold * 0.25;
+          if (pairScore > bestPairScore) { bestPairScore = pairScore; bestPair = [selected[i], selected[j]]; }
+        }
+      }
+      if (bestPair) { cQ = bestPair[0]; tQ = bestPair[1]; }
+    }
+
+    if (!cQ && selected.length === 1) {
+      if (selected[0].y <= upperLimit) cQ = selected[0];
+      else tQ = selected[0];
+    }
+
+    // 顯示用 fallback：即使沒有 detected，也列出 C/T 區域附近最強峰，方便 debug。
+    const cFallbackRange = {start:Math.round(h*0.08), end:Math.round(h*0.55)};
+    const tFallbackRange = {start:Math.round(h*0.42), end:Math.round(h*0.92)};
+    function fallbackPeak(label, range) {
+      const raw = maxInRange(positive, range.start, range.end);
+      const q = qualifyPeak(positive, raw, threshold, range, h, label);
+      q.quality = calcQuality(q);
+      q.detected = false;
+      if (q.score < threshold) q.reject = 'below-threshold';
+      else q.reject = q.reject || 'not-selected';
+      return q;
+    }
+    if (!cQ) cQ = fallbackPeak('C', cFallbackRange);
+    if (!tQ) tQ = fallbackPeak('T', tFallbackRange);
+
+    cQ.label = 'C';
+    tQ.label = 'T';
+    cQ.detected = !!(selected.includes(cQ) || (selected.length >= 2 && cQ.quality > 0));
+    tQ.detected = !!(selected.includes(tQ) || (selected.length >= 2 && tQ.quality > 0));
+
+    // 防呆：單峰若在下半部，只能算 T-like，沒有 C，所以 Invalid。
+    if (selected.length === 1 && selected[0].y > upperLimit) {
+      cQ.detected = false;
+      tQ.detected = true;
+    }
+
+    const cDetected = !!cQ.detected;
+    const tDetected = !!tQ.detected;
     let result = 'Invalid';
     if (cDetected && tDetected) result = 'Positive';
     else if (cDetected && !tDetected) result = 'Negative';
     else result = 'Invalid';
 
+    const cRange = {start:cFallbackRange.start, end:cFallbackRange.end};
+    const tRange = {start:tFallbackRange.start, end:tFallbackRange.end};
+
+    const peakDebug = allPeaks.slice(0, 8).map(p =>
+      `y=${(y0+p.y).toFixed(0)}, score=${p.score.toFixed(1)}, q=${p.quality.toFixed(1)}, w=${p.width}, shoulder=${p.shoulderRatio.toFixed(2)}, near=${p.nearShoulderRatio.toFixed(2)}, ${p.reject}`
+    );
+
     return {
-      source:'ct-red-profile-center-27-zone-below-top-third',
+      source:'ct-red-profile-dynamic-peaks-v31-8',
       x0, x1, y0, y1, h,
       zone:{x:x0, y:y0, w:Math.max(1, x1-x0), h:Math.max(1, y1-y0), startRatio:ctStartRatio, endRatio:ctEndRatio, widthRatio:ctEndRatio-ctStartRatio, topThirdY:Math.round(topThirdY), topThirdPadding:topThirdPadding, yLimitedByTopThird:(ctY0Float > windowInnerTop + 0.5)},
       raw, profile:positive, baseline:bg, mean:stat.mean, std:stat.std,
-      maxScore, threshold,
+      maxScore, threshold, candidateFloor, minSep,
       cRange, tRange,
-      cPeak:{y:cQ.y, absY:y0+cQ.y, score:cQ.score, detected:cDetected, width:cQ.width, left:y0+cQ.left, right:y0+cQ.right, drop:cQ.drop, sharpness:cQ.sharpness, shoulderRatio:cQ.shoulderRatio, shoulderMaxRatio:cQ.shoulderMaxRatio, nearShoulderRatio:cQ.nearShoulderRatio, reject:cQ.reject, maxWidth:cQ.maxWidth},
-      tPeak:{y:tQ.y, absY:y0+tQ.y, score:tQ.score, detected:tDetected, width:tQ.width, left:y0+tQ.left, right:y0+tQ.right, drop:tQ.drop, sharpness:tQ.sharpness, shoulderRatio:tQ.shoulderRatio, shoulderMaxRatio:tQ.shoulderMaxRatio, nearShoulderRatio:tQ.nearShoulderRatio, reject:tQ.reject, maxWidth:tQ.maxWidth},
-      rejectedPeaks:[cQ, tQ].filter(p=>!p.detected).map(p=>`${p.label}:${p.reject}`),
+      cPeak:{y:cQ.y, absY:y0+cQ.y, score:cQ.score, detected:cDetected, width:cQ.width, left:y0+cQ.left, right:y0+cQ.right, drop:cQ.drop, sharpness:cQ.sharpness, shoulderRatio:cQ.shoulderRatio, shoulderMaxRatio:cQ.shoulderMaxRatio, nearShoulderRatio:cQ.nearShoulderRatio, quality:cQ.quality || 0, reject:cQ.reject, maxWidth:cQ.maxWidth},
+      tPeak:{y:tQ.y, absY:y0+tQ.y, score:tQ.score, detected:tDetected, width:tQ.width, left:y0+tQ.left, right:y0+tQ.right, drop:tQ.drop, sharpness:tQ.sharpness, shoulderRatio:tQ.shoulderRatio, shoulderMaxRatio:tQ.shoulderMaxRatio, nearShoulderRatio:tQ.nearShoulderRatio, quality:tQ.quality || 0, reject:tQ.reject, maxWidth:tQ.maxWidth},
+      rejectedPeaks:allPeaks.filter(p=>!p.detected).slice(0,6).map(p=>`y${(y0+p.y).toFixed(0)}:${p.reject}`),
+      peakDebug,
+      allPeakCount:allPeaks.length,
+      selectedPeakCount:selected.length,
       peakCount:(cDetected?1:0)+(tDetected?1:0),
       result
     };
@@ -1839,11 +1948,13 @@ scored.forEach((c,i)=>
       dbg += `<b>CT Line Analysis</b><br>`;
       dbg += `Result=${ct.result} / Peak Count=${ct.peakCount} / Threshold=${ct.threshold.toFixed(1)} / Baseline=${ct.baseline.toFixed(1)} / Max=${ct.maxScore.toFixed(1)}<br>`;
       if (ct.zone) dbg += `CT Analyze Zone=x${ct.zone.x}, y${ct.zone.y}, w${ct.zone.w}, h${ct.zone.h} / ratio=${(ct.zone.widthRatio*100).toFixed(1)}% / xRatio=${(ct.zone.startRatio*100).toFixed(1)}-${(ct.zone.endRatio*100).toFixed(1)}%<br>`;
+      dbg += `Dynamic Peaks=${ct.allPeakCount || 0} / Selected=${ct.selectedPeakCount || 0} / CandidateFloor=${(ct.candidateFloor || 0).toFixed(1)} / MinSep=${ct.minSep || 0}<br>`;
       dbg += `C Score=${ct.cPeak.score.toFixed(1)} / C Y=${ct.cPeak.absY.toFixed(0)} / C Detected=${ct.cPeak.detected ? 'YES' : 'NO'} / C Range=${ct.cRange.start}-${ct.cRange.end}<br>`;
-      dbg += `C Width=${ct.cPeak.width} / MaxWidth=${ct.cPeak.maxWidth} / Drop=${ct.cPeak.drop.toFixed(1)} / Sharpness=${ct.cPeak.sharpness.toFixed(2)} / Shoulder=${ct.cPeak.shoulderRatio.toFixed(2)} / NearShoulder=${ct.cPeak.nearShoulderRatio.toFixed(2)} / Reject=${ct.cPeak.reject}<br>`;
+      dbg += `C Width=${ct.cPeak.width} / MaxWidth=${ct.cPeak.maxWidth} / Drop=${ct.cPeak.drop.toFixed(1)} / Sharpness=${ct.cPeak.sharpness.toFixed(2)} / Quality=${(ct.cPeak.quality || 0).toFixed(1)} / Shoulder=${ct.cPeak.shoulderRatio.toFixed(2)} / NearShoulder=${ct.cPeak.nearShoulderRatio.toFixed(2)} / Reject=${ct.cPeak.reject}<br>`;
       dbg += `T Score=${ct.tPeak.score.toFixed(1)} / T Y=${ct.tPeak.absY.toFixed(0)} / T Detected=${ct.tPeak.detected ? 'YES' : 'NO'} / T Range=${ct.tRange.start}-${ct.tRange.end}<br>`;
-      dbg += `T Width=${ct.tPeak.width} / MaxWidth=${ct.tPeak.maxWidth} / Drop=${ct.tPeak.drop.toFixed(1)} / Sharpness=${ct.tPeak.sharpness.toFixed(2)} / Shoulder=${ct.tPeak.shoulderRatio.toFixed(2)} / NearShoulder=${ct.tPeak.nearShoulderRatio.toFixed(2)} / Reject=${ct.tPeak.reject}<br>`;
+      dbg += `T Width=${ct.tPeak.width} / MaxWidth=${ct.tPeak.maxWidth} / Drop=${ct.tPeak.drop.toFixed(1)} / Sharpness=${ct.tPeak.sharpness.toFixed(2)} / Quality=${(ct.tPeak.quality || 0).toFixed(1)} / Shoulder=${ct.tPeak.shoulderRatio.toFixed(2)} / NearShoulder=${ct.tPeak.nearShoulderRatio.toFixed(2)} / Reject=${ct.tPeak.reject}<br>`;
       if (ct.rejectedPeaks && ct.rejectedPeaks.length) dbg += `Rejected Peaks=${ct.rejectedPeaks.join(', ')}<br>`;
+      if (ct.peakDebug && ct.peakDebug.length) dbg += `Peak Candidates：${ct.peakDebug.join(' | ')}<br>`;
     }
 
     if (f && f.redWindow) {

@@ -1,6 +1,3 @@
-# ASAP Check v31.7
+# ASAP Check v31.8
 
-- CT Analyze Zone changed to Window center 40% with inner 90% keep, effective width 36%.
-- CT zone Y still starts below Top S line.
-- UI keeps Original Image Detection, Cropped Test Cassette, and Debug Summary only.
-- Access code: ASAP.
+CT line analysis changed to dynamic peak picking. It searches all peaks in the CT zone first, then assigns upper peak as C and lower peak as T. Shoulder/platform is now a quality penalty instead of direct rejection.
