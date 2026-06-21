@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v31.17-result-ui-advanced-lock';
+  const VERSION = 'v31.19-t-shape-gate-ui-fix';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -1482,12 +1482,33 @@
 
     const tcRatio = cQ && cQ.score > 0 ? tQ.score / cQ.score : 0;
 
+    // v31.19：T 線加回 shape gate。
+    // 目的：保留淡 T 線，但排除大面積陰影/底色平台造成的假 T。
+    // 真 T 可以淡，但仍應該具備一定 sharpness / quality，且不能寬到像整片平台。
+    const tWeakShapeOk = !!(
+      tQ &&
+      tQ.sharpness >= 0.20 &&
+      (tQ.quality || 0) >= 2.0 &&
+      tQ.width <= Math.max(18, (tQ.maxWidth || 1) * 6.0)
+    );
+
+    const tStrongShapeOk = !!(
+      tQ &&
+      tcRatio >= 0.45 &&
+      tQ.sharpness >= 0.12 &&
+      (tQ.quality || 0) >= 1.2 &&
+      tQ.width <= Math.max(22, (tQ.maxWidth || 1) * 7.0)
+    );
+
+    const tShapeOk = tWeakShapeOk || tStrongShapeOk;
+
     const tDetected = !!(
       tQ &&
       tSelected &&
       cDetected &&
       tQ.score >= tThreshold &&
-      tRed.ok
+      tRed.ok &&
+      tShapeOk
     );
 
     cQ.detected = cDetected;
@@ -1501,6 +1522,7 @@
     if (!tSelected) tQ.reject = 'not-selected';
     else if (tQ.score < tThreshold) tQ.reject = 'below-relative-threshold';
     else if (!tRed.ok) tQ.reject = 'no-red-continuity';
+    else if (!tShapeOk) tQ.reject = 'bad-t-shape-platform';
     else tQ.reject = 'PASS';
 
     // 防呆：單峰若在下半部，只能算 T-like，沒有 C，所以 Invalid。

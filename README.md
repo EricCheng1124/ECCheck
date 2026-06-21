@@ -1,9 +1,3 @@
-# ASAP Check v31.18
+# ASAP Check v31.19
 
-UI update:
-- Only one detection image is shown.
-- Original image is embedded as a small thumbnail in the top-left corner of the cropped cassette image.
-- Extra standalone Original/Cropped canvases are hidden.
-- Detection Result uses stronger color status: Positive red, Negative green, Invalid gray.
-- Date, time, result, and region/location are burned into the detection image for traceability.
-- Advanced debug details remain password protected with `ASAP`.
+T line shape gate added to reject broad shadow/platform false positives. Desktop source UI spacing fixed.
