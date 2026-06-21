@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v31.10-ct-no-width-kill';
+  const VERSION = 'v31.11-ct-pink-dark-combined';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -1109,39 +1109,68 @@
     const y1 = clamp(Math.ceil(win.y + win.h * 0.96), y0 + 1, H);
     const h = Math.max(1, y1-y0);
 
-    const raw = [];
+    // v31.11：CT 不只看紅/粉紅，也看暗線。
+    // 有些 C 線偏灰紫或很淡，RedScore 會接近 0；但線本身仍比周圍暗。
+    // 因此建立三個 profile：pink、dark、combined = max(pink, dark)。
+    const pinkRaw = [];
+    const lumRaw = [];
     for (let yy=y0; yy<y1; yy++) {
-      let sum = 0, n = 0;
+      let pinkSum = 0, lumSum = 0, n = 0;
       for (let xx=x0; xx<x1; xx++) {
         const idx = (yy*W + xx) * 4;
         const r = data[idx], g = data[idx+1], b = data[idx+2];
         const yLum = 0.299*r + 0.587*g + 0.114*b;
         const redScore = (r - (g+b)*0.50) + (r-g)*0.18 + (r-b)*0.12;
-        const lineScore = Math.max(0, redScore) * (yLum > 55 ? 1 : 0.55);
-        sum += lineScore;
+        const pinkScore = Math.max(0, redScore) * (yLum > 55 ? 1 : 0.55);
+        pinkSum += pinkScore;
+        lumSum += yLum;
         n++;
       }
-      raw.push(n ? sum/n : 0);
+      pinkRaw.push(n ? pinkSum/n : 0);
+      lumRaw.push(n ? lumSum/n : 0);
     }
 
-    const smoothed = smoothProfile(raw, Math.max(2, Math.round(h*0.012)));
+    const pinkSmooth = smoothProfile(pinkRaw, Math.max(2, Math.round(h*0.012)));
+    const lumSmooth = smoothProfile(lumRaw, Math.max(2, Math.round(h*0.012)));
 
-    // v31.9：改用 local/low-percentile baseline，避免整段 profile 被壓到 Baseline=0 後又亂畫假 C/T。
-    // 這裡不是直接用 median 扣背景，而是用較低分位數當背景；若背景很低，仍保留 raw peak 形狀給除錯。
+    // v31.9：local/low-percentile baseline；v31.11：分別建立 pink 與 dark baseline。
     function percentile(arr, p) {
       if (!arr || !arr.length) return 0;
       const a = arr.slice().sort((x,y)=>x-y);
       const idx = Math.max(0, Math.min(a.length-1, Math.floor((a.length-1)*p)));
       return a[idx];
     }
-    const rawBaseline = percentile(smoothed, 0.20);
-    const rawMedian = median(smoothed);
-    const rawMax = Math.max(1, ...smoothed);
-    const bg = Math.max(0, Math.min(rawBaseline, rawMedian));
-    const positive = smoothed.map(v=>Math.max(0, v-bg));
+
+    const pinkBaseline = percentile(pinkSmooth, 0.20);
+    const pinkMedian = median(pinkSmooth);
+    const pinkBg = Math.max(0, Math.min(pinkBaseline, pinkMedian));
+    const pinkPositive = pinkSmooth.map(v=>Math.max(0, v-pinkBg));
+
+    // 暗線：用高分位亮度當背景，線段越暗，分數越高。
+    // 用 0.72 分位而不是 max，可避免局部反光把暗線分數拉太高。
+    const lumBackground = percentile(lumSmooth, 0.72);
+    const lumMedian = median(lumSmooth);
+    const darkRaw = lumSmooth.map(v=>Math.max(0, lumBackground - v));
+    const darkSmooth = smoothProfile(darkRaw, Math.max(1, Math.round(h*0.006)));
+
+    // 讓暗線分數與 pink 分數同量級；避免純陰影梯度全面壓過粉紅峰。
+    const darkWeight = 0.88;
+    const positive = pinkPositive.map((v,i)=>Math.max(v, darkSmooth[i] * darkWeight));
+
+    const raw = positive.slice();
+    const smoothed = positive.slice();
+    const rawBaseline = pinkBaseline;
+    const rawMedian = median(positive);
+    const rawMax = Math.max(1, ...positive);
+    const pinkMax = Math.max(0, ...pinkPositive);
+    const darkMax = Math.max(0, ...darkSmooth);
+    const combinedMax = Math.max(1, ...positive);
+    const selectedMode = pinkMax >= darkMax * darkWeight ? (darkMax * darkWeight > pinkMax * 0.60 ? 'mixed' : 'pink') : (pinkMax > darkMax * darkWeight * 0.60 ? 'mixed' : 'dark');
+
+    const bg = 0;
     const stat = meanStd(positive);
     const maxScore = Math.max(1, ...positive);
-    const threshold = Math.max(5.8, stat.mean + stat.std * 1.35, maxScore * 0.15);
+    const threshold = Math.max(4.8, stat.mean + stat.std * 1.10, maxScore * 0.18);
 
     const fullRange = {start:0, end:h-1};
     const minSep = Math.max(10, Math.round(h * 0.13));
@@ -1271,10 +1300,10 @@
     );
 
     return {
-      source:'ct-red-profile-dynamic-peaks-v31-10-no-width-kill',
+      source:'ct-combined-pink-dark-profile-v31-11',
       x0, x1, y0, y1, h,
       zone:{x:x0, y:y0, w:Math.max(1, x1-x0), h:Math.max(1, y1-y0), startRatio:ctStartRatio, endRatio:ctEndRatio, widthRatio:ctEndRatio-ctStartRatio, topThirdY:Math.round(topThirdY), topThirdPadding:topThirdPadding, yLimitedByTopThird:(ctY0Float > windowInnerTop + 0.5)},
-      raw, profile:positive, baseline:bg, rawBaseline, rawMedian, rawMax, mean:stat.mean, std:stat.std,
+      raw, profile:positive, baseline:bg, rawBaseline, rawMedian, rawMax, pinkMax, darkMax, combinedMax, selectedMode, lumBackground, lumMedian, mean:stat.mean, std:stat.std,
       maxScore, threshold, candidateFloor, minSep,
       cRange, tRange,
       cPeak:{y:cQ.y, absY:y0+cQ.y, score:cQ.score, detected:cDetected, width:cQ.width, left:y0+cQ.left, right:y0+cQ.right, drop:cQ.drop, sharpness:cQ.sharpness, shoulderRatio:cQ.shoulderRatio, shoulderMaxRatio:cQ.shoulderMaxRatio, nearShoulderRatio:cQ.nearShoulderRatio, quality:cQ.quality || 0, reject:cQ.reject, maxWidth:cQ.maxWidth},
@@ -1967,7 +1996,7 @@ scored.forEach((c,i)=>
       const ct = f.ctAnalysis;
       dbg += `<b>CT Line Analysis</b><br>`;
       dbg += `Result=${ct.result} / Peak Count=${ct.peakCount} / Threshold=${ct.threshold.toFixed(1)} / Baseline=${ct.baseline.toFixed(1)} / Max=${ct.maxScore.toFixed(1)}<br>`;
-      dbg += `RawBaseline=${(ct.rawBaseline || 0).toFixed(1)} / RawMedian=${(ct.rawMedian || 0).toFixed(1)} / RawMax=${(ct.rawMax || 0).toFixed(1)}<br>`;
+      dbg += `RawBaseline=${(ct.rawBaseline || 0).toFixed(1)} / RawMedian=${(ct.rawMedian || 0).toFixed(1)} / RawMax=${(ct.rawMax || 0).toFixed(1)}<br>PinkMax=${(ct.pinkMax || 0).toFixed(1)} / DarkMax=${(ct.darkMax || 0).toFixed(1)} / CombinedMax=${(ct.combinedMax || 0).toFixed(1)} / Mode=${ct.selectedMode || '-'}<br>`;
       if (!(ct.selectedPeakCount || 0)) dbg += `<b style="color:#dc2626">No CT peak selected：C/T guide lines are hidden.</b><br>`;
       if (ct.zone) dbg += `CT Analyze Zone=x${ct.zone.x}, y${ct.zone.y}, w=${ct.zone.w}, h=${ct.zone.h} / ratio=${(ct.zone.widthRatio*100).toFixed(1)}% / xRatio=${(ct.zone.startRatio*100).toFixed(1)}-${(ct.zone.endRatio*100).toFixed(1)}%<br>`;
       dbg += `Dynamic Peaks=${ct.allPeakCount || 0} / Selected=${ct.selectedPeakCount || 0} / CandidateFloor=${(ct.candidateFloor || 0).toFixed(1)} / MinSep=${ct.minSep || 0}<br>`;
