@@ -23,6 +23,9 @@
   const debugEdge=document.getElementById('debugEdge');
   const debugBright=document.getElementById('debugBright');
   const debugText=document.getElementById('debugText');
+  const regionInput = document.getElementById('regionInput');
+  const gpsBtn = document.getElementById('gpsBtn');
+  let lastResultText = 'Invalid';
   const advancedLock = document.getElementById('advancedLock');
   const advancedContent = document.getElementById('advancedContent');
   const advancedPassInput = document.getElementById('advancedPassInput');
@@ -91,6 +94,53 @@
     return ct.result;
   }
 
+  function getRegionText() {
+    const value = regionInput ? (regionInput.value || '').trim() : '';
+    return value || 'Region: not set';
+  }
+
+  function getTimestampParts() {
+    const now = new Date();
+    const pad = n => String(n).padStart(2, '0');
+    const date = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+    const time = `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+    return { date, time };
+  }
+
+  function drawMetadataOverlay(ctx, W, H) {
+    const ts = getTimestampParts();
+    const lines = [
+      `Result: ${lastResultText || 'Invalid'}`,
+      `Date: ${ts.date}`,
+      `Time: ${ts.time}`,
+      `Region: ${getRegionText()}`
+    ];
+
+    const fontSize = Math.max(10, Math.round(W / 28));
+    const pad = Math.max(6, Math.round(W * 0.025));
+    ctx.save();
+    ctx.font = `700 ${fontSize}px sans-serif`;
+
+    const textW = Math.max(...lines.map(t => ctx.measureText(t).width));
+    const boxW = Math.min(W - pad * 2, textW + pad * 2);
+    const lineH = Math.round(fontSize * 1.35);
+    const boxH = lineH * lines.length + pad * 1.4;
+    const x = pad;
+    const y = Math.max(pad, Math.round(H - boxH - pad));
+
+    ctx.fillStyle = 'rgba(255,255,255,0.88)';
+    ctx.fillRect(x, y, boxW, boxH);
+    ctx.strokeStyle = 'rgba(17,24,39,0.45)';
+    ctx.lineWidth = Math.max(1, Math.round(W / 260));
+    ctx.strokeRect(x, y, boxW, boxH);
+
+    ctx.fillStyle = '#111827';
+    for (let i = 0; i < lines.length; i++) {
+      ctx.fillText(lines[i], x + pad, y + pad + fontSize + i * lineH);
+    }
+    ctx.restore();
+  }
+
   function renderCombinedDetectionView() {
     if (!combinedCanvas || !cropCanvas || !canvas || !cropCanvas.width || !cropCanvas.height) return;
 
@@ -104,21 +154,23 @@
     ctx.drawImage(cropCanvas, 0, 0, W, H);
 
     if (canvas.width && canvas.height) {
-      const thumbW = Math.max(80, Math.round(W * 0.34));
+      const thumbW = Math.max(58, Math.round(W * 0.24));
       const thumbH = Math.round(canvas.height * thumbW / Math.max(1, canvas.width));
-      const pad = Math.max(6, Math.round(W * 0.025));
+      const pad = Math.max(5, Math.round(W * 0.02));
       const x = pad;
       const y = pad;
 
       ctx.save();
-      ctx.fillStyle = 'rgba(255,255,255,0.92)';
-      ctx.fillRect(x - 3, y - 3, thumbW + 6, thumbH + 6);
+      ctx.fillStyle = 'rgba(255,255,255,0.88)';
+      ctx.fillRect(x - 2, y - 2, thumbW + 4, thumbH + 4);
       ctx.strokeStyle = 'rgba(22,163,74,0.95)';
-      ctx.lineWidth = Math.max(2, Math.round(W / 140));
-      ctx.strokeRect(x - 3, y - 3, thumbW + 6, thumbH + 6);
+      ctx.lineWidth = Math.max(1, Math.round(W / 180));
+      ctx.strokeRect(x - 2, y - 2, thumbW + 4, thumbH + 4);
       ctx.drawImage(canvas, x, y, thumbW, thumbH);
       ctx.restore();
     }
+
+    drawMetadataOverlay(ctx, W, H);
   }
 
   function updateTexts() {
@@ -354,6 +406,7 @@
 
     if (uiOk) {
       const ctText = getCtResultText(r);
+      lastResultText = ctText;
       resultEl.textContent = ctText;
       if (ctText === 'Positive') resultEl.classList.add('positive');
       else if (ctText === 'Negative') resultEl.classList.add('negative');
@@ -370,8 +423,9 @@
         `Size: w=${r.rect.w.toFixed(0)}, h=${r.rect.h.toFixed(0)}, angle=${r.rect.angle.toFixed(1)}°<br>` +
         formatFeatures(r.features);
     } else {
+      lastResultText = 'Invalid';
       resultEl.classList.add('invalid');
-      resultEl.textContent = 'Outer frame detection failed.';
+      resultEl.textContent = 'Invalid';
       detailEl.innerHTML =
         `Version: ${r.version}<br>` +
         `Failure reason: ${r.reason}<br>` +
@@ -387,6 +441,7 @@
     resizeAndDrawImage(lastImage);
     if (!cvReady) {
       resultEl.className = 'result neutral';
+      lastResultText = 'Invalid';
       resultEl.textContent = '';
       detailEl.textContent = '';
       return;
@@ -399,7 +454,8 @@
     catch (ex) {
       console.error(ex);
       resultEl.className = 'result invalid';
-      resultEl.textContent = 'Analysis failed';
+      lastResultText = 'Invalid';
+      resultEl.textContent = 'Invalid';
       detailEl.innerHTML =
         '<b>Exception</b><br>' +
         (ex && ex.message ? ex.message : String(ex));
@@ -423,10 +479,47 @@
     };
     img.onerror = function () {
       resultEl.className = 'result invalid';
-      resultEl.textContent = 'Image loading failed';
+      lastResultText = 'Invalid';
+      resultEl.textContent = 'Invalid';
       detailEl.textContent = '';
     };
     img.src = URL.createObjectURL(file);
+  }
+
+  if (regionInput) {
+    regionInput.value = localStorage.getItem('asap_region') || '';
+    regionInput.addEventListener('input', () => {
+      localStorage.setItem('asap_region', regionInput.value || '');
+      renderCombinedDetectionView();
+    });
+  }
+
+  if (gpsBtn) {
+    gpsBtn.addEventListener('click', () => {
+      if (!navigator.geolocation) {
+        if (regionInput) regionInput.value = 'GPS not supported';
+        return;
+      }
+      gpsBtn.textContent = 'Locating...';
+      navigator.geolocation.getCurrentPosition(
+        pos => {
+          const lat = pos.coords.latitude.toFixed(5);
+          const lng = pos.coords.longitude.toFixed(5);
+          if (regionInput) {
+            regionInput.value = `${lat}, ${lng}`;
+            localStorage.setItem('asap_region', regionInput.value);
+          }
+          gpsBtn.textContent = 'Use GPS';
+          renderCombinedDetectionView();
+        },
+        () => {
+          gpsBtn.textContent = 'Use GPS';
+          if (regionInput && !regionInput.value) regionInput.value = 'GPS denied';
+          renderCombinedDetectionView();
+        },
+        { enableHighAccuracy: true, timeout: 8000, maximumAge: 60000 }
+      );
+    });
   }
 
   unlockBtn.addEventListener('click', unlock);

@@ -27,6 +27,10 @@
           <label class="fileBtn">Take Photo<input id="cameraInput" type="file" accept="image/*" capture="environment" /></label>
           <label class="fileBtn secondary">Choose Photo<input id="galleryInput" type="file" accept="image/*" /></label>
         </div>
+        <div class="metaRow">
+          <input id="regionInput" type="text" placeholder="Region / Location, e.g. Taipei Veterans General Hospital" autocomplete="off" />
+          <button id="gpsBtn" class="secondaryBtn" type="button">Use GPS</button>
+        </div>
         <p id="cvStatus" class="hint"></p>
       </section>
       <section class="card resultCard">
@@ -34,11 +38,11 @@
         <div id="result" class="result neutral"></div>
       </section>
 
-      <section class="card">
+      <section class="card imageCard">
         <h2>Detection Image</h2>
         <canvas id="combinedCanvas"></canvas>
-        <canvas id="canvas" class="hiddenCanvas"></canvas>
-        <canvas id="cropCanvas" class="hiddenCanvas"></canvas>
+        <canvas id="canvas" class="hiddenCanvas" aria-hidden="true"></canvas>
+        <canvas id="cropCanvas" class="hiddenCanvas" aria-hidden="true"></canvas>
       </section>
 
       <section class="card">
@@ -61,7 +65,7 @@
   </div>
 
   <script async src="https://docs.opencv.org/4.9.0/opencv.js" onload="window.__opencvLoaded && window.__opencvLoaded()"></script>
-  <script src="detector.js?v=31.17"></script>
-  <script src="app.js?v=31.17"></script>
+  <script src="detector.js?v=31.18"></script>
+  <script src="app.js?v=31.18"></script>
 </body>
 </html>
