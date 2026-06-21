@@ -108,72 +108,183 @@
     return { date, time };
   }
 
-  function drawMetadataOverlay(ctx, W, H) {
-    const ts = getTimestampParts();
-    const lines = [
-      `Result: ${lastResultText || 'Invalid'}`,
-      `Date: ${ts.date}`,
-      `Time: ${ts.time}`,
-      `Region: ${getRegionText()}`
-    ];
+function drawMetadataOverlay(ctx, W, H) {
+  const ts = getTimestampParts();
 
-    const fontSize = Math.max(10, Math.round(W / 28));
-    const pad = Math.max(6, Math.round(W * 0.025));
-    ctx.save();
-    ctx.font = `700 ${fontSize}px sans-serif`;
+  const lines = [
+    `Result : ${lastResultText || 'Invalid'}`,
+    `Date   : ${ts.date}`,
+    `Time   : ${ts.time}`,
+    `Region : ${getRegionText()}`
+  ];
 
-    const textW = Math.max(...lines.map(t => ctx.measureText(t).width));
-    const boxW = Math.min(W - pad * 2, textW + pad * 2);
-    const lineH = Math.round(fontSize * 1.35);
-    const boxH = lineH * lines.length + pad * 1.4;
-    const x = pad;
-    const y = Math.max(pad, Math.round(H - boxH - pad));
+  const fontSize = Math.max(18, Math.round(W / 15));
+  const pad = Math.max(12, Math.round(W * 0.035));
 
-    ctx.fillStyle = 'rgba(255,255,255,0.88)';
-    ctx.fillRect(x, y, boxW, boxH);
-    ctx.strokeStyle = 'rgba(17,24,39,0.45)';
-    ctx.lineWidth = Math.max(1, Math.round(W / 260));
-    ctx.strokeRect(x, y, boxW, boxH);
+  ctx.save();
+  ctx.font = `800 ${fontSize}px "Segoe UI", "Noto Sans TC", sans-serif`;
 
-    ctx.fillStyle = '#111827';
-    for (let i = 0; i < lines.length; i++) {
-      ctx.fillText(lines[i], x + pad, y + pad + fontSize + i * lineH);
+  const textW = Math.max(...lines.map(t => ctx.measureText(t).width));
+  const lineH = Math.round(fontSize * 1.45);
+
+  const boxW = Math.min(W * 0.68, textW + pad * 2);
+  const boxH = lineH * lines.length + pad * 1.7;
+
+  const x = Math.max(pad, Math.round(W - boxW - pad));
+  const y = Math.max(pad, Math.round(H - boxH - pad));
+
+  const radius = Math.max(10, Math.round(W * 0.035));
+
+  // shadow
+  ctx.shadowColor = 'rgba(15, 23, 42, 0.35)';
+  ctx.shadowBlur = 18;
+  ctx.shadowOffsetX = 0;
+  ctx.shadowOffsetY = 8;
+
+  // background
+  const grad = ctx.createLinearGradient(x, y, x + boxW, y + boxH);
+  grad.addColorStop(0, 'rgba(15, 23, 42, 0.96)');
+  grad.addColorStop(0.55, 'rgba(30, 64, 175, 0.94)');
+  grad.addColorStop(1, 'rgba(14, 165, 233, 0.90)');
+
+  ctx.fillStyle = grad;
+  ctx.beginPath();
+  ctx.moveTo(x + radius, y);
+  ctx.lineTo(x + boxW - radius, y);
+  ctx.quadraticCurveTo(x + boxW, y, x + boxW, y + radius);
+  ctx.lineTo(x + boxW, y + boxH - radius);
+  ctx.quadraticCurveTo(x + boxW, y + boxH, x + boxW - radius, y + boxH);
+  ctx.lineTo(x + radius, y + boxH);
+  ctx.quadraticCurveTo(x, y + boxH, x, y + boxH - radius);
+  ctx.lineTo(x, y + radius);
+  ctx.quadraticCurveTo(x, y, x + radius, y);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.shadowColor = 'transparent';
+
+  // border
+  ctx.strokeStyle = 'rgba(125, 211, 252, 0.95)';
+  ctx.lineWidth = Math.max(2, Math.round(W / 180));
+  ctx.stroke();
+
+  // left accent line
+  ctx.fillStyle = '#38BDF8';
+  ctx.fillRect(x + pad * 0.55, y + pad * 0.7, Math.max(3, W / 90), boxH - pad * 1.4);
+
+  // text
+  for (let i = 0; i < lines.length; i++) {
+    if (i === 0) {
+      const isPositive = String(lastResultText).toLowerCase() === 'positive';
+      const isNegative = String(lastResultText).toLowerCase() === 'negative';
+
+      ctx.fillStyle = isPositive
+        ? '#FEE2E2'
+        : isNegative
+          ? '#DCFCE7'
+          : '#F8FAFC';
+    } else {
+      ctx.fillStyle = '#E0F2FE';
     }
+
+    ctx.fillText(
+      lines[i],
+      x + pad * 1.15,
+      y + pad + fontSize + i * lineH
+    );
+  }
+
+  ctx.restore();
+}
+
+function renderCombinedDetectionView() {
+  if (!combinedCanvas || !cropCanvas || !canvas || !cropCanvas.width || !cropCanvas.height) return;
+
+  const W = cropCanvas.width;
+  const H = cropCanvas.height;
+
+  combinedCanvas.width = W;
+  combinedCanvas.height = H;
+
+  const ctx = combinedCanvas.getContext('2d');
+  ctx.clearRect(0, 0, W, H);
+
+  // main detection image
+  ctx.drawImage(cropCanvas, 0, 0, W, H);
+
+  // original image thumbnail, bigger and placed on upper-left
+  if (canvas.width && canvas.height) {
+    const thumbW = Math.max(120, Math.round(W * 0.42));
+    const thumbH = Math.round(canvas.height * thumbW / Math.max(1, canvas.width));
+
+    const pad = Math.max(8, Math.round(W * 0.035));
+    const x = pad;
+    const y = pad;
+
+    const boxPad = Math.max(6, Math.round(W * 0.018));
+    const radius = Math.max(8, Math.round(W * 0.03));
+
+    ctx.save();
+
+    // shadow
+    ctx.shadowColor = 'rgba(15, 23, 42, 0.30)';
+    ctx.shadowBlur = 16;
+    ctx.shadowOffsetX = 0;
+    ctx.shadowOffsetY = 6;
+
+    // glass card
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.92)';
+    ctx.beginPath();
+    ctx.moveTo(x - boxPad + radius, y - boxPad);
+    ctx.lineTo(x - boxPad + thumbW + boxPad * 2 - radius, y - boxPad);
+    ctx.quadraticCurveTo(
+      x - boxPad + thumbW + boxPad * 2,
+      y - boxPad,
+      x - boxPad + thumbW + boxPad * 2,
+      y - boxPad + radius
+    );
+    ctx.lineTo(
+      x - boxPad + thumbW + boxPad * 2,
+      y - boxPad + thumbH + boxPad * 2 - radius
+    );
+    ctx.quadraticCurveTo(
+      x - boxPad + thumbW + boxPad * 2,
+      y - boxPad + thumbH + boxPad * 2,
+      x - boxPad + thumbW + boxPad * 2 - radius,
+      y - boxPad + thumbH + boxPad * 2
+    );
+    ctx.lineTo(x - boxPad + radius, y - boxPad + thumbH + boxPad * 2);
+    ctx.quadraticCurveTo(
+      x - boxPad,
+      y - boxPad + thumbH + boxPad * 2,
+      x - boxPad,
+      y - boxPad + thumbH + boxPad * 2 - radius
+    );
+    ctx.lineTo(x - boxPad, y - boxPad + radius);
+    ctx.quadraticCurveTo(x - boxPad, y - boxPad, x - boxPad + radius, y - boxPad);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.shadowColor = 'transparent';
+
+    // blue medical-tech border
+    ctx.strokeStyle = '#38BDF8';
+    ctx.lineWidth = Math.max(2, Math.round(W / 160));
+    ctx.stroke();
+
+    ctx.drawImage(canvas, x, y, thumbW, thumbH);
+
+    // small label
+    const labelFont = Math.max(10, Math.round(W / 30));
+    ctx.font = `800 ${labelFont}px "Segoe UI", sans-serif`;
+    ctx.fillStyle = '#0F172A';
+    ctx.fillText('Original Image', x, y + thumbH + labelFont + boxPad);
+
     ctx.restore();
   }
 
-  function renderCombinedDetectionView() {
-    if (!combinedCanvas || !cropCanvas || !canvas || !cropCanvas.width || !cropCanvas.height) return;
-
-    const W = cropCanvas.width;
-    const H = cropCanvas.height;
-    combinedCanvas.width = W;
-    combinedCanvas.height = H;
-
-    const ctx = combinedCanvas.getContext('2d');
-    ctx.clearRect(0, 0, W, H);
-    ctx.drawImage(cropCanvas, 0, 0, W, H);
-
-    if (canvas.width && canvas.height) {
-      const thumbW = Math.max(58, Math.round(W * 0.24));
-      const thumbH = Math.round(canvas.height * thumbW / Math.max(1, canvas.width));
-      const pad = Math.max(5, Math.round(W * 0.02));
-      const x = pad;
-      const y = pad;
-
-      ctx.save();
-      ctx.fillStyle = 'rgba(255,255,255,0.88)';
-      ctx.fillRect(x - 2, y - 2, thumbW + 4, thumbH + 4);
-      ctx.strokeStyle = 'rgba(22,163,74,0.95)';
-      ctx.lineWidth = Math.max(1, Math.round(W / 180));
-      ctx.strokeRect(x - 2, y - 2, thumbW + 4, thumbH + 4);
-      ctx.drawImage(canvas, x, y, thumbW, thumbH);
-      ctx.restore();
-    }
-
-    drawMetadataOverlay(ctx, W, H);
-  }
-
+  drawMetadataOverlay(ctx, W, H);
+}
   function updateTexts() {
     // Settings UI removed.
   }
