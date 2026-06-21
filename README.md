@@ -1,3 +1,3 @@
-# ASAP Check v31.19
+# ASAP Check v31.20
 
-T line shape gate added to reject broad shadow/platform false positives. Desktop source UI spacing fixed.
+Half-width T shape gate + auto GPS metadata overlay.

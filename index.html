@@ -28,8 +28,8 @@
           <label class="fileBtn secondary">Choose Photo<input id="galleryInput" type="file" accept="image/*" /></label>
         </div>
         <div class="metaRow">
-          <input id="regionInput" type="text" placeholder="Region / Location, e.g. Taipei Veterans General Hospital" autocomplete="off" />
-          <button id="gpsBtn" class="secondaryBtn" type="button">Use GPS</button>
+          <input id="regionInput" type="text" placeholder="GPS locating..." autocomplete="off" />
+          <span id="gpsStatus" class="gpsStatus">GPS locating...</span>
         </div>
         <p id="cvStatus" class="hint"></p>
       </section>
@@ -65,7 +65,7 @@
   </div>
 
   <script async src="https://docs.opencv.org/4.9.0/opencv.js" onload="window.__opencvLoaded && window.__opencvLoaded()"></script>
-  <script src="detector.js?v=31.19"></script>
-  <script src="app.js?v=31.19"></script>
+  <script src="detector.js?v=31.20"></script>
+  <script src="app.js?v=31.20"></script>
 </body>
 </html>

@@ -24,7 +24,7 @@
   const debugBright=document.getElementById('debugBright');
   const debugText=document.getElementById('debugText');
   const regionInput = document.getElementById('regionInput');
-  const gpsBtn = document.getElementById('gpsBtn');
+  const gpsStatus = document.getElementById('gpsStatus');
   let lastResultText = 'Invalid';
   const advancedLock = document.getElementById('advancedLock');
   const advancedContent = document.getElementById('advancedContent');
@@ -46,6 +46,7 @@
       lockPanel.classList.add('hidden');
       mainPanel.classList.remove('hidden');
       lockMsg.textContent = '';
+      autoFetchGps();
     } else {
       lockMsg.textContent = 'Invalid access code';
     }
@@ -96,7 +97,7 @@
 
   function getRegionText() {
     const value = regionInput ? (regionInput.value || '').trim() : '';
-    return value || 'Region: not set';
+    return value || 'GPS locating...';
   }
 
   function getTimestampParts() {
@@ -486,41 +487,42 @@
     img.src = URL.createObjectURL(file);
   }
 
+  function setRegionText(value, save) {
+    if (regionInput) regionInput.value = value || '';
+    if (save) localStorage.setItem('asap_region', value || '');
+    if (gpsStatus) gpsStatus.textContent = value ? 'GPS ready' : 'GPS locating...';
+    renderCombinedDetectionView();
+  }
+
+  function autoFetchGps() {
+    if (!navigator.geolocation) {
+      setRegionText(localStorage.getItem('asap_region') || 'GPS not supported', false);
+      return;
+    }
+    if (gpsStatus) gpsStatus.textContent = 'GPS locating...';
+    navigator.geolocation.getCurrentPosition(
+      pos => {
+        const lat = pos.coords.latitude.toFixed(5);
+        const lng = pos.coords.longitude.toFixed(5);
+        setRegionText(`${lat}, ${lng}`, true);
+      },
+      () => {
+        const fallback = localStorage.getItem('asap_region') || 'GPS unavailable';
+        setRegionText(fallback, false);
+      },
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 30000 }
+    );
+  }
+
   if (regionInput) {
-    regionInput.value = localStorage.getItem('asap_region') || '';
+    regionInput.value = localStorage.getItem('asap_region') || 'GPS locating...';
     regionInput.addEventListener('input', () => {
       localStorage.setItem('asap_region', regionInput.value || '');
       renderCombinedDetectionView();
     });
   }
 
-  if (gpsBtn) {
-    gpsBtn.addEventListener('click', () => {
-      if (!navigator.geolocation) {
-        if (regionInput) regionInput.value = 'GPS not supported';
-        return;
-      }
-      gpsBtn.textContent = 'Locating...';
-      navigator.geolocation.getCurrentPosition(
-        pos => {
-          const lat = pos.coords.latitude.toFixed(5);
-          const lng = pos.coords.longitude.toFixed(5);
-          if (regionInput) {
-            regionInput.value = `${lat}, ${lng}`;
-            localStorage.setItem('asap_region', regionInput.value);
-          }
-          gpsBtn.textContent = 'Use GPS';
-          renderCombinedDetectionView();
-        },
-        () => {
-          gpsBtn.textContent = 'Use GPS';
-          if (regionInput && !regionInput.value) regionInput.value = 'GPS denied';
-          renderCombinedDetectionView();
-        },
-        { enableHighAccuracy: true, timeout: 8000, maximumAge: 60000 }
-      );
-    });
-  }
+  autoFetchGps();
 
   unlockBtn.addEventListener('click', unlock);
   passInput.addEventListener('keydown', e => { if (e.key === 'Enter') unlock(); });

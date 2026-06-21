@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v31.19-t-shape-gate-ui-fix';
+  const VERSION = 'v31.20-halfwidth-t-gate-auto-gps';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -1000,6 +1000,15 @@
     const drop = score - sideBase;
     const sharpness = score / Math.max(1, width);
 
+    // v31.20：用 50% peak height 計算核心線寬，避免背景緩坡把 width 拉成 100+ px。
+    const halfLevel = Math.max(1.0, sideBase + Math.max(0, score - sideBase) * 0.50);
+    let halfLeft = y;
+    while (halfLeft > range.start && profile[halfLeft - 1] >= halfLevel) halfLeft--;
+    let halfRight = y;
+    while (halfRight < range.end && halfRight < profile.length - 1 && profile[halfRight + 1] >= halfLevel) halfRight++;
+    const halfWidth = Math.max(1, halfRight - halfLeft + 1);
+    const halfSharpness = score / Math.max(1, halfWidth);
+
     // v31.2：除了峰本身不能太寬，也要檢查主峰旁邊是否有「胖肩峰」。
     // 真正 C/T 線通常是單一乾淨尖峰；試紙槽邊緣常會在主峰旁邊拖一坨高訊號。
     const coreRadius = Math.max(2, Math.round(h * 0.010));
@@ -1078,6 +1087,11 @@
       maxShoulderRatio,
       maxWidth,
       softMaxWidth,
+      halfLevel,
+      halfLeft,
+      halfRight,
+      halfWidth,
+      halfSharpness,
       detected: !reject,
       reject: reject || 'PASS',
       warning: warnings.length ? warnings.join(',') : '-',
@@ -1485,19 +1499,23 @@
     // v31.19：T 線加回 shape gate。
     // 目的：保留淡 T 線，但排除大面積陰影/底色平台造成的假 T。
     // 真 T 可以淡，但仍應該具備一定 sharpness / quality，且不能寬到像整片平台。
+    const tCoreWidth = tQ ? (tQ.halfWidth || tQ.width || 9999) : 9999;
+    const tCoreSharpness = tQ ? (tQ.halfSharpness || tQ.sharpness || 0) : 0;
+
+    // v31.20：T shape gate 改看 half-width 核心寬度，不再看容易被背景緩坡放大的 full width。
+    // 這樣清楚陽性的 T 線不會因 full width=100+ 被誤殺；真正平台型假 T 仍會因 core 太寬/太鈍被踢掉。
     const tWeakShapeOk = !!(
       tQ &&
-      tQ.sharpness >= 0.20 &&
-      (tQ.quality || 0) >= 2.0 &&
-      tQ.width <= Math.max(18, (tQ.maxWidth || 1) * 6.0)
+      tCoreSharpness >= 0.85 &&
+      tCoreWidth <= Math.max(12, (tQ.maxWidth || 1) * 2.4) &&
+      ((tQ.quality || 0) >= 1.8 || tcRatio >= 0.55)
     );
 
     const tStrongShapeOk = !!(
       tQ &&
       tcRatio >= 0.45 &&
-      tQ.sharpness >= 0.12 &&
-      (tQ.quality || 0) >= 1.2 &&
-      tQ.width <= Math.max(22, (tQ.maxWidth || 1) * 7.0)
+      tCoreSharpness >= 0.55 &&
+      tCoreWidth <= Math.max(16, (tQ.maxWidth || 1) * 3.2)
     );
 
     const tShapeOk = tWeakShapeOk || tStrongShapeOk;
@@ -2245,11 +2263,11 @@ scored.forEach((c,i)=>
       dbg += `Dynamic Peaks=${ct.allPeakCount || 0} / Selected=${ct.selectedPeakCount || 0} / CandidateFloor=${(ct.candidateFloor || 0).toFixed(1)} / MinSep=${ct.minSep || 0}<br>`;
       dbg += `C Score=${ct.cPeak.score.toFixed(1)} / C Y=${ct.cPeak.absY.toFixed(0)} / C Detected=${ct.cPeak.detected ? 'YES' : 'NO'} / C Selected=${ct.cPeak.selected ? 'YES' : 'NO'} / C Range=${ct.cRange.start}-${ct.cRange.end}<br>`;
       dbg += `C Red Continuity=${ct.cPeak.redContinuity.ok ? 'YES' : 'NO'} / Run=${ct.cPeak.redContinuity.run}/${ct.cPeak.redContinuity.minRun} / Ratio=${ct.cPeak.redContinuity.ratio.toFixed(2)}<br>`;
-      dbg += `C Width=${ct.cPeak.width} / MaxWidth=${ct.cPeak.maxWidth} / Drop=${ct.cPeak.drop.toFixed(1)} / Sharpness=${ct.cPeak.sharpness.toFixed(2)} / Quality=${(ct.cPeak.quality || 0).toFixed(1)} / Shoulder=${ct.cPeak.shoulderRatio.toFixed(2)} / NearShoulder=${ct.cPeak.nearShoulderRatio.toFixed(2)} / Reject=${ct.cPeak.reject}<br>`;
+      dbg += `C Width=${ct.cPeak.width} / HalfWidth=${ct.cPeak.halfWidth || ct.cPeak.width} / MaxWidth=${ct.cPeak.maxWidth} / Drop=${ct.cPeak.drop.toFixed(1)} / Sharpness=${ct.cPeak.sharpness.toFixed(2)} / Quality=${(ct.cPeak.quality || 0).toFixed(1)} / Shoulder=${ct.cPeak.shoulderRatio.toFixed(2)} / NearShoulder=${ct.cPeak.nearShoulderRatio.toFixed(2)} / Reject=${ct.cPeak.reject}<br>`;
       dbg += `T Score=${ct.tPeak.score.toFixed(1)} / T Y=${ct.tPeak.absY.toFixed(0)} / T Detected=${ct.tPeak.detected ? 'YES' : 'NO'} / T Selected=${ct.tPeak.selected ? 'YES' : 'NO'} / T Range=${ct.tRange.start}-${ct.tRange.end}<br>`;
       dbg += `T Relative Threshold=${ct.tThreshold.toFixed(1)} / T/C Ratio=${ct.tcRatio.toFixed(2)}<br>`;
       dbg += `T Red Continuity=${ct.tPeak.redContinuity.ok ? 'YES' : 'NO'} / Run=${ct.tPeak.redContinuity.run}/${ct.tPeak.redContinuity.minRun} / Ratio=${ct.tPeak.redContinuity.ratio.toFixed(2)}<br>`;
-      dbg += `T Width=${ct.tPeak.width} / MaxWidth=${ct.tPeak.maxWidth} / Drop=${ct.tPeak.drop.toFixed(1)} / Sharpness=${ct.tPeak.sharpness.toFixed(2)} / Quality=${(ct.tPeak.quality || 0).toFixed(1)} / Shoulder=${ct.tPeak.shoulderRatio.toFixed(2)} / NearShoulder=${ct.tPeak.nearShoulderRatio.toFixed(2)} / Reject=${ct.tPeak.reject}<br>`;
+      dbg += `T Width=${ct.tPeak.width} / HalfWidth=${ct.tPeak.halfWidth || ct.tPeak.width} / MaxWidth=${ct.tPeak.maxWidth} / Drop=${ct.tPeak.drop.toFixed(1)} / Sharpness=${ct.tPeak.sharpness.toFixed(2)} / Quality=${(ct.tPeak.quality || 0).toFixed(1)} / Shoulder=${ct.tPeak.shoulderRatio.toFixed(2)} / NearShoulder=${ct.tPeak.nearShoulderRatio.toFixed(2)} / Reject=${ct.tPeak.reject}<br>`;
       if (ct.rejectedPeaks && ct.rejectedPeaks.length) dbg += `Rejected Peaks=${ct.rejectedPeaks.join(', ')}<br>`;
       if (ct.peakDebug && ct.peakDebug.length) dbg += `Peak Candidates：${ct.peakDebug.join(' | ')}<br>`;
     }
