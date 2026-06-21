@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v31.31-ct-peak-debug-only';
+  const VERSION = 'v31.32-ct-refine-merge-debug-only';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -1432,7 +1432,7 @@
     };
 
     const rawPeaks = rawCombinedPeaks;
-    const allPeaks = rawPeaks.map(p => {
+    const allPeaks = rawPeaks.map((p, idx) => {
       const q = qualifyPeak(positive, p, threshold, fullRange, h, 'P');
       const quality = calcQuality(q);
       const src = peakSourceAt(p.y);
@@ -1441,6 +1441,9 @@
       let reject = '';
       if (q.score < threshold) reject = 'below-threshold';
       return Object.assign({}, q, {
+        peakId: `A${idx + 1}`,
+        rawY: p.y,
+        rawAbsY: y0 + p.y,
         quality,
         peakSource: src.source,
         pinkScore: src.pink,
@@ -1451,21 +1454,36 @@
       });
     }).sort((a,b)=>b.score-a.score);
 
+    const allPeaksBeforeMergeDebug = allPeaks.slice(0, 12).map(p =>
+      `id=${p.peakId || '-'}, rawY=${(p.rawAbsY || (y0+p.y)).toFixed(0)}, y=${(y0+p.y).toFixed(0)}, local=${p.y}, score=${p.score.toFixed(1)}, src=${p.peakSource || '-'}, reject=${p.reject}`
+    );
+
+    const mergeProcessDebug = [];
     const selected = [];
     for (const p of allPeaks) {
       // v31.13：這裡只負責「挑候選 peak」，不要先用全域 threshold 殺掉 T。
       // T 線是否成立，後面會用相對門檻 + 連續紅色再判斷。
-      if (selected.some(s=>Math.abs(s.y - p.y) < minSep)) continue;
+      const near = selected.find(s=>Math.abs(s.y - p.y) < minSep);
+      if (near) {
+        mergeProcessDebug.push(`SKIP id=${p.peakId || '-'} y=${(y0+p.y).toFixed(0)} with=${near.peakId || '-'} y=${(y0+near.y).toFixed(0)} diff=${Math.abs(near.y-p.y)} minSep=${minSep}`);
+        continue;
+      }
+      mergeProcessDebug.push(`KEEP id=${p.peakId || '-'} y=${(y0+p.y).toFixed(0)} score=${p.score.toFixed(1)} src=${p.peakSource || '-'}`);
       selected.push(p);
       if (selected.length >= 3) break;
     }
     selected.forEach(p => { p.selected = true; });
     selected.sort((a,b)=>a.y-b.y);
 
+    const selectedBeforeRefineDebug = selected.slice(0, 8).map(p =>
+      `id=${p.peakId || '-'}, y=${(y0+p.y).toFixed(0)}, local=${p.y}, rawY=${(p.rawAbsY || (y0+p.y)).toFixed(0)}, score=${p.score.toFixed(1)}, src=${p.peakSource || '-'}, reject=${p.reject}`
+    );
+
     let cQ = null;
     let tQ = null;
     const upperLimit = h * 0.58;
 
+    const pairDecisionDebug = [];
     if (selected.length >= 2) {
       // 取上下距離足夠的前兩個峰；上方 = C，下方 = T。
       let bestPair = null;
@@ -1473,12 +1491,19 @@
       for (let i=0; i<selected.length; i++) {
         for (let j=i+1; j<selected.length; j++) {
           const dy = selected[j].y - selected[i].y;
-          if (dy < minSep) continue;
+          if (dy < minSep) {
+            pairDecisionDebug.push(`PAIR reject ${selected[i].peakId || '-'}:${(y0+selected[i].y).toFixed(0)} -> ${selected[j].peakId || '-'}:${(y0+selected[j].y).toFixed(0)} dy=${dy} < minSep=${minSep}`);
+            continue;
+          }
           const pairScore = selected[i].score + selected[j].score + Math.min(1, dy / Math.max(1, h*0.28)) * threshold * 0.25;
+          pairDecisionDebug.push(`PAIR ${selected[i].peakId || '-'}:${(y0+selected[i].y).toFixed(0)} -> ${selected[j].peakId || '-'}:${(y0+selected[j].y).toFixed(0)} dy=${dy} score=${pairScore.toFixed(1)}`);
           if (pairScore > bestPairScore) { bestPairScore = pairScore; bestPair = [selected[i], selected[j]]; }
         }
       }
-      if (bestPair) { cQ = bestPair[0]; tQ = bestPair[1]; }
+      if (bestPair) {
+        pairDecisionDebug.push(`PAIR chosen C=${bestPair[0].peakId || '-'}:${(y0+bestPair[0].y).toFixed(0)} T=${bestPair[1].peakId || '-'}:${(y0+bestPair[1].y).toFixed(0)} bestScore=${bestPairScore.toFixed(1)}`);
+        cQ = bestPair[0]; tQ = bestPair[1];
+      }
     }
 
     if (!cQ && selected.length === 1) {
@@ -1510,6 +1535,11 @@
     // T 線：改成相對 C 線門檻，避免淡 T 被全域 threshold 誤殺。
     const cSelected = selected.includes(cQ);
     const tSelected = selected.includes(tQ);
+
+    const refineDebug = [];
+    refineDebug.push(`BEFORE C id=${cQ.peakId || '-'} y=${(y0+cQ.y).toFixed(0)} local=${cQ.y} rawY=${(cQ.rawAbsY || (y0+cQ.y)).toFixed(0)} selected=${cSelected ? 'YES':'NO'} score=${cQ.score.toFixed(1)} src=${cQ.peakSource || '-'}`);
+    refineDebug.push(`BEFORE T id=${tQ.peakId || '-'} y=${(y0+tQ.y).toFixed(0)} local=${tQ.y} rawY=${(tQ.rawAbsY || (y0+tQ.y)).toFixed(0)} selected=${tSelected ? 'YES':'NO'} score=${tQ.score.toFixed(1)} src=${tQ.peakSource || '-'}`);
+
     const cRed = refinePeakToRedLine(cQ.y, cFallbackRange);
     // v31.29：T refine 不能回頭吸到 C 線。
     // 先用原始 C/T 位置建立動態 T 搜尋範圍，只允許在 C 下方合理距離內找真正 T 線。
@@ -1525,10 +1555,15 @@
     }
     const tRed = refinePeakToRedLine(tQ.y, tRefineRange, 'faintT');
 
+    refineDebug.push(`C REFINE range=${cFallbackRange.start}-${cFallbackRange.end} before=${(y0+cQ.y).toFixed(0)} after=${cRed ? cRed.absY : '-'} ok=${cRed && cRed.ok ? 'YES':'NO'} offset=${cRed ? cRed.offset : '-'} total=${cRed ? cRed.totalScore.toFixed(1) : '-'} cont=${cRed ? cRed.score.toFixed(1) : '-'} profile=${cRed ? cRed.profileScore.toFixed(1) : '-'}`);
+    refineDebug.push(`T REFINE range=${tRefineRange.start}-${tRefineRange.end} before=${(y0+tQ.y).toFixed(0)} after=${tRed ? tRed.absY : '-'} ok=${tRed && tRed.ok ? 'YES':'NO'} offset=${tRed ? tRed.offset : '-'} total=${tRed ? tRed.totalScore.toFixed(1) : '-'} cont=${tRed ? tRed.score.toFixed(1) : '-'} profile=${tRed ? tRed.profileScore.toFixed(1) : '-'}`);
+
     // refine 後，把實際畫線/Debug 的 y 改成真正連續線段的位置。
     // score 保留原 peak score，因為它代表波峰強度；y 則改成紅線中心。
     if (cRed && cRed.ok) cQ.y = cRed.localY;
     if (tRed && tRed.ok) tQ.y = tRed.localY;
+    refineDebug.push(`AFTER C id=${cQ.peakId || '-'} y=${(y0+cQ.y).toFixed(0)} local=${cQ.y} selected=${cSelected ? 'YES':'NO'}`);
+    refineDebug.push(`AFTER T id=${tQ.peakId || '-'} y=${(y0+tQ.y).toFixed(0)} local=${tQ.y} selected=${tSelected ? 'YES':'NO'}`);
 
     const cDetected = !!(
       cQ &&
@@ -1655,6 +1690,11 @@
       tPeak:{y:tQ.y, absY:y0+tQ.y, score:tQ.score, detected:tDetected, selected:tSelected, redContinuity:tRed, width:tQ.width, left:y0+tQ.left, right:y0+tQ.right, drop:tQ.drop, sharpness:tQ.sharpness, shoulderRatio:tQ.shoulderRatio, shoulderMaxRatio:tQ.shoulderMaxRatio, nearShoulderRatio:tQ.nearShoulderRatio, quality:tQ.quality || 0, reject:tQ.reject, warning:tQ.warning || '-', maxWidth:tQ.maxWidth},
       rejectedPeaks:allPeaks.filter(p=>!p.detected).slice(0,6).map(p=>`y${(y0+p.y).toFixed(0)}:${p.reject}`),
       rawPeakDebug,
+      allPeaksBeforeMergeDebug,
+      mergeProcessDebug,
+      selectedBeforeRefineDebug,
+      pairDecisionDebug,
+      refineDebug,
       selectedDebug,
       peakDebug,
       allPeakCount:allPeaks.length,
@@ -2352,7 +2392,12 @@ scored.forEach((c,i)=>
         if (ct.rawPeakDebug.dark && ct.rawPeakDebug.dark.length) dbg += `Raw Dark Peaks：${ct.rawPeakDebug.dark.join(' | ')}<br>`;
         if (ct.rawPeakDebug.combined && ct.rawPeakDebug.combined.length) dbg += `Raw Combined Peaks：${ct.rawPeakDebug.combined.join(' | ')}<br>`;
       }
-      if (ct.selectedDebug && ct.selectedDebug.length) dbg += `Selected Peaks After Merge：${ct.selectedDebug.join(' | ')}<br>`;
+      if (ct.allPeaksBeforeMergeDebug && ct.allPeaksBeforeMergeDebug.length) dbg += `All Peaks Before Select/Merge：${ct.allPeaksBeforeMergeDebug.join(' | ')}<br>`;
+      if (ct.mergeProcessDebug && ct.mergeProcessDebug.length) dbg += `Select/Merge Process：${ct.mergeProcessDebug.join(' | ')}<br>`;
+      if (ct.selectedBeforeRefineDebug && ct.selectedBeforeRefineDebug.length) dbg += `Selected Before Refine：${ct.selectedBeforeRefineDebug.join(' | ')}<br>`;
+      if (ct.pairDecisionDebug && ct.pairDecisionDebug.length) dbg += `C/T Pair Decision：${ct.pairDecisionDebug.join(' | ')}<br>`;
+      if (ct.refineDebug && ct.refineDebug.length) dbg += `Refine Trace：${ct.refineDebug.join(' | ')}<br>`;
+      if (ct.selectedDebug && ct.selectedDebug.length) dbg += `Selected Peaks After Refine：${ct.selectedDebug.join(' | ')}<br>`;
       dbg += `C Score=${ct.cPeak.score.toFixed(1)} / C Y=${ct.cPeak.absY.toFixed(0)} / C Detected=${ct.cPeak.detected ? 'YES' : 'NO'} / C Selected=${ct.cPeak.selected ? 'YES' : 'NO'} / C Range=${ct.cRange.start}-${ct.cRange.end}<br>`;
       dbg += `C Red Continuity=${ct.cPeak.redContinuity.ok ? 'YES' : 'NO'} / Run=${ct.cPeak.redContinuity.run}/${ct.cPeak.redContinuity.minRun} / Ratio=${ct.cPeak.redContinuity.ratio.toFixed(2)}<br>`;
       dbg += `C Width=${ct.cPeak.width} / HalfWidth=${ct.cPeak.halfWidth || ct.cPeak.width} / MaxWidth=${ct.cPeak.maxWidth} / Drop=${ct.cPeak.drop.toFixed(1)} / Sharpness=${ct.cPeak.sharpness.toFixed(2)} / Quality=${(ct.cPeak.quality || 0).toFixed(1)} / Shoulder=${ct.cPeak.shoulderRatio.toFixed(2)} / NearShoulder=${ct.cPeak.nearShoulderRatio.toFixed(2)} / Reject=${ct.cPeak.reject}<br>`;
