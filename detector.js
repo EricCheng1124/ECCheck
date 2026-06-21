@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v31.27-ct-earliest-c-locked-t-refine';
+  const VERSION = 'v31.21-negative-platform-t-gate';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -1382,19 +1382,12 @@
     function findLocalPeaks(profile) {
       const peaks = [];
       const guard = Math.max(2, Math.round(h * 0.010));
-
-      // v31.26：允許靠近 CT zone 上緣的峰被抓到。
-      // 舊版從 guard 開始掃，若真正 C 線剛好落在分析區上緣附近，會被漏掉，
-      // 後面就會把第二條線誤配成 C。
-      for (let y=0; y<profile.length; y++) {
+      for (let y=guard; y<profile.length-guard; y++) {
         const v = profile[y];
-        if (v < candidateFloor * 0.72) continue;
+        if (v < candidateFloor) continue;
         let isPeak = true;
-        const a = Math.max(0, y - guard);
-        const b = Math.min(profile.length - 1, y + guard);
-        for (let k=a; k<=b; k++) {
-          if (k === y) continue;
-          if (profile[k] > v + 0.05) { isPeak = false; break; }
+        for (let k=1; k<=guard; k++) {
+          if (profile[y-k] > v || profile[y+k] > v) { isPeak = false; break; }
         }
         if (!isPeak) continue;
         // 避免同一個寬峰產生太多相鄰小峰。
@@ -1422,170 +1415,44 @@
       });
     }).sort((a,b)=>b.score-a.score);
 
-    // v31.25：C/T 配對改為「由上往下 + 合理區間」；不可再只用最高分配對。
-    // 問題樣本中，Window 上緣陰影會形成假峰，舊版可能把：
-    //   假峰= T、真 C = C、真 T = ignored
-    // 或在不同裝置縮放後把同一條線重複配對。
-    // 新邏輯：先排除太靠近 Window/slot 上緣的假峰，再找第一個有效 C，
-    // 然後只在 C 下方合理距離內找 T。
-    // v31.26：C 線可能很靠近 CT analyze zone 上緣，不能硬砍掉前 16%。
-    // 改成較寬的 C/T 搜尋帶，再靠「C 在上、T 在下、兩者距離合理」來配對。
-    const cFallbackRange = {start:Math.round(h*0.05), end:Math.round(h*0.52)};
-    const tFallbackRange = {start:Math.round(h*0.24), end:Math.round(h*0.84)};
-    const cTopGuard = Math.max(3, Math.round(h * 0.035));
-    const cBottomLimit = Math.round(h * 0.55);
-    const pairMinGap = Math.max(10, Math.round(h * 0.12));
-    const pairMaxGap = Math.max(pairMinGap + 8, Math.round(h * 0.52));
-    const tBottomLimit = Math.round(h * 0.86);
-
-    function inRangeY(p, r) {
-      return !!p && p.y >= r.start && p.y <= r.end;
-    }
-
-    function lineShapeBonus(p) {
-      if (!p) return 0;
-      const width = p.halfWidth || p.width || 9999;
-      const maxW = p.maxWidth || 1;
-      const sharp = p.halfSharpness || p.sharpness || 0;
-      const shoulder = p.shoulderRatio || 0;
-      const near = p.nearShoulderRatio || 0;
-      let bonus = 0;
-      if (width <= Math.max(14, maxW * 2.6)) bonus += threshold * 0.18;
-      if (sharp >= 0.75) bonus += threshold * 0.16;
-      if (shoulder < 0.88 && near < 0.90) bonus += threshold * 0.12;
-      return bonus;
-    }
-
-    const dedupPeaks = [];
-    for (const p of allPeaks) {
-      if (dedupPeaks.some(s => Math.abs(s.y - p.y) < Math.max(4, Math.round(minSep * 0.55)))) continue;
-      dedupPeaks.push(p);
-    }
-    dedupPeaks.sort((a,b)=>a.y-b.y);
-
-    // v31.26：補抓「波形有斜坡但 local peak 沒成立」的水平線。
-    // 這種情況常發生在手機縮放後，真正第一條 C 線在 CT zone 上緣附近，
-    // findLocalPeaks 可能漏掉；因此再用 rowLineContinuity 掃一次 C/T 合理範圍。
-    function addContinuitySeeds(range, mode, tag) {
-      const seeds = [];
-      const start = clamp(range.start, 0, h - 1);
-      const end = clamp(range.end, start, h - 1);
-      for (let ly = start; ly <= end; ly++) {
-        const cont = rowLineContinuity(y0 + ly, mode);
-        const ps = positive[ly] || 0;
-        const pass = cont.ok || ps >= candidateFloor * 0.72 || (cont.score >= 8.5 && ps >= candidateFloor * 0.45);
-        if (!pass) continue;
-        const total = ps * 1.0 + cont.score * 0.32;
-        const near = seeds.find(s => Math.abs(s.y - ly) < Math.max(4, Math.round(minSep * 0.45)));
-        if (near) {
-          if (total > near.total) Object.assign(near, {y:ly, score:Math.max(ps, candidateFloor*0.80), total, cont, tag});
-        } else {
-          seeds.push({y:ly, score:Math.max(ps, candidateFloor*0.80), total, cont, tag});
-        }
-      }
-
-      for (const seed of seeds.sort((a,b)=>b.total-a.total).slice(0,4)) {
-        if (dedupPeaks.some(p => Math.abs(p.y - seed.y) < Math.max(4, Math.round(minSep * 0.45)))) continue;
-        const q = qualifyPeak(positive, {y:seed.y, score:seed.score}, threshold, fullRange, h, tag);
-        q.quality = calcQuality(q);
-        q.detected = q.score >= candidateFloor * 0.72;
-        q.reject = q.score >= threshold ? 'PASS' : 'below-threshold';
-        q.continuitySeed = true;
-        q.continuity = seed.cont;
-        dedupPeaks.push(q);
-      }
-      dedupPeaks.sort((a,b)=>a.y-b.y);
-    }
-
-    addContinuitySeeds(cFallbackRange, undefined, 'C-seed');
-    addContinuitySeeds(tFallbackRange, 'faintT', 'T-seed');
-
     const selected = [];
-    let cQ = null;
-    let tQ = null;
-    const upperLimit = h * 0.58;
-
-    // 先找 C：不能太靠近 CT 分析區上緣，避免 Window 上緣陰影/槽邊界。
-    const cCandidates = dedupPeaks.filter(p =>
-      p.score >= candidateFloor * 0.72 &&
-      p.y >= cTopGuard &&
-      p.y <= cBottomLimit &&
-      inRangeY(p, cFallbackRange)
-    );
-
-    let bestPair = null;
-    let bestPairScore = -Infinity;
-    for (const c of cCandidates) {
-      const tCandidates = dedupPeaks.filter(t => {
-        const gap = t.y - c.y;
-        return t !== c &&
-          t.score >= candidateFloor * 0.62 &&
-          gap >= pairMinGap &&
-          gap <= pairMaxGap &&
-          t.y <= tBottomLimit &&
-          inRangeY(t, tFallbackRange);
-      });
-
-      for (const t of tCandidates) {
-        const gap = t.y - c.y;
-        const idealGap = h * 0.28;
-        const gapScore = (1 - Math.min(1, Math.abs(gap - idealGap) / Math.max(1, h * 0.30))) * threshold * 0.35;
-        // C 位置優先由上到下，但仍保留分數與線形；T 分數可較低，避免淡陽性被殺掉。
-        const cPositionBonus = (1 - Math.min(1, Math.abs(c.y - h * 0.36) / Math.max(1, h * 0.25))) * threshold * 0.18;
-        const tPositionBonus = (1 - Math.min(1, Math.abs(t.y - h * 0.62) / Math.max(1, h * 0.30))) * threshold * 0.16;
-        // v31.27：C/T 配對改成「第一條有效線優先」。
-        // 這次問題的根因是第一個 C 峰分數較低，第二個 T 峰較高，
-        // 舊版仍可能把第二峰當 C，導致真正陽性被判 Negative。
-        // 因此 C 的位置順序權重要大於強度；強度只當輔助。
-        const earliestCBonus = (1 - Math.min(1, c.y / Math.max(1, cBottomLimit))) * threshold * 3.25;
-        const score = c.score * 0.32 + t.score * 0.88 + gapScore + cPositionBonus + tPositionBonus + earliestCBonus + lineShapeBonus(c) + lineShapeBonus(t);
-        if (score > bestPairScore) {
-          bestPairScore = score;
-          bestPair = [c, t];
-        }
-      }
-    }
-
-    if (bestPair) {
-      cQ = bestPair[0];
-      tQ = bestPair[1];
-      selected.push(cQ, tQ);
-    } else if (cCandidates.length) {
-      // 只有 C，仍可判 Negative；選上方第一個有效 C，避免把下方 T/雜訊當 C。
-      cCandidates.sort((a,b) => (b.score + lineShapeBonus(b)) - (a.score + lineShapeBonus(a)));
-      cQ = cCandidates[0];
-      selected.push(cQ);
-    } else {
-      // 若完全找不到 C，再退回舊式最高峰，但仍排除太靠上假峰。
-      const fallbackSelected = [];
-      for (const p of allPeaks) {
-        if (p.y < cTopGuard) continue;
-        if (fallbackSelected.some(s=>Math.abs(s.y - p.y) < minSep)) continue;
-        fallbackSelected.push(p);
-        if (fallbackSelected.length >= 3) break;
-      }
-      fallbackSelected.sort((a,b)=>a.y-b.y);
-      if (fallbackSelected.length >= 1 && fallbackSelected[0].y <= upperLimit) {
-        cQ = fallbackSelected[0];
-        selected.push(cQ);
-      }
-      if (fallbackSelected.length >= 2) {
-        const maybeT = fallbackSelected.find(p => cQ && p.y - cQ.y >= pairMinGap && p.y - cQ.y <= pairMaxGap && p.y <= tBottomLimit);
-        if (maybeT) { tQ = maybeT; selected.push(tQ); }
-      }
-    }
-
-    // 補上其他高分 peak 只做 debug 顯示，不影響 C/T 配對。
     for (const p of allPeaks) {
-      if (selected.length >= 5) break;
-      if (selected.includes(p)) continue;
+      // v31.13：這裡只負責「挑候選 peak」，不要先用全域 threshold 殺掉 T。
+      // T 線是否成立，後面會用相對門檻 + 連續紅色再判斷。
       if (selected.some(s=>Math.abs(s.y - p.y) < minSep)) continue;
       selected.push(p);
+      if (selected.length >= 3) break;
     }
     selected.forEach(p => { p.selected = true; });
     selected.sort((a,b)=>a.y-b.y);
 
+    let cQ = null;
+    let tQ = null;
+    const upperLimit = h * 0.58;
+
+    if (selected.length >= 2) {
+      // 取上下距離足夠的前兩個峰；上方 = C，下方 = T。
+      let bestPair = null;
+      let bestPairScore = -Infinity;
+      for (let i=0; i<selected.length; i++) {
+        for (let j=i+1; j<selected.length; j++) {
+          const dy = selected[j].y - selected[i].y;
+          if (dy < minSep) continue;
+          const pairScore = selected[i].score + selected[j].score + Math.min(1, dy / Math.max(1, h*0.28)) * threshold * 0.25;
+          if (pairScore > bestPairScore) { bestPairScore = pairScore; bestPair = [selected[i], selected[j]]; }
+        }
+      }
+      if (bestPair) { cQ = bestPair[0]; tQ = bestPair[1]; }
+    }
+
+    if (!cQ && selected.length === 1) {
+      if (selected[0].y <= upperLimit) cQ = selected[0];
+      else tQ = selected[0];
+    }
+
     // 顯示用 fallback：即使沒有 detected，也列出 C/T 區域附近最強峰，方便 debug。
+    const cFallbackRange = {start:Math.round(h*0.08), end:Math.round(h*0.55)};
+    const tFallbackRange = {start:Math.round(h*0.44), end:Math.round(h*0.76)};
     function fallbackPeak(label, range) {
       const raw = maxInRange(positive, range.start, range.end);
       const q = qualifyPeak(positive, raw, threshold, range, h, label);
@@ -1608,21 +1475,11 @@
     const cSelected = selected.includes(cQ);
     const tSelected = selected.includes(tQ);
     const cRed = refinePeakToRedLine(cQ.y, cFallbackRange);
+    const tRed = refinePeakToRedLine(tQ.y, tFallbackRange, 'faintT');
 
     // refine 後，把實際畫線/Debug 的 y 改成真正連續線段的位置。
     // score 保留原 peak score，因為它代表波峰強度；y 則改成紅線中心。
     if (cRed && cRed.ok) cQ.y = cRed.localY;
-
-    // v31.27：T refine 必須鎖在 C 下方，不可再掃整個 T fallback range。
-    // 舊版 refinePeakToRedLine(tQ, tFallbackRange) 會把 T 吸回 C 線，
-    // 造成 T Y = C Y 或真正第一峰被忽略。
-    const lockedTRange = cQ ? {
-      start: clamp(Math.max(tFallbackRange.start, cQ.y + pairMinGap), 0, h - 1),
-      end: clamp(Math.min(tFallbackRange.end, cQ.y + pairMaxGap, tBottomLimit), 0, h - 1)
-    } : tFallbackRange;
-    if (lockedTRange.end < lockedTRange.start) lockedTRange.end = lockedTRange.start;
-
-    const tRed = refinePeakToRedLine(tQ.y, lockedTRange, 'faintT');
     if (tRed && tRed.ok) tQ.y = tRed.localY;
 
     const cDetected = !!(
@@ -1681,8 +1538,8 @@
     // 這可避免把 C 線下方的背景陰影、試紙槽底部平台或 W 框底部亮度變化誤判成 T。
     const tGapFromC = (tQ && cQ) ? (tQ.y - cQ.y) : -9999;
     const tMinGap = Math.max(16, Math.round(h * 0.12));
-    const tMaxGap = Math.max(tMinGap + 12, Math.round(h * 0.48));
-    const tMaxYFromWindow = Math.round(h * 0.82);
+    const tMaxGap = Math.max(tMinGap + 12, Math.round(h * 0.38));
+    const tMaxYFromWindow = Math.round(h * 0.76);
     const tPositionOk = !!(
       tQ && cQ &&
       tGapFromC >= tMinGap &&
@@ -1692,19 +1549,6 @@
 
     const tShapeOk = (tWeakShapeOk || tStrongShapeOk) && !tHardPlatformReject;
 
-    // v31.24：C/T 不可使用同一個 peak。
-    // 手機/電腦縮放後，refinePeakToRedLine 有機會把 C peak 與 T peak 都吸到同一條 C 線，
-    // 造成同圖在不同裝置判讀不同。這裡做硬性保險：
-    // 1) T 必須在 C 下方；2) C/T 必須有最小距離；3) C/T 線段不可大幅重疊。
-    const ctSamePeakReject = !!(
-      cQ && tQ &&
-      (
-        Math.abs(tQ.y - cQ.y) < tMinGap ||
-        tQ.y <= cQ.y ||
-        Math.max(0, Math.min(cQ.right || cQ.y, tQ.right || tQ.y) - Math.max(cQ.left || cQ.y, tQ.left || tQ.y)) > Math.min(cQ.width || 1, tQ.width || 1) * 0.35
-      )
-    );
-
     const tDetected = !!(
       tQ &&
       tSelected &&
@@ -1712,8 +1556,7 @@
       tQ.score >= tThreshold &&
       tRed.ok &&
       tShapeOk &&
-      tPositionOk &&
-      !ctSamePeakReject
+      tPositionOk
     );
 
     cQ.detected = cDetected;
@@ -1730,7 +1573,6 @@
     else if (tHardPlatformReject) tQ.reject = 'platform-false-t';
     else if (!tShapeOk) tQ.reject = 'bad-t-shape-platform';
     else if (!tPositionOk) tQ.reject = 'bad-t-position';
-    else if (ctSamePeakReject) tQ.reject = 'same-as-c-peak';
     else tQ.reject = 'PASS';
 
     // 防呆：單峰若在下半部，只能算 T-like，沒有 C，所以 Invalid。
@@ -1744,21 +1586,21 @@
     else result = 'Invalid';
 
     const cRange = {start:cFallbackRange.start, end:cFallbackRange.end};
-    const tRange = {start:lockedTRange.start, end:lockedTRange.end};
+    const tRange = {start:tFallbackRange.start, end:tFallbackRange.end};
 
     const peakDebug = allPeaks.slice(0, 8).map(p =>
       `y=${(y0+p.y).toFixed(0)}, score=${p.score.toFixed(1)}, q=${p.quality.toFixed(1)}, selected=${p.selected ? 'YES' : 'NO'}, w=${p.width}, shoulder=${p.shoulderRatio.toFixed(2)}, near=${p.nearShoulderRatio.toFixed(2)}, reject=${p.reject}, warning=${p.warning || '-'}`
     );
 
     return {
-      source:'ct-combined-pink-dark-profile-v31-27-earliest-c-locked-t-refine',
+      source:'ct-combined-pink-dark-profile-v31-16-faint-t-red-line',
       x0, x1, y0, y1, h,
       zone:{x:x0, y:y0, w:Math.max(1, x1-x0), h:Math.max(1, y1-y0), startRatio:ctStartRatio, endRatio:ctEndRatio, widthRatio:ctEndRatio-ctStartRatio, topThirdY:Math.round(topThirdY), topThirdPadding:topThirdPadding, yLimitedByTopThird:(ctY0Float > windowInnerTop + 0.5)},
       raw, profile:positive, baseline:bg, rawBaseline, rawMedian, rawMax, pinkMax, darkMax, combinedMax, selectedMode, lumBackground, lumMedian, mean:stat.mean, std:stat.std,
       maxScore, threshold, tThreshold, tcRatio, candidateFloor, minSep,
       cRange, tRange,
       cPeak:{y:cQ.y, absY:y0+cQ.y, score:cQ.score, detected:cDetected, selected:cSelected, redContinuity:cRed, width:cQ.width, left:y0+cQ.left, right:y0+cQ.right, drop:cQ.drop, sharpness:cQ.sharpness, shoulderRatio:cQ.shoulderRatio, shoulderMaxRatio:cQ.shoulderMaxRatio, nearShoulderRatio:cQ.nearShoulderRatio, quality:cQ.quality || 0, reject:cQ.reject, warning:cQ.warning || '-', maxWidth:cQ.maxWidth},
-      tPeak:{y:tQ.y, absY:y0+tQ.y, score:tQ.score, detected:tDetected, selected:tSelected, redContinuity:tRed, width:tQ.width, left:y0+tQ.left, right:y0+tQ.right, drop:tQ.drop, sharpness:tQ.sharpness, shoulderRatio:tQ.shoulderRatio, shoulderMaxRatio:tQ.shoulderMaxRatio, nearShoulderRatio:tQ.nearShoulderRatio, quality:tQ.quality || 0, reject:tQ.reject, warning:tQ.warning || '-', maxWidth:tQ.maxWidth, sameAsCReject:ctSamePeakReject, gapFromC:tGapFromC, minGap:tMinGap},
+      tPeak:{y:tQ.y, absY:y0+tQ.y, score:tQ.score, detected:tDetected, selected:tSelected, redContinuity:tRed, width:tQ.width, left:y0+tQ.left, right:y0+tQ.right, drop:tQ.drop, sharpness:tQ.sharpness, shoulderRatio:tQ.shoulderRatio, shoulderMaxRatio:tQ.shoulderMaxRatio, nearShoulderRatio:tQ.nearShoulderRatio, quality:tQ.quality || 0, reject:tQ.reject, warning:tQ.warning || '-', maxWidth:tQ.maxWidth},
       rejectedPeaks:allPeaks.filter(p=>!p.detected).slice(0,6).map(p=>`y${(y0+p.y).toFixed(0)}:${p.reject}`),
       peakDebug,
       allPeakCount:allPeaks.length,
