@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v30.8-third-score-direction';
+  const VERSION = 'v31.0-ct-waveform';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -941,6 +941,167 @@
     };
   }
 
+
+  function median(arr) {
+    if (!arr || !arr.length) return 0;
+    const a = arr.slice().sort((x,y)=>x-y);
+    const m = Math.floor(a.length/2);
+    return a.length % 2 ? a[m] : (a[m-1]+a[m])/2;
+  }
+
+  function meanStd(arr) {
+    if (!arr || !arr.length) return {mean:0,std:0};
+    const mean = arr.reduce((s,v)=>s+v,0) / arr.length;
+    const varv = arr.reduce((s,v)=>s+(v-mean)*(v-mean),0) / arr.length;
+    return {mean, std:Math.sqrt(varv)};
+  }
+
+  function smoothProfile(profile, radius) {
+    const out = [];
+    for (let i=0; i<profile.length; i++) {
+      let sum = 0, n = 0;
+      for (let j=i-radius; j<=i+radius; j++) {
+        if (j>=0 && j<profile.length) { sum += profile[j]; n++; }
+      }
+      out.push(n ? sum/n : profile[i]);
+    }
+    return out;
+  }
+
+  function maxInRange(profile, y0, y1) {
+    y0 = Math.max(0, Math.floor(y0));
+    y1 = Math.min(profile.length-1, Math.ceil(y1));
+    let bestY = y0;
+    let best = -Infinity;
+    for (let y=y0; y<=y1; y++) {
+      if (profile[y] > best) { best = profile[y]; bestY = y; }
+    }
+    return {y:bestY, score:Math.max(0,best)};
+  }
+
+  function analyzeCTLines(cropCanvas, win) {
+    if (!cropCanvas || !win) return null;
+    const W = cropCanvas.width;
+    const H = cropCanvas.height;
+    const ctx = cropCanvas.getContext('2d', {willReadFrequently:true});
+    const data = ctx.getImageData(0,0,W,H).data;
+
+    const x0 = clamp(Math.floor(win.x + win.w * 0.10), 0, W-1);
+    const x1 = clamp(Math.ceil(win.x + win.w * 0.90), 0, W);
+    const y0 = clamp(Math.floor(win.y + win.h * 0.04), 0, H-1);
+    const y1 = clamp(Math.ceil(win.y + win.h * 0.96), 0, H);
+    const h = Math.max(1, y1-y0);
+
+    const raw = [];
+    for (let yy=y0; yy<y1; yy++) {
+      let sum = 0, n = 0;
+      for (let xx=x0; xx<x1; xx++) {
+        const idx = (yy*W + xx) * 4;
+        const r = data[idx], g = data[idx+1], b = data[idx+2];
+        const yLum = 0.299*r + 0.587*g + 0.114*b;
+        // 紅/粉線強度：紅色相對於 G/B 與亮度背景的差異。
+        const redScore = (r - (g+b)*0.50) + (r-g)*0.18 + (r-b)*0.12;
+        // 避免白色背景被誤判；太暗也不直接加分。
+        const lineScore = Math.max(0, redScore) * (yLum > 55 ? 1 : 0.55);
+        sum += lineScore;
+        n++;
+      }
+      raw.push(n ? sum/n : 0);
+    }
+
+    const smoothed = smoothProfile(raw, Math.max(2, Math.round(h*0.012)));
+    const bg = median(smoothed);
+    const positive = smoothed.map(v=>Math.max(0, v-bg));
+    const stat = meanStd(positive);
+    const maxScore = Math.max(1, ...positive);
+    const threshold = Math.max(7, stat.mean + stat.std * 2.0, maxScore * 0.22);
+
+    // 目前使用固定 Window 比例，所以 C/T 也用 Window 內相對位置分區。
+    // C 區偏上，T 區偏下，中間稍微重疊，避免裁切誤差。
+    const cRange = {start:Math.round(h*0.12), end:Math.round(h*0.48)};
+    const tRange = {start:Math.round(h*0.45), end:Math.round(h*0.84)};
+    const cPeak = maxInRange(positive, cRange.start, cRange.end);
+    const tPeak = maxInRange(positive, tRange.start, tRange.end);
+
+    const cDetected = cPeak.score >= threshold;
+    const tDetected = tPeak.score >= threshold;
+    let result = 'Invalid';
+    if (cDetected && tDetected) result = 'Positive';
+    else if (cDetected && !tDetected) result = 'Negative';
+    else result = 'Invalid';
+
+    return {
+      source:'ct-red-profile-window',
+      x0, x1, y0, y1, h,
+      raw, profile:positive, baseline:bg, mean:stat.mean, std:stat.std,
+      maxScore, threshold,
+      cRange, tRange,
+      cPeak:{y:cPeak.y, absY:y0+cPeak.y, score:cPeak.score, detected:cDetected},
+      tPeak:{y:tPeak.y, absY:y0+tPeak.y, score:tPeak.score, detected:tDetected},
+      peakCount:(cDetected?1:0)+(tDetected?1:0),
+      result
+    };
+  }
+
+  function drawCTWaveform(ctx, W, H, win, ct) {
+    if (!win || !ct || !ct.profile || !ct.profile.length) return;
+    const gap = Math.max(7, W*0.035);
+    const axisX = Math.min(W-6, win.x + win.w + gap);
+    const available = Math.max(18, W - axisX - 8);
+    const waveW = Math.min(Math.max(24, W*0.28), available);
+    const maxScore = Math.max(ct.maxScore || 1, ct.threshold || 1, ct.cPeak.score || 1, ct.tPeak.score || 1);
+
+    ctx.save();
+    ctx.lineWidth = Math.max(1.5, W/220);
+    ctx.strokeStyle = 'rgba(15,23,42,0.95)';
+    ctx.fillStyle = 'rgba(15,23,42,0.95)';
+    ctx.beginPath();
+    ctx.moveTo(axisX, ct.y0);
+    ctx.lineTo(axisX, ct.y1);
+    ctx.stroke();
+
+    // Threshold：垂直線，因為 X 軸是強度。
+    const thX = axisX + (ct.threshold / maxScore) * waveW;
+    ctx.setLineDash([4,3]);
+    ctx.strokeStyle = 'rgba(220,38,38,0.75)';
+    ctx.beginPath();
+    ctx.moveTo(thX, ct.y0);
+    ctx.lineTo(thX, ct.y1);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Waveform：Y 對齊 Window 位置，X 往右代表強度。
+    ctx.strokeStyle = 'rgba(234,88,12,0.98)';
+    ctx.lineWidth = Math.max(2, W/160);
+    ctx.beginPath();
+    for (let i=0; i<ct.profile.length; i++) {
+      const x = axisX + (ct.profile[i] / maxScore) * waveW;
+      const y = ct.y0 + i;
+      if (i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
+    }
+    ctx.stroke();
+
+    // C/T peak horizontal guides
+    function drawPeak(p, label, color) {
+      ctx.strokeStyle = color;
+      ctx.fillStyle = color;
+      ctx.lineWidth = Math.max(1.5, W/210);
+      ctx.beginPath();
+      ctx.moveTo(win.x, p.absY);
+      ctx.lineTo(axisX + waveW, p.absY);
+      ctx.stroke();
+      ctx.font = `${Math.max(9, Math.round(W/28))}px sans-serif`;
+      ctx.fillText(`${label} ${Math.round(p.score)}`, axisX + 2, clamp(p.absY - 3, 10, H-4));
+    }
+    drawPeak(ct.cPeak, ct.cPeak.detected ? 'C' : 'C?', 'rgba(22,163,74,0.95)');
+    drawPeak(ct.tPeak, ct.tPeak.detected ? 'T' : 'T?', 'rgba(168,85,247,0.95)');
+
+    ctx.font = `${Math.max(9, Math.round(W/30))}px sans-serif`;
+    ctx.fillStyle = 'rgba(15,23,42,0.95)';
+    ctx.fillText(`CT ${ct.result}`, Math.max(2, axisX-2), Math.max(12, ct.y0-6));
+    ctx.restore();
+  }
+
   function drawInternalFeatures(ctx, W, H, f) {
     ctx.save();
     ctx.strokeStyle = 'rgba(34,197,94,0.98)';
@@ -967,6 +1128,7 @@
 
     if (f.window) drawRect(ctx, f.window, 'rgba(37,99,235,0.95)', 'Window/slot');
     if (f.sample) drawEllipseMark(ctx, f.sample, 'rgba(168,85,247,0.95)', 'S zone');
+    if (f.window && f.ctAnalysis) drawCTWaveform(ctx, W, H, f.window, f.ctAnalysis);
   }
 
   function findInternalFeaturesOnCrop(cropCanvas, draw) {
@@ -992,9 +1154,13 @@
     const normalScore = directionAnalysis.bottomScore;
     const invertedScore = directionAnalysis.topScore;
 
+    const ctAnalysis = analyzeCTLines(cropCanvas, win);
+
     const out = {
       window: win,
       sample,
+      ctAnalysis,
+      ctResult: ctAnalysis ? ctAnalysis.result : '-',
       windowSource: win.source,
       sampleSource: sample.source,
       windowCandidates: chosen.windowCandidates,
@@ -1415,7 +1581,7 @@ function candidateFeatureScore(srcCanvas, cand)
     const best=scored[0];
 
     ctx.save(); ctx.lineWidth=Math.max(3,canvas.width/250);
-    for(let i=Math.min(3,scored.length-1); i>=1; i--) drawPolygon(ctx,scored[i].pts,'rgba(37,99,235,0.45)',ctx.lineWidth);
+    // v31.0：Original Image 只畫最後選到的大外框，避免候選框造成誤會。
     if(best) drawPolygon(ctx,best.pts,'rgba(22,163,74,0.95)',ctx.lineWidth+1);
     ctx.restore();
 
@@ -1529,6 +1695,14 @@ scored.forEach((c,i)=>
           dbg += `Bottom Detail：std=${da.bottom.std.toFixed(1)}, dark=${da.bottom.darkRatio.toFixed(2)}, edge=${da.bottom.edgeRatio.toFixed(2)}, vertical=${da.bottom.verticalRatio.toFixed(2)}, horizontal=${da.bottom.horizontalRatio.toFixed(2)}, rowPenalty=${da.bottom.rowPenalty.toFixed(0)}<br>`;
         }
       }
+    }
+
+    if (f && f.ctAnalysis) {
+      const ct = f.ctAnalysis;
+      dbg += `<b>CT Line Analysis</b><br>`;
+      dbg += `Result=${ct.result} / Peak Count=${ct.peakCount} / Threshold=${ct.threshold.toFixed(1)} / Baseline=${ct.baseline.toFixed(1)} / Max=${ct.maxScore.toFixed(1)}<br>`;
+      dbg += `C Score=${ct.cPeak.score.toFixed(1)} / C Y=${ct.cPeak.absY.toFixed(0)} / C Detected=${ct.cPeak.detected ? 'YES' : 'NO'} / C Range=${ct.cRange.start}-${ct.cRange.end}<br>`;
+      dbg += `T Score=${ct.tPeak.score.toFixed(1)} / T Y=${ct.tPeak.absY.toFixed(0)} / T Detected=${ct.tPeak.detected ? 'YES' : 'NO'} / T Range=${ct.tRange.start}-${ct.tRange.end}<br>`;
     }
 
     if (f && f.redWindow) {

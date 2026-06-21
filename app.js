@@ -257,6 +257,14 @@
     } else {
       html += 'S Well: not found<br>';
     }
+    if (f.ctAnalysis) {
+      const ct = f.ctAnalysis;
+      html += '<hr>';
+      html += `<b>CT Result: ${ct.result}</b><br>`;
+      html += `C Score: ${ct.cPeak.score.toFixed(1)} / detected=${ct.cPeak.detected ? 'YES' : 'NO'}<br>`;
+      html += `T Score: ${ct.tPeak.score.toFixed(1)} / detected=${ct.tPeak.detected ? 'YES' : 'NO'}<br>`;
+      html += `Threshold: ${ct.threshold.toFixed(1)} / Peak Count: ${ct.peakCount}<br>`;
+    }
     return html;
   }
 
