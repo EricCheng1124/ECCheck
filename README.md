@@ -1,9 +1,6 @@
-# ASAP Check v31.0
+# ASAP Check v31.1
 
-- Access code: ASAP
-- Outer frame detection
-- Third-score S direction correction
-- Fixed ratio Window/S zone after orientation correction
-- CT line analysis in Window ROI
-- CT waveform drawn beside Window: Y = position, X = red intensity
-- Debug includes C/T score, threshold, peak count, and result
+- CT waveform keeps Y = position and X = intensity.
+- CT analysis now uses the center of the Window only to avoid strip edges.
+- Adds narrow-peak filtering: width, side-drop, sharpness, and reject reason.
+- Debug shows C/T width, max width, drop, sharpness, and rejected peaks.

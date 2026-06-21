@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v31.0-ct-waveform';
+  const VERSION = 'v31.1-ct-narrow-peak-filter';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -979,6 +979,59 @@
     return {y:bestY, score:Math.max(0,best)};
   }
 
+  function qualifyPeak(profile, peak, threshold, range, h, label) {
+    const score = Math.max(0, peak.score || 0);
+    const y = Math.max(0, Math.min(profile.length - 1, peak.y || 0));
+    const floor = Math.max(threshold * 0.55, score * 0.45, 1.2);
+
+    let left = y;
+    while (left > range.start && profile[left - 1] >= floor) left--;
+
+    let right = y;
+    while (right < range.end && right < profile.length - 1 && profile[right + 1] >= floor) right++;
+
+    const width = Math.max(1, right - left + 1);
+    const leftBaseY = Math.max(range.start, left - Math.max(3, Math.round(h * 0.018)));
+    const rightBaseY = Math.min(range.end, right + Math.max(3, Math.round(h * 0.018)));
+    const leftBase = profile[leftBaseY] || 0;
+    const rightBase = profile[rightBaseY] || 0;
+    const sideBase = Math.max(leftBase, rightBase);
+    const drop = score - sideBase;
+    const sharpness = score / Math.max(1, width);
+
+    // 真正 C/T 線是薄線，試紙邊緣通常是寬峰或平台。
+    const maxWidth = Math.max(4, Math.round(h * 0.055));
+    const softMaxWidth = Math.max(6, Math.round(h * 0.075));
+    const minDrop = Math.max(2.2, threshold * 0.18);
+    const minSharpness = Math.max(0.38, threshold / Math.max(12, maxWidth * 2.4));
+
+    let reject = '';
+    if (score < threshold) reject = 'below-threshold';
+    else if (width > softMaxWidth) reject = 'too-wide-edge';
+    else if (width > maxWidth && drop < threshold * 0.55) reject = 'wide-flat-edge';
+    else if (drop < minDrop) reject = 'low-side-drop';
+    else if (sharpness < minSharpness) reject = 'not-sharp';
+
+    return {
+      y,
+      score,
+      width,
+      left,
+      right,
+      floor,
+      leftBase,
+      rightBase,
+      sideBase,
+      drop,
+      sharpness,
+      maxWidth,
+      softMaxWidth,
+      detected: !reject,
+      reject: reject || 'PASS',
+      label
+    };
+  }
+
   function analyzeCTLines(cropCanvas, win) {
     if (!cropCanvas || !win) return null;
     const W = cropCanvas.width;
@@ -986,8 +1039,8 @@
     const ctx = cropCanvas.getContext('2d', {willReadFrequently:true});
     const data = ctx.getImageData(0,0,W,H).data;
 
-    const x0 = clamp(Math.floor(win.x + win.w * 0.10), 0, W-1);
-    const x1 = clamp(Math.ceil(win.x + win.w * 0.90), 0, W);
+    const x0 = clamp(Math.floor(win.x + win.w * 0.28), 0, W-1);
+    const x1 = clamp(Math.ceil(win.x + win.w * 0.72), 0, W);
     const y0 = clamp(Math.floor(win.y + win.h * 0.04), 0, H-1);
     const y1 = clamp(Math.ceil(win.y + win.h * 0.96), 0, H);
     const h = Math.max(1, y1-y0);
@@ -1020,24 +1073,27 @@
     // C 區偏上，T 區偏下，中間稍微重疊，避免裁切誤差。
     const cRange = {start:Math.round(h*0.12), end:Math.round(h*0.48)};
     const tRange = {start:Math.round(h*0.45), end:Math.round(h*0.84)};
-    const cPeak = maxInRange(positive, cRange.start, cRange.end);
-    const tPeak = maxInRange(positive, tRange.start, tRange.end);
+    const cRawPeak = maxInRange(positive, cRange.start, cRange.end);
+    const tRawPeak = maxInRange(positive, tRange.start, tRange.end);
+    const cQ = qualifyPeak(positive, cRawPeak, threshold, cRange, h, 'C');
+    const tQ = qualifyPeak(positive, tRawPeak, threshold, tRange, h, 'T');
 
-    const cDetected = cPeak.score >= threshold;
-    const tDetected = tPeak.score >= threshold;
+    const cDetected = cQ.detected;
+    const tDetected = tQ.detected;
     let result = 'Invalid';
     if (cDetected && tDetected) result = 'Positive';
     else if (cDetected && !tDetected) result = 'Negative';
     else result = 'Invalid';
 
     return {
-      source:'ct-red-profile-window',
+      source:'ct-red-profile-window-center-narrow-peak',
       x0, x1, y0, y1, h,
       raw, profile:positive, baseline:bg, mean:stat.mean, std:stat.std,
       maxScore, threshold,
       cRange, tRange,
-      cPeak:{y:cPeak.y, absY:y0+cPeak.y, score:cPeak.score, detected:cDetected},
-      tPeak:{y:tPeak.y, absY:y0+tPeak.y, score:tPeak.score, detected:tDetected},
+      cPeak:{y:cQ.y, absY:y0+cQ.y, score:cQ.score, detected:cDetected, width:cQ.width, left:y0+cQ.left, right:y0+cQ.right, drop:cQ.drop, sharpness:cQ.sharpness, reject:cQ.reject, maxWidth:cQ.maxWidth},
+      tPeak:{y:tQ.y, absY:y0+tQ.y, score:tQ.score, detected:tDetected, width:tQ.width, left:y0+tQ.left, right:y0+tQ.right, drop:tQ.drop, sharpness:tQ.sharpness, reject:tQ.reject, maxWidth:tQ.maxWidth},
+      rejectedPeaks:[cQ, tQ].filter(p=>!p.detected).map(p=>`${p.label}:${p.reject}`),
       peakCount:(cDetected?1:0)+(tDetected?1:0),
       result
     };
@@ -1702,7 +1758,10 @@ scored.forEach((c,i)=>
       dbg += `<b>CT Line Analysis</b><br>`;
       dbg += `Result=${ct.result} / Peak Count=${ct.peakCount} / Threshold=${ct.threshold.toFixed(1)} / Baseline=${ct.baseline.toFixed(1)} / Max=${ct.maxScore.toFixed(1)}<br>`;
       dbg += `C Score=${ct.cPeak.score.toFixed(1)} / C Y=${ct.cPeak.absY.toFixed(0)} / C Detected=${ct.cPeak.detected ? 'YES' : 'NO'} / C Range=${ct.cRange.start}-${ct.cRange.end}<br>`;
+      dbg += `C Width=${ct.cPeak.width} / MaxWidth=${ct.cPeak.maxWidth} / Drop=${ct.cPeak.drop.toFixed(1)} / Sharpness=${ct.cPeak.sharpness.toFixed(2)} / Reject=${ct.cPeak.reject}<br>`;
       dbg += `T Score=${ct.tPeak.score.toFixed(1)} / T Y=${ct.tPeak.absY.toFixed(0)} / T Detected=${ct.tPeak.detected ? 'YES' : 'NO'} / T Range=${ct.tRange.start}-${ct.tRange.end}<br>`;
+      dbg += `T Width=${ct.tPeak.width} / MaxWidth=${ct.tPeak.maxWidth} / Drop=${ct.tPeak.drop.toFixed(1)} / Sharpness=${ct.tPeak.sharpness.toFixed(2)} / Reject=${ct.tPeak.reject}<br>`;
+      if (ct.rejectedPeaks && ct.rejectedPeaks.length) dbg += `Rejected Peaks=${ct.rejectedPeaks.join(', ')}<br>`;
     }
 
     if (f && f.redWindow) {
