@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v31.33-ct-c-refine-guard-fix';
+  const VERSION = 'v31.34-weak-c-pair-pass';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -1599,19 +1599,41 @@
     refineDebug.push(`AFTER C id=${cQ.peakId || '-'} y=${(y0+cQ.y).toFixed(0)} local=${cQ.y} selected=${cSelected ? 'YES':'NO'}`);
     refineDebug.push(`AFTER T id=${tQ.peakId || '-'} y=${(y0+tQ.y).toFixed(0)} local=${tQ.y} selected=${tSelected ? 'YES':'NO'}`);
 
-    const cDetected = !!(
-      cQ &&
-      cSelected &&
-      cQ.score >= threshold &&
-      cRed.ok
-    );
-
     const tThreshold = Math.min(
       threshold * 0.65,
       cQ ? cQ.score * 0.35 : threshold
     );
 
     const tcRatio = cQ && cQ.score > 0 ? tQ.score / cQ.score : 0;
+
+    // v31.34：Weak C pass
+    // 有些陽性樣本的 C 線很淡，分數會略低於全域 threshold，
+    // 但若 C/T pair 已經成立、C 有紅色連續性、T 線明確，則允許 C 通過。
+    // 這避免「C=5.5、threshold=6.1、T=15.4」這類明顯陽性被判 Invalid。
+    const cWeakPass = !!(
+      cQ &&
+      tQ &&
+      cSelected &&
+      tSelected &&
+      cRed && cRed.ok &&
+      tRed && tRed.ok &&
+      cQ.score >= threshold * 0.82 &&
+      tQ.score >= Math.max(tThreshold, threshold * 0.90) &&
+      (tQ.y - cQ.y) >= Math.max(16, Math.round(h * 0.12)) &&
+      tcRatio >= 0.85
+    );
+
+    refineDebug.push(`C WEAK PASS=${cWeakPass ? 'YES' : 'NO'} cScore=${cQ ? cQ.score.toFixed(1) : '-'} threshold=${threshold.toFixed(1)} ratio=${tcRatio.toFixed(2)}`);
+
+    const cDetected = !!(
+      cQ &&
+      cSelected &&
+      cRed.ok &&
+      (
+        cQ.score >= threshold ||
+        cWeakPass
+      )
+    );
 
     // v31.21：T 線加回「平台假線」硬性過濾。
     // 問題樣本：T 位置肉眼無色帶，但背景/陰影形成寬平台，會讓 T score 過門檻。
@@ -1680,8 +1702,9 @@
     tQ.detected = tDetected;
 
     if (!cSelected) cQ.reject = 'not-selected';
-    else if (cQ.score < threshold) cQ.reject = 'below-threshold';
     else if (!cRed.ok) cQ.reject = 'no-red-continuity';
+    else if (cWeakPass && cQ.score < threshold) cQ.reject = 'weak-c-pass';
+    else if (cQ.score < threshold) cQ.reject = 'below-threshold';
     else cQ.reject = 'PASS';
 
     if (!tSelected) tQ.reject = 'not-selected';
