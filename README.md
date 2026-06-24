@@ -1,8 +1,9 @@
-# ASAP Check v31.33
+# ASAP Check v31.36
 
-C refine guard fix.
+T refine guard fix.
 
 Fix:
-- If C/T pair is already selected correctly, C refine is not allowed to jump down into the T zone.
-- Example failure fixed: raw C=201, raw T=239, C refine incorrectly changed C to 239.
-- Debug now shows `guard=BLOCKED-...` when the guard prevents a bad C refine.
+- v31.35 fixed the C line position selection so C is no longer pulled to the upper shoulder peak.
+- This version fixes weak T line over-refine: when T is faint, the detector keeps the original T peak position instead of allowing refine to jump downward into a blank/background area.
+- Debug now shows `T REFINE ... guard=BLOCKED-weak-t-no-refine` for faint T cases.
+- Updated cache version to `31.36` in `index.html`.

@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v31.35-ct-pair-score-c-position-fix';
+  const VERSION = 'v31.36-disable-weak-t-refine';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -1632,10 +1632,64 @@
       tRefineRange.start = tFallbackRange.start;
       tRefineRange.end = tFallbackRange.end;
     }
-    const tRed = refinePeakToRedLine(tQ.y, tRefineRange, 'faintT');
+
+    // v31.36：弱 T 不做大範圍 refine。
+    // v31.35 已經修正 C 線會選到 y=329/332 的問題，
+    // 但淡 T 原本在 y=387 時是正確的，卻會被 refine 拉到 y=441 的空白區。
+    // 因此：T 分數低於全域門檻時，只驗證原位置紅色連續性，不允許位置被改寫。
+    const tBeforeLocalY = tQ.y;
+    const tBeforeAbsY = y0 + tBeforeLocalY;
+    const tWeakForNoRefine = !!(
+      tQ &&
+      (
+        tQ.score < threshold * 0.95 ||
+        (tQ.quality || 0) < 3.0
+      )
+    );
+
+    let tRed = null;
+    if (tWeakForNoRefine) {
+      const cont = rowLineContinuity(tBeforeAbsY, 'faintT');
+      const profileScore = positive[Math.round(tBeforeLocalY)] || 0;
+      tRed = Object.assign({}, cont, {
+        localY: tBeforeLocalY,
+        absY: tBeforeAbsY,
+        profileScore,
+        totalScore: cont.score * 1.35 + profileScore * 0.22,
+        offset: 0,
+        searchStart: tBeforeAbsY,
+        searchEnd: tBeforeAbsY,
+        guardBlocked: true,
+        guardReason: 'weak-t-no-refine',
+        guardedFromAbsY: tBeforeAbsY,
+        guardedFromLocalY: tBeforeLocalY
+      });
+    } else {
+      tRed = refinePeakToRedLine(tQ.y, tRefineRange, 'faintT');
+
+      // 強 T 仍可 refine，但不可一次跳太遠，避免被下方背景/槽底吸走。
+      const maxTRefineShift = Math.max(10, Math.round(h * 0.12));
+      if (tRed && tRed.ok && Math.abs(tRed.localY - tBeforeLocalY) > maxTRefineShift) {
+        const cont = rowLineContinuity(tBeforeAbsY, 'faintT');
+        const profileScore = positive[Math.round(tBeforeLocalY)] || 0;
+        tRed = Object.assign({}, cont, {
+          localY: tBeforeLocalY,
+          absY: tBeforeAbsY,
+          profileScore,
+          totalScore: cont.score * 1.35 + profileScore * 0.22,
+          offset: 0,
+          searchStart: tRefineRange.start,
+          searchEnd: tRefineRange.end,
+          guardBlocked: true,
+          guardReason: `t-shift-too-far>${maxTRefineShift}`,
+          guardedFromAbsY: y0 + tRed.localY,
+          guardedFromLocalY: tRed.localY
+        });
+      }
+    }
 
     refineDebug.push(`C REFINE range=${cFallbackRange.start}-${cFallbackRange.end} before=${(y0+cQ.y).toFixed(0)} after=${cRed ? cRed.absY : '-'} ok=${cRed && cRed.ok ? 'YES':'NO'} offset=${cRed ? cRed.offset : '-'} total=${cRed ? cRed.totalScore.toFixed(1) : '-'} cont=${cRed ? cRed.score.toFixed(1) : '-'} profile=${cRed ? cRed.profileScore.toFixed(1) : '-'} guard=${cRed && cRed.guardBlocked ? 'BLOCKED-'+cRed.guardReason+':'+cRed.guardedFromAbsY+'->'+cRed.absY : 'NO'}`);
-    refineDebug.push(`T REFINE range=${tRefineRange.start}-${tRefineRange.end} before=${(y0+tQ.y).toFixed(0)} after=${tRed ? tRed.absY : '-'} ok=${tRed && tRed.ok ? 'YES':'NO'} offset=${tRed ? tRed.offset : '-'} total=${tRed ? tRed.totalScore.toFixed(1) : '-'} cont=${tRed ? tRed.score.toFixed(1) : '-'} profile=${tRed ? tRed.profileScore.toFixed(1) : '-'}`);
+    refineDebug.push(`T REFINE range=${tRefineRange.start}-${tRefineRange.end} before=${(y0+tQ.y).toFixed(0)} after=${tRed ? tRed.absY : '-'} ok=${tRed && tRed.ok ? 'YES':'NO'} offset=${tRed ? tRed.offset : '-'} total=${tRed ? tRed.totalScore.toFixed(1) : '-'} cont=${tRed ? tRed.score.toFixed(1) : '-'} profile=${tRed ? tRed.profileScore.toFixed(1) : '-'} guard=${tRed && tRed.guardBlocked ? 'BLOCKED-'+tRed.guardReason+':'+tRed.guardedFromAbsY+'->'+tRed.absY : 'NO'}`);
 
     // refine 後，把實際畫線/Debug 的 y 改成真正連續線段的位置。
     // score 保留原 peak score，因為它代表波峰強度；y 則改成紅線中心。
