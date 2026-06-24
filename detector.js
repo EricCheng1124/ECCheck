@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v31.34-weak-c-pair-pass';
+  const VERSION = 'v31.35-ct-pair-score-c-position-fix';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -1495,9 +1495,32 @@
             pairDecisionDebug.push(`PAIR reject ${selected[i].peakId || '-'}:${(y0+selected[i].y).toFixed(0)} -> ${selected[j].peakId || '-'}:${(y0+selected[j].y).toFixed(0)} dy=${dy} < minSep=${minSep}`);
             continue;
           }
-          const pairScore = selected[i].score + selected[j].score + Math.min(1, dy / Math.max(1, h*0.28)) * threshold * 0.25;
-          pairDecisionDebug.push(`PAIR ${selected[i].peakId || '-'}:${(y0+selected[i].y).toFixed(0)} -> ${selected[j].peakId || '-'}:${(y0+selected[j].y).toFixed(0)} dy=${dy} score=${pairScore.toFixed(1)}`);
-          if (pairScore > bestPairScore) { bestPairScore = pairScore; bestPair = [selected[i], selected[j]]; }
+          // v31.35：C/T pair 不可只偏好距離。
+          // 問題樣本中，真正 C 在 y=329/331、T 在 y=387/388，
+          // 但舊版會把 y=278 的肩峰當 C，只因為 278->329 距離漂亮。
+          // 修正：C 位置若低於 threshold 且品質差，要扣分；
+          // C/T 都有紅色/暗線強度時，優先選分數較可信的 pair。
+          const cCand = selected[i];
+          const tCand = selected[j];
+          const cQuality = cCand.quality || 0;
+          const tQuality = tCand.quality || 0;
+          const cShoulder = cCand.shoulderRatio || 0;
+          const cNearShoulder = cCand.nearShoulderRatio || 0;
+          const cBelowThreshold = cCand.score < threshold;
+          const cFatShoulder = cCand.width > Math.max(36, (cCand.maxWidth || 1) * 3.2) || cShoulder > 0.88 || cNearShoulder > 0.88;
+          const cPenalty = (cBelowThreshold ? threshold * 0.95 : 0) + (cBelowThreshold && cFatShoulder ? threshold * 0.75 : 0) + (cQuality < 1.2 ? threshold * 0.35 : 0);
+          const tPenalty = (tCand.score < (threshold * 0.45) ? threshold * 0.20 : 0);
+          const distanceBonus = Math.min(1, dy / Math.max(1, h*0.28)) * threshold * 0.25;
+          const pairScore =
+            cCand.score * 1.25 +
+            tCand.score * 1.05 +
+            Math.min(4, cQuality) * 0.35 +
+            Math.min(4, tQuality) * 0.25 +
+            distanceBonus -
+            cPenalty -
+            tPenalty;
+          pairDecisionDebug.push(`PAIR ${cCand.peakId || '-'}:${(y0+cCand.y).toFixed(0)} -> ${tCand.peakId || '-'}:${(y0+tCand.y).toFixed(0)} dy=${dy} score=${pairScore.toFixed(1)} cPenalty=${cPenalty.toFixed(1)} tPenalty=${tPenalty.toFixed(1)}`);
+          if (pairScore > bestPairScore) { bestPairScore = pairScore; bestPair = [cCand, tCand]; }
         }
       }
       if (bestPair) {
@@ -1560,18 +1583,40 @@
       const tooFar = shift > maxCRefineShift;
 
       if (hitTZone || tooFar) {
-        cRefineGuardReason = `${hitTZone ? 'hit-t-zone' : ''}${hitTZone && tooFar ? '+' : ''}${tooFar ? 'shift-too-far' : ''}`;
-        cRed = {
-          ...cRed,
-          ok: true,
-          localY: cBeforeLocalY,
-          absY: cBeforeAbsY,
-          offset: 0,
-          guardBlocked: true,
-          guardReason: cRefineGuardReason,
-          guardedFromAbsY: cAfterAbsY,
-          guardedFromLocalY: cAfterLocalY
-        };
+        // v31.35：若 C refine 找到的是明顯更強的 C 線，不能一律打回舊位置。
+        // 但若真的太靠近 T，仍然阻擋，避免 C 被吸到 T。
+        const refinedCandidate = qualifyPeak(positive, cAfterLocalY, threshold, cFallbackRange, h, 'C');
+        refinedCandidate.quality = calcQuality(refinedCandidate);
+        const refinedIsMuchBetter = refinedCandidate.score >= Math.max(cQ.score * 1.45, threshold * 0.95);
+        const refinedHasBetterQuality = (refinedCandidate.quality || 0) >= Math.max(1.4, (cQ.quality || 0) * 1.35);
+        const stillKeepsGapToT = tBeforeLocalYForGuard == null || cAfterLocalY <= (tBeforeLocalYForGuard - Math.max(6, Math.round(h * 0.03)));
+        const allowStrongCShift = tooFar && refinedIsMuchBetter && (refinedHasBetterQuality || cQ.score < threshold) && stillKeepsGapToT;
+
+        if (!allowStrongCShift) {
+          cRefineGuardReason = `${hitTZone ? 'hit-t-zone' : ''}${hitTZone && tooFar ? '+' : ''}${tooFar ? 'shift-too-far' : ''}`;
+          cRed = {
+            ...cRed,
+            ok: true,
+            localY: cBeforeLocalY,
+            absY: cBeforeAbsY,
+            offset: 0,
+            guardBlocked: true,
+            guardReason: cRefineGuardReason,
+            guardedFromAbsY: cAfterAbsY,
+            guardedFromLocalY: cAfterLocalY
+          };
+        } else {
+          cRed = {
+            ...cRed,
+            guardBlocked: false,
+            guardReason: 'ALLOW-strong-c-shift',
+            guardedFromAbsY: cAfterAbsY,
+            guardedFromLocalY: cAfterLocalY
+          };
+          cQ.score = Math.max(cQ.score, refinedCandidate.score);
+          cQ.quality = Math.max(cQ.quality || 0, refinedCandidate.quality || 0);
+          cQ.reject = cQ.score >= threshold ? 'PASS' : cQ.reject;
+        }
       }
     }
 
