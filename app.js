@@ -175,25 +175,33 @@
       qrStatus.textContent = found ? (lastQr.expired ? 'QR detected · EXPIRED' : 'QR detected ✓') : 'QR not detected';
     }
 
+    const hasFields = !!(lastQr.item || lastQr.lot || lastQr.exp || lastQr.pn);
     if (compactItem) {
-      compactItem.textContent = found ? (lastQr.item || lastQr.pn || 'QR detected') : 'Waiting for test QR...';
+      compactItem.textContent = found
+        ? (hasFields ? (lastQr.item || lastQr.pn || lastQr.raw) : (lastQr.raw || 'QR detected'))
+        : 'Waiting for test QR...';
       compactItem.title = compactItem.textContent;
     }
     if (compactValidity) {
       compactValidity.className = 'validity ' + (found ? (lastQr.expired ? 'expired' : 'ok') : 'neutral');
-      compactValidity.textContent = found ? (lastQr.expired ? 'Expired' : 'Valid ✓') : 'QR --';
+      compactValidity.textContent = found
+        ? (hasFields ? (lastQr.expired ? 'Expired' : 'Valid ✓') : 'QR ✓')
+        : 'QR --';
     }
     if (compactLotExp) {
-      const lotText = lastQr.lot || '--';
-      const expText = lastQr.exp || '--';
-      compactLotExp.textContent = `LOT ${lotText} · EXP ${expText}`;
+      if (found && !hasFields) {
+        compactLotExp.textContent = 'QR Code detected';
+      } else {
+        const lotText = lastQr.lot || '--';
+        const expText = lastQr.exp || '--';
+        compactLotExp.textContent = `LOT ${lotText} · EXP ${expText}`;
+      }
       compactLotExp.title = compactLotExp.textContent;
     }
 
     if (qrRaw) qrRaw.textContent = lastQr.raw || '';
     if (qrRawWrap) qrRawWrap.classList.toggle('hidden', !found);
 
-    const hasFields = !!(lastQr.item || lastQr.lot || lastQr.exp || lastQr.pn);
     if (qrFields) qrFields.classList.toggle('hidden', !hasFields);
     if (qrItem) qrItem.textContent = lastQr.item || '-';
     if (qrLot) qrLot.textContent = lastQr.lot || '-';
