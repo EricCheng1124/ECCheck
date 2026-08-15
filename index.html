@@ -2,18 +2,19 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#f4f6fb" />
   <title>ASAP Check</title>
-  <link rel="stylesheet" href="style.css" />
+  <link rel="stylesheet" href="style.css?v=31.22-compact" />
 </head>
 <body>
-  <div class="app">
-    <header>
-      <div><h1>ASAP Check</h1></div>
-      
+  <div class="app compactApp">
+    <header class="compactHeader">
+      <h1>ASAP Check</h1>
+      <div id="cvStatus" class="systemDot" title="System status"></div>
     </header>
 
-    <section id="lockPanel" class="card">
+    <section id="lockPanel" class="card loginCard">
       <h2>Access</h2>
       <input id="passInput" type="password" placeholder="Access Code" autocomplete="off" />
       <button id="unlockBtn" class="primary">Enter</button>
@@ -21,81 +22,101 @@
     </section>
 
     <main id="mainPanel" class="hidden">
-      <section class="card">
-        <h2>Image Source</h2>
-        <div class="row">
-          <button id="startCameraBtn" class="primaryAction" type="button">Open Camera</button>
-          <label class="fileBtn secondary">Choose Photo<input id="galleryInput" type="file" accept="image/*" /></label>
+      <!-- Fixed two-line test information. It never grows vertically. -->
+      <section class="testStrip" aria-label="Test information">
+        <div class="testStripLine1">
+          <strong id="compactItem" class="compactItem">Waiting for test QR...</strong>
+          <span id="compactValidity" class="validity neutral">QR --</span>
         </div>
+        <div id="compactLotExp" class="testStripLine2">LOT -- · EXP --</div>
+      </section>
+
+      <!-- Camera and final detection image share the same visual stage. -->
+      <section class="card stageCard">
         <div id="cameraPanel" class="cameraPanel hidden">
           <div class="cameraViewport">
             <video id="cameraVideo" autoplay playsinline muted></video>
-            <div class="cameraGuide">Keep the QR code and test cassette in view</div>
+            <div class="scanFrame" aria-hidden="true"></div>
+            <div id="cameraGuide" class="cameraGuide">Keep QR code and test cassette in view</div>
           </div>
-          <div class="cameraControls">
-            <button id="captureBtn" class="primaryAction" type="button">Capture &amp; Detect</button>
-            <button id="closeCameraBtn" class="secondaryBtn" type="button">Close Camera</button>
+          <p id="cameraStatus" class="cameraStatus">Camera ready</p>
+        </div>
+
+        <div id="detectionPanel" class="detectionPanel placeholder">
+          <div id="stagePlaceholder" class="stagePlaceholder">
+            <div class="placeholderIcon">＋</div>
+            <div>Open Camera or Choose Photo</div>
           </div>
-          <p id="cameraStatus" class="hint">Camera ready</p>
+          <canvas id="combinedCanvas" class="hidden"></canvas>
         </div>
-        <div class="metaRow">
-          <input id="regionInput" type="text" placeholder="GPS locating..." autocomplete="off" />
-          <span id="gpsStatus" class="gpsStatus">GPS locating...</span>
-        </div>
-        <p id="cvStatus" class="hint"></p>
-      </section>
-      <section class="card resultCard">
-        <h2>Detection Result</h2>
-        <div id="result" class="result neutral"></div>
-      </section>
 
-      <section class="card qrCard">
-        <h2>QR Code Information</h2>
-        <div class="qrHeadRow">
-          <div id="qrStatus" class="qrStatus neutral">No QR code detected yet</div>
-          <button id="rescanQrBtn" class="miniBtn" type="button">Rescan QR</button>
-        </div>
-        <div id="qrFields" class="qrFields hidden">
-          <div class="qrRow"><span>Test Item</span><strong id="qrItem">-</strong></div>
-          <div class="qrRow"><span>Lot No.</span><strong id="qrLot">-</strong></div>
-          <div class="qrRow"><span>Expiry Date</span><strong id="qrExp">-</strong></div>
-          <div class="qrRow"><span>Product No.</span><strong id="qrPn">-</strong></div>
-        </div>
-        <details id="qrRawWrap" class="qrRawWrap hidden">
-          <summary>Raw QR Data</summary>
-          <pre id="qrRaw"></pre>
-        </details>
-      </section>
-
-      <section class="card imageCard">
-        <h2>Detection Image</h2>
-        <canvas id="combinedCanvas"></canvas>
         <canvas id="canvas" class="hiddenCanvas" aria-hidden="true"></canvas>
         <canvas id="cropCanvas" class="hiddenCanvas" aria-hidden="true"></canvas>
       </section>
 
-      <section class="card">
-        <h2>Advanced Info</h2>
-        <div id="advancedLock" class="row">
-          <input id="advancedPassInput" type="password" placeholder="Access Code" autocomplete="off" />
-          <button id="advancedUnlockBtn" class="secondaryBtn">Open</button>
-        </div>
-        <p id="advancedMsg" class="msg"></p>
-        <div id="advancedContent" class="hidden">
-          <h3>Outer Frame Detection Result</h3>
-          <div id="detail" class="detail"></div>
-          <hr>
-          <h3>Debug Summary</h3>
-          <div id="debugText" class="detail"></div>
-        </div>
+      <!-- One-line result only. -->
+      <section class="resultCompact" aria-label="Detection result">
+        <div id="result" class="result neutral">Ready</div>
+        <div id="resultSub" class="resultSub">Scan QR and capture the cassette</div>
       </section>
 
+      <!-- Compact controls; no extra source card. -->
+      <section class="actionBar">
+        <button id="startCameraBtn" class="primaryAction" type="button">Open Camera</button>
+        <button id="captureBtn" class="primaryAction hidden" type="button">Capture &amp; Detect</button>
+        <label id="galleryLabel" class="fileBtn secondary">Choose Photo<input id="galleryInput" type="file" accept="image/*" /></label>
+        <button id="closeCameraBtn" class="secondaryBtn hidden" type="button">Close</button>
+      </section>
+
+      <div class="utilityRow">
+        <button id="rescanQrBtn" class="textBtn" type="button">Rescan QR</button>
+        <span id="qrStatus" class="qrStatus neutral">QR not detected</span>
+      </div>
+
+      <!-- Engineering / detailed data stays collapsed. -->
+      <details class="advancedCard">
+        <summary>Advanced Info</summary>
+        <div class="advancedBody">
+          <div id="advancedLock" class="row">
+            <input id="advancedPassInput" type="password" placeholder="Access Code" autocomplete="off" />
+            <button id="advancedUnlockBtn" class="secondaryBtn" type="button">Open</button>
+          </div>
+          <p id="advancedMsg" class="msg"></p>
+
+          <div id="advancedContent" class="hidden">
+            <h3>Test Information</h3>
+            <div id="qrFields" class="qrFields hidden">
+              <div class="qrRow"><span>Test Item</span><strong id="qrItem">-</strong></div>
+              <div class="qrRow"><span>Lot No.</span><strong id="qrLot">-</strong></div>
+              <div class="qrRow"><span>Expiry Date</span><strong id="qrExp">-</strong></div>
+              <div class="qrRow"><span>Product No.</span><strong id="qrPn">-</strong></div>
+            </div>
+            <div id="qrRawWrap" class="qrRawWrap hidden">
+              <div class="advancedLabel">Raw QR Data</div>
+              <pre id="qrRaw"></pre>
+            </div>
+
+            <h3>Location</h3>
+            <div class="metaRow compactMeta">
+              <input id="regionInput" type="text" placeholder="GPS locating..." autocomplete="off" />
+              <span id="gpsStatus" class="gpsStatus">GPS locating...</span>
+            </div>
+
+            <hr />
+            <h3>Outer Frame Detection Result</h3>
+            <div id="detail" class="detail"></div>
+            <hr />
+            <h3>Debug Summary</h3>
+            <div id="debugText" class="detail"></div>
+          </div>
+        </div>
+      </details>
     </main>
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
   <script async src="https://docs.opencv.org/4.9.0/opencv.js" onload="window.__opencvLoaded && window.__opencvLoaded()"></script>
   <script src="detector.js?v=31.20"></script>
-  <script src="app.js?v=31.21-liveqr"></script>
+  <script src="app.js?v=31.22-compact"></script>
 </body>
 </html>

@@ -1,18 +1,15 @@
-# ASAP Check v31.21 Live QR
+# ASAP Check v31.22 Compact Live QR
 
-Based on v31.20 detector logic.
+Compact mobile reader UI based on detector v31.20.
 
-Added:
-- Live rear-camera preview using `getUserMedia()`.
-- Continuous QR scanning while the camera preview is open.
-- QR data is locked after detection so the values remain stable during capture.
-- `Rescan QR` clears the lock and scans for another code.
-- `Capture & Detect` captures the current camera frame and runs the existing cassette / C-T detection.
-- QR Raw Data is always shown when detected.
-- Structured QR data can parse ITEM / LOT / EXP / PN from JSON or `KEY=VALUE` text.
-- Gallery upload remains available as a fallback.
-
-Example QR content:
-`LOT=AS26081501;ITEM=COVID-19;EXP=2027-08-15;PN=ASAP-COV01`
-
-Important: live camera access normally requires HTTPS (or localhost during PC development).
+- Live rear-camera QR scanning.
+- QR automatically fills Test Item / LOT / EXP / PN.
+- Main screen keeps QR info to two fixed lines.
+- Camera preview and Detection Image share the same stage to reduce scrolling.
+- Detection result is kept compact on one primary line plus one small context line.
+- Raw QR, PN, GPS and detector/debug details are moved into Advanced Info.
+- QR failure does not block the original cassette C/T analysis.
+- Supported structured QR examples:
+  - `LOT=AS26081501;ITEM=COVID-19 Ag;EXP=2027-08-15;PN=ASAP-COV01`
+  - JSON object with equivalent keys.
+- Live camera requires HTTPS (or localhost) and camera permission.

@@ -12,3 +12,68 @@
 .qrHeadRow{display:flex;align-items:center;justify-content:space-between;gap:10px}.qrHeadRow .qrStatus{flex:1}
 .miniBtn{border:0;border-radius:10px;padding:9px 12px;background:#475569;color:#fff;font-weight:800;font-size:13px;cursor:pointer;min-width:auto;white-space:nowrap}
 @media(max-width:520px){.cameraControls{grid-template-columns:1fr 1fr}.primaryAction{width:100%;min-width:0}.qrHeadRow{align-items:stretch;flex-direction:column}.miniBtn{width:100%}}
+
+/* ===== v31.22 Compact Mobile Reader UI ===== */
+.compactApp{max-width:540px;padding:10px 12px calc(12px + env(safe-area-inset-bottom))}
+.compactHeader{margin-bottom:8px;min-height:38px}
+.compactHeader h1{font-size:22px;letter-spacing:-.3px}
+.systemDot{width:9px;height:9px;border-radius:50%;background:#94a3b8;overflow:hidden;text-indent:-9999px}
+.loginCard{margin-top:8px}
+
+.testStrip{background:#fff;border:1px solid var(--line);border-radius:14px;padding:9px 12px;margin-bottom:8px;box-shadow:0 4px 14px rgba(15,23,42,.045);min-height:56px;overflow:hidden}
+.testStripLine1{display:flex;gap:10px;align-items:center;justify-content:space-between;min-width:0}
+.compactItem{font-size:16px;line-height:1.25;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;display:block}
+.validity{flex:0 0 auto;font-size:12px;font-weight:900;padding:4px 8px;border-radius:999px;background:#f1f5f9;color:#64748b}
+.validity.ok{background:#dcfce7;color:#15803d}.validity.expired{background:#fee2e2;color:#b91c1c}.validity.neutral{background:#f1f5f9;color:#64748b}
+.testStripLine2{margin-top:4px;font-size:13px;color:#64748b;font-weight:750;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+.stageCard{padding:0;margin-bottom:8px;overflow:hidden;border-radius:16px;background:#0f172a}
+.cameraPanel,.detectionPanel{width:100%;height:min(48vh,390px);min-height:260px;position:relative;background:#0f172a;overflow:hidden}
+.cameraViewport{width:100%;height:100%;position:relative;background:#020617;overflow:hidden}
+#cameraVideo{width:100%;height:100%;object-fit:cover;display:block}
+.scanFrame{position:absolute;left:10%;right:10%;top:10%;bottom:10%;border:1.5px solid rgba(255,255,255,.72);border-radius:18px;box-shadow:0 0 0 999px rgba(2,6,23,.06);pointer-events:none}
+.cameraGuide{position:absolute;left:12px;right:12px;bottom:12px;background:rgba(15,23,42,.76);backdrop-filter:blur(6px);color:#fff;padding:8px 10px;border-radius:10px;font-size:12px;font-weight:800;text-align:center}
+.cameraStatus{position:absolute;top:10px;left:10px;right:10px;margin:0;padding:6px 9px;border-radius:9px;background:rgba(15,23,42,.68);color:#e2e8f0;font-size:12px;font-weight:800;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.detectionPanel{display:flex;align-items:center;justify-content:center}
+.detectionPanel #combinedCanvas{max-width:100%;max-height:100%;width:auto;height:auto;margin:0;border:0;border-radius:0;background:#fff;object-fit:contain}
+.stagePlaceholder{color:#cbd5e1;text-align:center;font-size:13px;font-weight:800}
+.placeholderIcon{font-size:34px;line-height:1;margin-bottom:6px;color:#64748b}
+
+.resultCompact{background:#fff;border:1px solid var(--line);border-radius:14px;margin-bottom:8px;overflow:hidden}
+.resultCompact .result{padding:9px 12px;border:0!important;border-radius:0;font-size:28px;line-height:1.1;min-height:49px}
+.resultSub{height:25px;line-height:25px;text-align:center;padding:0 10px;color:#64748b;font-size:12px;font-weight:750;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border-top:1px solid #f1f5f9}
+
+.actionBar{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:5px}
+.actionBar button,.actionBar .fileBtn{width:100%;min-width:0;margin:0;padding:12px 8px;border-radius:12px;font-size:14px}
+.utilityRow{height:28px;display:flex;justify-content:space-between;align-items:center;padding:0 4px 0 2px;margin-bottom:4px;gap:8px}
+.textBtn{padding:2px 4px!important;min-width:0!important;background:transparent!important;color:#2563eb!important;font-size:12px!important;width:auto!important}
+.qrStatus{font-size:11px;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:right}
+.qrStatus.ok{color:#15803d}.qrStatus.expired{color:#b91c1c}.qrStatus.neutral{color:#64748b}
+
+.advancedCard{background:#fff;border:1px solid var(--line);border-radius:14px;margin:0 0 8px;overflow:hidden;box-shadow:0 4px 14px rgba(15,23,42,.035)}
+.advancedCard>summary{cursor:pointer;list-style:none;padding:11px 13px;font-size:13px;font-weight:900;color:#475569;display:flex;justify-content:space-between;align-items:center}
+.advancedCard>summary::-webkit-details-marker{display:none}.advancedCard>summary:after{content:'›';font-size:20px;transform:rotate(90deg);transition:.15s}.advancedCard[open]>summary:after{transform:rotate(-90deg)}
+.advancedBody{padding:0 12px 12px;border-top:1px solid #f1f5f9}
+.advancedBody h3{font-size:14px;margin:12px 0 7px}
+.advancedLabel{font-size:12px;font-weight:850;color:#64748b;margin:8px 0 4px}
+.compactMeta{grid-template-columns:1fr auto}
+.qrRawWrap pre{max-height:110px;overflow:auto;margin:4px 0;padding:8px;border-radius:8px;background:#f8fafc;font-size:11px;white-space:pre-wrap;word-break:break-all}
+
+@media(max-width:520px){
+  .compactApp{padding:8px 9px calc(10px + env(safe-area-inset-bottom))}
+  .cameraPanel,.detectionPanel{height:44vh;min-height:235px;max-height:350px}
+  .compactHeader{margin-bottom:5px}.compactHeader h1{font-size:20px}
+  .testStrip{padding:8px 10px;margin-bottom:6px;min-height:52px}
+  .stageCard,.resultCompact{margin-bottom:6px}
+  .resultCompact .result{font-size:25px;padding:8px 10px;min-height:44px}
+  .actionBar{gap:6px;margin-bottom:2px}
+  .actionBar button,.actionBar .fileBtn{padding:11px 6px;font-size:13px}
+  .metaRow.compactMeta{grid-template-columns:1fr}
+}
+
+@media(max-height:700px) and (max-width:520px){
+  .cameraPanel,.detectionPanel{height:38vh;min-height:210px}
+  .compactHeader h1{font-size:19px}.compactHeader{min-height:30px}
+  .testStrip{min-height:48px;padding:6px 9px}.compactItem{font-size:15px}
+  .resultCompact .result{font-size:23px;min-height:40px;padding:7px 8px}.resultSub{height:22px;line-height:22px}
+}

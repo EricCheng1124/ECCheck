@@ -39,12 +39,19 @@
   const qrExp = document.getElementById('qrExp');
   const qrPn = document.getElementById('qrPn');
   const rescanQrBtn = document.getElementById('rescanQrBtn');
+  const compactItem = document.getElementById('compactItem');
+  const compactValidity = document.getElementById('compactValidity');
+  const compactLotExp = document.getElementById('compactLotExp');
+  const resultSub = document.getElementById('resultSub');
+  const detectionPanel = document.getElementById('detectionPanel');
+  const stagePlaceholder = document.getElementById('stagePlaceholder');
+  const galleryLabel = document.getElementById('galleryLabel');
   let lastQr = { raw: '', item: '', lot: '', exp: '', pn: '', expired: false };
   let qrLocked = false;
   let cameraStream = null;
   let qrScanTimer = null;
   let qrScanCanvas = null;
-  let lastResultText = 'Invalid';
+  let lastResultText = 'Ready';
   const advancedLock = document.getElementById('advancedLock');
   const advancedContent = document.getElementById('advancedContent');
   const advancedPassInput = document.getElementById('advancedPassInput');
@@ -163,10 +170,25 @@
 
   function updateQrDisplay(info, found) {
     lastQr = info || { raw: '', item: '', lot: '', exp: '', pn: '', expired: false };
-    if (!qrStatus) return;
+    if (qrStatus) {
+      qrStatus.className = 'qrStatus ' + (found ? (lastQr.expired ? 'expired' : 'ok') : 'neutral');
+      qrStatus.textContent = found ? (lastQr.expired ? 'QR detected · EXPIRED' : 'QR detected ✓') : 'QR not detected';
+    }
 
-    qrStatus.className = 'qrStatus ' + (found ? (lastQr.expired ? 'expired' : 'ok') : 'neutral');
-    qrStatus.textContent = found ? (lastQr.expired ? 'QR detected - EXPIRED' : 'QR detected') : 'QR code not detected';
+    if (compactItem) {
+      compactItem.textContent = found ? (lastQr.item || lastQr.pn || 'QR detected') : 'Waiting for test QR...';
+      compactItem.title = compactItem.textContent;
+    }
+    if (compactValidity) {
+      compactValidity.className = 'validity ' + (found ? (lastQr.expired ? 'expired' : 'ok') : 'neutral');
+      compactValidity.textContent = found ? (lastQr.expired ? 'Expired' : 'Valid ✓') : 'QR --';
+    }
+    if (compactLotExp) {
+      const lotText = lastQr.lot || '--';
+      const expText = lastQr.exp || '--';
+      compactLotExp.textContent = `LOT ${lotText} · EXP ${expText}`;
+      compactLotExp.title = compactLotExp.textContent;
+    }
 
     if (qrRaw) qrRaw.textContent = lastQr.raw || '';
     if (qrRawWrap) qrRawWrap.classList.toggle('hidden', !found);
@@ -180,6 +202,45 @@
       qrExp.classList.toggle('expiredText', !!lastQr.expired);
     }
     if (qrPn) qrPn.textContent = lastQr.pn || '-';
+
+    updateResultSubtitle();
+  }
+
+  function updateResultSubtitle() {
+    if (!resultSub) return;
+    if (lastResultText && lastResultText !== 'Invalid' && lastResultText !== 'Ready') {
+      const parts = [];
+      if (lastQr.item) parts.push(lastQr.item);
+      if (lastQr.lot) parts.push(`LOT ${lastQr.lot}`);
+      resultSub.textContent = parts.length ? parts.join(' · ') : 'Detection completed';
+    } else if (lastResultText === 'Invalid') {
+      const parts = [];
+      if (lastQr.item) parts.push(lastQr.item);
+      if (lastQr.lot) parts.push(`LOT ${lastQr.lot}`);
+      resultSub.textContent = parts.length ? parts.join(' · ') : 'Check cassette position and image quality';
+    } else {
+      resultSub.textContent = qrLocked ? 'QR identified · Ready to capture' : 'Scan QR and capture the cassette';
+    }
+  }
+
+  function showCameraStage() {
+    if (cameraPanel) cameraPanel.classList.remove('hidden');
+    if (detectionPanel) detectionPanel.classList.add('hidden');
+    if (startCameraBtn) startCameraBtn.classList.add('hidden');
+    if (captureBtn) captureBtn.classList.remove('hidden');
+    if (closeCameraBtn) closeCameraBtn.classList.remove('hidden');
+    if (galleryLabel) galleryLabel.classList.add('hidden');
+  }
+
+  function showDetectionStage(hasImage) {
+    if (cameraPanel) cameraPanel.classList.add('hidden');
+    if (detectionPanel) detectionPanel.classList.remove('hidden');
+    if (combinedCanvas) combinedCanvas.classList.toggle('hidden', !hasImage);
+    if (stagePlaceholder) stagePlaceholder.classList.toggle('hidden', !!hasImage);
+    if (startCameraBtn) startCameraBtn.classList.remove('hidden');
+    if (captureBtn) captureBtn.classList.add('hidden');
+    if (closeCameraBtn) closeCameraBtn.classList.add('hidden');
+    if (galleryLabel) galleryLabel.classList.remove('hidden');
   }
 
   function decodeQrImageData(imageData) {
@@ -277,12 +338,12 @@
   async function startCamera() {
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       if (cameraStatus) cameraStatus.textContent = 'Live camera requires HTTPS and a supported browser.';
-      if (cameraPanel) cameraPanel.classList.remove('hidden');
+      showCameraStage();
       return;
     }
 
     stopCamera();
-    if (cameraPanel) cameraPanel.classList.remove('hidden');
+    showCameraStage();
     if (cameraStatus) cameraStatus.textContent = 'Opening rear camera...';
 
     try {
@@ -305,14 +366,14 @@
     }
   }
 
-  function stopCamera() {
+  function stopCamera(keepStage) {
     stopQrLoop();
     if (cameraStream) {
       cameraStream.getTracks().forEach(t => t.stop());
       cameraStream = null;
     }
     if (cameraVideo) cameraVideo.srcObject = null;
-    if (cameraPanel) cameraPanel.classList.add('hidden');
+    if (!keepStage) showDetectionStage(!!(combinedCanvas && combinedCanvas.width && combinedCanvas.height));
   }
 
   function captureFromCamera() {
@@ -339,7 +400,7 @@
     const img = new Image();
     img.onload = function () {
       lastImage = img;
-      stopCamera();
+      stopCamera(true);
       analyze();
     };
     img.src = shot.toDataURL('image/jpeg', 0.94);
@@ -800,6 +861,8 @@ function renderCombinedDetectionView() {
       if (debugText && r && r.debug) { debugText.innerHTML = r.debug; }
     }
     renderCombinedDetectionView();
+    showDetectionStage(true);
+    updateResultSubtitle();
   }
 
   function analyze() {
@@ -828,6 +891,8 @@ function renderCombinedDetectionView() {
         (ex && ex.message ? ex.message : String(ex));
       clearRoiOnlyView();
       if (combinedCanvas) { const cctx = combinedCanvas.getContext('2d'); cctx.clearRect(0,0,combinedCanvas.width,combinedCanvas.height); }
+      showDetectionStage(false);
+      updateResultSubtitle();
       if (debugText) {
         debugText.innerHTML =
           '<b>Exception</b><br>' +
@@ -839,6 +904,7 @@ function renderCombinedDetectionView() {
   function loadFile(file) {
     if (!file) return;
     stopCamera();
+    showDetectionStage(false);
     clearQrData();
     const img = new Image();
     img.onload = function () {
@@ -902,7 +968,9 @@ function renderCombinedDetectionView() {
   if (closeCameraBtn) closeCameraBtn.addEventListener('click', stopCamera);
   if (rescanQrBtn) rescanQrBtn.addEventListener('click', () => { clearQrData(); if (cameraStream) scheduleLiveQrScan(); });
   galleryInput.addEventListener('change', e => loadFile(e.target.files[0]));
-  window.addEventListener('pagehide', stopCamera);
+  window.addEventListener('pagehide', () => stopCamera(true));
+  showDetectionStage(false);
+  updateQrDisplay(lastQr, false);
   if (sessionStorage.getItem('asap_access') === '1') {
     lockPanel.classList.add('hidden');
     mainPanel.classList.remove('hidden');
