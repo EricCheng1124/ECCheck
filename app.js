@@ -25,6 +25,15 @@
   const debugText=document.getElementById('debugText');
   const regionInput = document.getElementById('regionInput');
   const gpsStatus = document.getElementById('gpsStatus');
+  const qrStatus = document.getElementById('qrStatus');
+  const qrFields = document.getElementById('qrFields');
+  const qrRawWrap = document.getElementById('qrRawWrap');
+  const qrRaw = document.getElementById('qrRaw');
+  const qrItem = document.getElementById('qrItem');
+  const qrLot = document.getElementById('qrLot');
+  const qrExp = document.getElementById('qrExp');
+  const qrPn = document.getElementById('qrPn');
+  let lastQr = { raw: '', item: '', lot: '', exp: '', pn: '', expired: false };
   let lastResultText = 'Invalid';
   const advancedLock = document.getElementById('advancedLock');
   const advancedContent = document.getElementById('advancedContent');
@@ -95,6 +104,98 @@
     return ct.result;
   }
 
+  function normalizeQrObject(obj) {
+    if (!obj || typeof obj !== 'object') return {};
+    const out = {};
+    Object.keys(obj).forEach(key => {
+      out[String(key).trim().toUpperCase()] = obj[key] == null ? '' : String(obj[key]).trim();
+    });
+    return out;
+  }
+
+  function parseQrData(raw) {
+    const text = String(raw || '').trim();
+    let map = {};
+
+    if (text) {
+      try {
+        const parsed = JSON.parse(text);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) map = normalizeQrObject(parsed);
+      } catch (_) {
+        text.split(/[;\n\r&|]+/).forEach(part => {
+          const m = part.match(/^\s*([^:=]+)\s*[:=]\s*(.*?)\s*$/);
+          if (m) map[m[1].trim().toUpperCase()] = m[2].trim();
+        });
+      }
+    }
+
+    const pick = (...keys) => {
+      for (const k of keys) if (map[k]) return map[k];
+      return '';
+    };
+
+    const exp = pick('EXP', 'EXPIRY', 'EXPIRYDATE', 'EXPIRY_DATE', 'EXPIRE', 'VALIDUNTIL', 'VALID_UNTIL');
+    let expired = false;
+    if (exp && /^\d{4}-\d{2}-\d{2}$/.test(exp)) {
+      const end = new Date(exp + 'T23:59:59');
+      expired = !Number.isNaN(end.getTime()) && end.getTime() < Date.now();
+    }
+
+    return {
+      raw: text,
+      item: pick('ITEM', 'TEST', 'TESTITEM', 'TEST_ITEM', 'ASSAY'),
+      lot: pick('LOT', 'LOTNO', 'LOT_NO', 'BATCH', 'BATCHNO', 'BATCH_NO'),
+      exp,
+      pn: pick('PN', 'PRODUCT', 'PRODUCTNO', 'PRODUCT_NO', 'MODEL', 'SKU'),
+      expired
+    };
+  }
+
+  function updateQrDisplay(info, found) {
+    lastQr = info || { raw: '', item: '', lot: '', exp: '', pn: '', expired: false };
+    if (!qrStatus) return;
+
+    qrStatus.className = 'qrStatus ' + (found ? (lastQr.expired ? 'expired' : 'ok') : 'neutral');
+    qrStatus.textContent = found ? (lastQr.expired ? 'QR detected - EXPIRED' : 'QR detected') : 'QR code not detected';
+
+    if (qrRaw) qrRaw.textContent = lastQr.raw || '';
+    if (qrRawWrap) qrRawWrap.classList.toggle('hidden', !found);
+
+    const hasFields = !!(lastQr.item || lastQr.lot || lastQr.exp || lastQr.pn);
+    if (qrFields) qrFields.classList.toggle('hidden', !hasFields);
+    if (qrItem) qrItem.textContent = lastQr.item || '-';
+    if (qrLot) qrLot.textContent = lastQr.lot || '-';
+    if (qrExp) {
+      qrExp.textContent = lastQr.exp || '-';
+      qrExp.classList.toggle('expiredText', !!lastQr.expired);
+    }
+    if (qrPn) qrPn.textContent = lastQr.pn || '-';
+  }
+
+  function scanQrFromCanvas() {
+    if (!canvas || !canvas.width || !canvas.height) return;
+    if (typeof window.jsQR !== 'function') {
+      if (qrStatus) {
+        qrStatus.className = 'qrStatus neutral';
+        qrStatus.textContent = 'QR decoder unavailable';
+      }
+      return;
+    }
+
+    try {
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
+      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const code = window.jsQR(imageData.data, imageData.width, imageData.height, {
+        inversionAttempts: 'attemptBoth'
+      });
+      if (code && code.data) updateQrDisplay(parseQrData(code.data), true);
+      else updateQrDisplay({ raw: '', item: '', lot: '', exp: '', pn: '', expired: false }, false);
+    } catch (ex) {
+      console.error('QR scan failed:', ex);
+      updateQrDisplay({ raw: '', item: '', lot: '', exp: '', pn: '', expired: false }, false);
+    }
+  }
+
   function getRegionText() {
     const value = regionInput ? (regionInput.value || '').trim() : '';
     return value || 'GPS locating...';
@@ -108,153 +209,187 @@
     return { date, time };
   }
 
-  function drawMetadataOverlay(ctx, W, H, opt) {
-    const ts = getTimestampParts();
-    const regionText = getRegionText();
-    const lines = [
-      `Result : ${lastResultText || 'Invalid'}`,
-      `Date   : ${ts.date}`,
-      `Time   : ${ts.time}`,
-      `GPS    : ${regionText}`
-    ];
+function drawMetadataOverlay(ctx, W, H) {
+  const ts = getTimestampParts();
 
-    const area = opt || {};
-    const x0 = area.x || 0;
-    const y0 = area.y || 0;
-    const areaW = area.w || W;
-    const areaH = area.h || H;
+  const lines = [
+    `Result : ${lastResultText || 'Invalid'}`,
+    ...(lastQr.item ? [`Test   : ${lastQr.item}`] : []),
+    ...(lastQr.lot ? [`LOT    : ${lastQr.lot}`] : []),
+    ...(lastQr.exp ? [`EXP    : ${lastQr.exp}${lastQr.expired ? ' (EXPIRED)' : ''}`] : []),
+    ...(lastQr.pn ? [`PN     : ${lastQr.pn}`] : []),
+    `Date   : ${ts.date}`,
+    `Time   : ${ts.time}`,
+    `Region : ${getRegionText()}`
+  ];
 
-    // v31.22：資訊框不可再被右側區域裁切。
-    // 先用較大的字，再依照 side area 寬度自動縮小，確保 Region/GPS 完整顯示。
-    let fontSize = Math.max(18, Math.round(Math.min(W, H) / 18));
-    let pad = Math.max(10, Math.round(fontSize * 0.70));
-    let lineH = Math.round(fontSize * 1.42);
+  const fontSize = Math.max(18, Math.round(W / 15));
+  const pad = Math.max(12, Math.round(W * 0.035));
 
-    ctx.save();
-    ctx.font = `900 ${fontSize}px sans-serif`;
+  ctx.save();
+  ctx.font = `800 ${fontSize}px "Segoe UI", "Noto Sans TC", sans-serif`;
 
-    let textW = Math.max(...lines.map(t => ctx.measureText(t).width));
-    const maxBoxW = Math.max(80, areaW - pad * 2);
+  const textW = Math.max(...lines.map(t => ctx.measureText(t).width));
+  const lineH = Math.round(fontSize * 1.45);
 
-    while (textW + pad * 2.4 > maxBoxW && fontSize > 15) {
-      fontSize -= 1;
-      pad = Math.max(8, Math.round(fontSize * 0.68));
-      lineH = Math.round(fontSize * 1.40);
-      ctx.font = `900 ${fontSize}px sans-serif`;
-      textW = Math.max(...lines.map(t => ctx.measureText(t).width));
+  const boxW = Math.min(W * 0.68, textW + pad * 2);
+  const boxH = lineH * lines.length + pad * 1.7;
+
+  const x = Math.max(pad, Math.round(W - boxW - pad));
+  const y = Math.max(pad, Math.round(H - boxH - pad));
+
+  const radius = Math.max(10, Math.round(W * 0.035));
+
+  // shadow
+  ctx.shadowColor = 'rgba(15, 23, 42, 0.35)';
+  ctx.shadowBlur = 18;
+  ctx.shadowOffsetX = 0;
+  ctx.shadowOffsetY = 8;
+
+  // background
+  const grad = ctx.createLinearGradient(x, y, x + boxW, y + boxH);
+  grad.addColorStop(0, 'rgba(15, 23, 42, 0.96)');
+  grad.addColorStop(0.55, 'rgba(30, 64, 175, 0.94)');
+  grad.addColorStop(1, 'rgba(14, 165, 233, 0.90)');
+
+  ctx.fillStyle = grad;
+  ctx.beginPath();
+  ctx.moveTo(x + radius, y);
+  ctx.lineTo(x + boxW - radius, y);
+  ctx.quadraticCurveTo(x + boxW, y, x + boxW, y + radius);
+  ctx.lineTo(x + boxW, y + boxH - radius);
+  ctx.quadraticCurveTo(x + boxW, y + boxH, x + boxW - radius, y + boxH);
+  ctx.lineTo(x + radius, y + boxH);
+  ctx.quadraticCurveTo(x, y + boxH, x, y + boxH - radius);
+  ctx.lineTo(x, y + radius);
+  ctx.quadraticCurveTo(x, y, x + radius, y);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.shadowColor = 'transparent';
+
+  // border
+  ctx.strokeStyle = 'rgba(125, 211, 252, 0.95)';
+  ctx.lineWidth = Math.max(2, Math.round(W / 180));
+  ctx.stroke();
+
+  // left accent line
+  ctx.fillStyle = '#38BDF8';
+  ctx.fillRect(x + pad * 0.55, y + pad * 0.7, Math.max(3, W / 90), boxH - pad * 1.4);
+
+  // text
+  for (let i = 0; i < lines.length; i++) {
+    if (i === 0) {
+      const isPositive = String(lastResultText).toLowerCase() === 'positive';
+      const isNegative = String(lastResultText).toLowerCase() === 'negative';
+
+      ctx.fillStyle = isPositive
+        ? '#FEE2E2'
+        : isNegative
+          ? '#DCFCE7'
+          : '#F8FAFC';
+    } else {
+      ctx.fillStyle = '#E0F2FE';
     }
 
-    const boxW = Math.min(maxBoxW, textW + pad * 2.4);
-    const boxH = lineH * lines.length + pad * 1.6;
+    ctx.fillText(
+      lines[i],
+      x + pad * 1.15,
+      y + pad + fontSize + i * lineH
+    );
+  }
 
-    const x = Math.round(x0 + Math.max(pad, (areaW - boxW) / 2));
-    const y = Math.round(y0 + Math.max(pad, areaH - boxH - pad));
-    const r = Math.max(10, Math.round(fontSize * 0.65));
+  ctx.restore();
+}
 
-    ctx.shadowColor = 'rgba(15, 23, 42, 0.28)';
-    ctx.shadowBlur = Math.round(fontSize * 0.7);
-    ctx.shadowOffsetY = Math.round(fontSize * 0.25);
+function renderCombinedDetectionView() {
+  if (!combinedCanvas || !cropCanvas || !canvas || !cropCanvas.width || !cropCanvas.height) return;
 
-    ctx.fillStyle = 'rgba(15, 88, 180, 0.92)';
-    roundRect(ctx, x, y, boxW, boxH, r);
+  const W = cropCanvas.width;
+  const H = cropCanvas.height;
+
+  combinedCanvas.width = W;
+  combinedCanvas.height = H;
+
+  const ctx = combinedCanvas.getContext('2d');
+  ctx.clearRect(0, 0, W, H);
+
+  // main detection image
+  ctx.drawImage(cropCanvas, 0, 0, W, H);
+
+  // original image thumbnail, bigger and placed on upper-left
+  if (canvas.width && canvas.height) {
+    const thumbW = Math.max(120, Math.round(W * 0.42));
+    const thumbH = Math.round(canvas.height * thumbW / Math.max(1, canvas.width));
+
+    const pad = Math.max(8, Math.round(W * 0.035));
+    const x = pad;
+    const y = pad;
+
+    const boxPad = Math.max(6, Math.round(W * 0.018));
+    const radius = Math.max(8, Math.round(W * 0.03));
+
+    ctx.save();
+
+    // shadow
+    ctx.shadowColor = 'rgba(15, 23, 42, 0.30)';
+    ctx.shadowBlur = 16;
+    ctx.shadowOffsetX = 0;
+    ctx.shadowOffsetY = 6;
+
+    // glass card
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.92)';
+    ctx.beginPath();
+    ctx.moveTo(x - boxPad + radius, y - boxPad);
+    ctx.lineTo(x - boxPad + thumbW + boxPad * 2 - radius, y - boxPad);
+    ctx.quadraticCurveTo(
+      x - boxPad + thumbW + boxPad * 2,
+      y - boxPad,
+      x - boxPad + thumbW + boxPad * 2,
+      y - boxPad + radius
+    );
+    ctx.lineTo(
+      x - boxPad + thumbW + boxPad * 2,
+      y - boxPad + thumbH + boxPad * 2 - radius
+    );
+    ctx.quadraticCurveTo(
+      x - boxPad + thumbW + boxPad * 2,
+      y - boxPad + thumbH + boxPad * 2,
+      x - boxPad + thumbW + boxPad * 2 - radius,
+      y - boxPad + thumbH + boxPad * 2
+    );
+    ctx.lineTo(x - boxPad + radius, y - boxPad + thumbH + boxPad * 2);
+    ctx.quadraticCurveTo(
+      x - boxPad,
+      y - boxPad + thumbH + boxPad * 2,
+      x - boxPad,
+      y - boxPad + thumbH + boxPad * 2 - radius
+    );
+    ctx.lineTo(x - boxPad, y - boxPad + radius);
+    ctx.quadraticCurveTo(x - boxPad, y - boxPad, x - boxPad + radius, y - boxPad);
+    ctx.closePath();
     ctx.fill();
 
     ctx.shadowColor = 'transparent';
-    ctx.lineWidth = Math.max(2, Math.round(fontSize / 7));
-    ctx.strokeStyle = 'rgba(91, 201, 255, 0.95)';
-    roundRect(ctx, x, y, boxW, boxH, r);
+
+    // blue medical-tech border
+    ctx.strokeStyle = '#38BDF8';
+    ctx.lineWidth = Math.max(2, Math.round(W / 160));
     ctx.stroke();
 
-    ctx.fillStyle = '#ffffff';
-    for (let i = 0; i < lines.length; i++) {
-      ctx.fillText(lines[i], x + pad, y + pad + fontSize + i * lineH);
-    }
+    ctx.drawImage(canvas, x, y, thumbW, thumbH);
+
+    // small label
+    const labelFont = Math.max(10, Math.round(W / 30));
+    ctx.font = `800 ${labelFont}px "Segoe UI", sans-serif`;
+    ctx.fillStyle = '#0F172A';
+    ctx.fillText('Original Image', x, y + thumbH + labelFont + boxPad);
+
     ctx.restore();
   }
 
-  function roundRect(ctx, x, y, w, h, r) {
-    r = Math.min(r, w / 2, h / 2);
-    ctx.beginPath();
-    ctx.moveTo(x + r, y);
-    ctx.lineTo(x + w - r, y);
-    ctx.quadraticCurveTo(x + w, y, x + w, y + r);
-    ctx.lineTo(x + w, y + h - r);
-    ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
-    ctx.lineTo(x + r, y + h);
-    ctx.quadraticCurveTo(x, y + h, x, y + h - r);
-    ctx.lineTo(x, y + r);
-    ctx.quadraticCurveTo(x, y, x + r, y);
-    ctx.closePath();
-  }
-
-  function renderCombinedDetectionView() {
-    if (!combinedCanvas || !cropCanvas || !canvas || !cropCanvas.width || !cropCanvas.height) return;
-
-    const cropW = cropCanvas.width;
-    const cropH = cropCanvas.height;
-    const sideW = Math.max(340, Math.round(cropW * 1.18));
-    const gap = Math.max(16, Math.round(cropW * 0.055));
-    const W = cropW + gap + sideW;
-    const H = cropH;
-
-    combinedCanvas.width = W;
-    combinedCanvas.height = H;
-
-    const ctx = combinedCanvas.getContext('2d');
-    ctx.clearRect(0, 0, W, H);
-
-    const grad = ctx.createLinearGradient(0, 0, W, H);
-    grad.addColorStop(0, '#f8fbff');
-    grad.addColorStop(1, '#eaf3ff');
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, W, H);
-
-    ctx.drawImage(cropCanvas, 0, 0, cropW, cropH);
-
-    ctx.save();
-    ctx.strokeStyle = 'rgba(37, 99, 235, 0.18)';
-    ctx.lineWidth = Math.max(1, Math.round(cropW / 260));
-    ctx.beginPath();
-    ctx.moveTo(cropW + gap / 2, Math.round(cropH * 0.08));
-    ctx.lineTo(cropW + gap / 2, Math.round(cropH * 0.92));
-    ctx.stroke();
-    ctx.restore();
-
-    if (canvas.width && canvas.height) {
-      const thumbW = Math.max(120, Math.round(sideW * 0.62));
-      const thumbH = Math.round(canvas.height * thumbW / Math.max(1, canvas.width));
-      const pad = Math.max(10, Math.round(sideW * 0.045));
-      const x = cropW + gap + Math.round((sideW - thumbW) / 2);
-      const y = pad;
-      const r = Math.max(10, Math.round(thumbW * 0.045));
-
-      ctx.save();
-      ctx.shadowColor = 'rgba(15, 23, 42, 0.18)';
-      ctx.shadowBlur = 12;
-      ctx.shadowOffsetY = 4;
-      ctx.fillStyle = 'rgba(255,255,255,0.96)';
-      roundRect(ctx, x - 5, y - 5, thumbW + 10, thumbH + 10, r);
-      ctx.fill();
-      ctx.shadowColor = 'transparent';
-      ctx.strokeStyle = 'rgba(45, 212, 191, 0.95)';
-      ctx.lineWidth = Math.max(2, Math.round(cropW / 150));
-      roundRect(ctx, x - 5, y - 5, thumbW + 10, thumbH + 10, r);
-      ctx.stroke();
-      ctx.drawImage(canvas, x, y, thumbW, thumbH);
-      ctx.fillStyle = '#0f172a';
-      ctx.font = `900 ${Math.max(11, Math.round(sideW / 18))}px sans-serif`;
-      ctx.fillText('Original Image', x, y + thumbH + Math.max(16, Math.round(sideW / 12)));
-      ctx.restore();
-    }
-
-    drawMetadataOverlay(ctx, W, H, {
-      x: cropW + gap,
-      y: Math.round(cropH * 0.30),
-      w: sideW,
-      h: Math.round(cropH * 0.68)
-    });
-  }
-
+  drawMetadataOverlay(ctx, W, H);
+}
   function updateTexts() {
     // Settings UI removed.
   }
@@ -521,6 +656,7 @@
   function analyze() {
     if (!lastImage) { clearRoiOnlyView(); return; }
     resizeAndDrawImage(lastImage);
+    scanQrFromCanvas();
     if (!cvReady) {
       resultEl.className = 'result neutral';
       lastResultText = 'Invalid';
@@ -564,6 +700,7 @@
       lastResultText = 'Invalid';
       resultEl.textContent = 'Invalid';
       detailEl.textContent = '';
+      updateQrDisplay({ raw: '', item: '', lot: '', exp: '', pn: '', expired: false }, false);
     };
     img.src = URL.createObjectURL(file);
   }

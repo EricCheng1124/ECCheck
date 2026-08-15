@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v31.36-disable-weak-t-refine';
+  const VERSION = 'v31.20-halfwidth-t-gate-auto-gps';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -1278,13 +1278,15 @@
       return best;
     }
 
-    // v31.30：CT 採樣區加寬。
-    // 原本只取 Window 中央 36%（約 12px），遇到 C/T 線些微傾斜或手機縮圖時，
-    // 很容易只掃到某一段，造成 C 線被削弱、T 線被放大。
-    // 這裡改成 Window 中央 60%（20%~80%），並保留原本的多 x 平均 profile。
-    // 重點：只加寬 CT sampling，不大改既有峰值/外框/S well 邏輯。
-    const ctStartRatio = 0.20;
-    const ctEndRatio = 0.80;
+    // v31.8：CT 改成「全 CT zone 動態找峰」。
+    // 不再先硬切 C Range / T Range，避免 T 線因位置偏移而沒被選到。
+    // 流程：Window 中央 40% × 內部 90% → Top S 以下 → 找全部候選峰 → 依上下位置分配 C/T。
+    const centerBandStart = 0.30;
+    const centerBandWidth = 0.40;
+    const innerKeep = 0.90;
+    const innerMargin = centerBandWidth * (1 - innerKeep) / 2;
+    const ctStartRatio = centerBandStart + innerMargin;       // 0.32
+    const ctEndRatio = centerBandStart + centerBandWidth - innerMargin; // 0.68
 
     const x0 = clamp(Math.floor(win.x + win.w * ctStartRatio), 0, W-1);
     const x1 = clamp(Math.ceil(win.x + win.w * ctEndRatio), 0, W);
@@ -1398,92 +1400,36 @@
       return peaks;
     }
 
-    // v31.31：Debug only，不改判斷結果。
-    // 目的：確認同一條線是否被 pink/dark/combined 重複建立成 peak，造成 C/T 取到同一個 y。
-    const pinkPeakProfile = pinkPositive.slice();
-    const darkPeakProfile = darkSmooth.map(v => v * darkWeight);
-    const combinedPeakProfile = positive.slice();
-
-    function peakSourceAt(y) {
-      const pink = pinkPeakProfile[y] || 0;
-      const dark = darkPeakProfile[y] || 0;
-      const combined = combinedPeakProfile[y] || 0;
-      let source = 'combined';
-      if (pink >= dark) source = dark > pink * 0.60 ? 'mixed-pink' : 'pink';
-      else source = pink > dark * 0.60 ? 'mixed-dark' : 'dark';
-      return {source, pink, dark, combined};
-    }
-
-    function summarizeRawPeaks(peaks, profile, sourceName) {
-      return peaks.slice(0, 10).map(p => {
-        const src = peakSourceAt(p.y);
-        return `y=${(y0+p.y).toFixed(0)}, local=${p.y}, score=${(profile[p.y] || p.score || 0).toFixed(1)}, source=${sourceName}, pink=${src.pink.toFixed(1)}, dark=${src.dark.toFixed(1)}, combined=${src.combined.toFixed(1)}`;
-      });
-    }
-
-    const rawPinkPeaks = findLocalPeaks(pinkPeakProfile);
-    const rawDarkPeaks = findLocalPeaks(darkPeakProfile);
-    const rawCombinedPeaks = findLocalPeaks(combinedPeakProfile);
-
-    const rawPeakDebug = {
-      pink: summarizeRawPeaks(rawPinkPeaks, pinkPeakProfile, 'pink'),
-      dark: summarizeRawPeaks(rawDarkPeaks, darkPeakProfile, 'dark'),
-      combined: summarizeRawPeaks(rawCombinedPeaks, combinedPeakProfile, 'combined')
-    };
-
-    const rawPeaks = rawCombinedPeaks;
-    const allPeaks = rawPeaks.map((p, idx) => {
+    const rawPeaks = findLocalPeaks(positive);
+    const allPeaks = rawPeaks.map(p => {
       const q = qualifyPeak(positive, p, threshold, fullRange, h, 'P');
       const quality = calcQuality(q);
-      const src = peakSourceAt(p.y);
       // v31.12：動態峰只用 score / threshold 決定是否可選。
       // quality、shoulder、width 只做排序輔助與 warning，不再直接 reject。
       let reject = '';
       if (q.score < threshold) reject = 'below-threshold';
       return Object.assign({}, q, {
-        peakId: `A${idx + 1}`,
-        rawY: p.y,
-        rawAbsY: y0 + p.y,
         quality,
-        peakSource: src.source,
-        pinkScore: src.pink,
-        darkScore: src.dark,
-        combinedScore: src.combined,
         detected: !reject,
         reject: reject || 'PASS'
       });
     }).sort((a,b)=>b.score-a.score);
 
-    const allPeaksBeforeMergeDebug = allPeaks.slice(0, 12).map(p =>
-      `id=${p.peakId || '-'}, rawY=${(p.rawAbsY || (y0+p.y)).toFixed(0)}, y=${(y0+p.y).toFixed(0)}, local=${p.y}, score=${p.score.toFixed(1)}, src=${p.peakSource || '-'}, reject=${p.reject}`
-    );
-
-    const mergeProcessDebug = [];
     const selected = [];
     for (const p of allPeaks) {
       // v31.13：這裡只負責「挑候選 peak」，不要先用全域 threshold 殺掉 T。
       // T 線是否成立，後面會用相對門檻 + 連續紅色再判斷。
-      const near = selected.find(s=>Math.abs(s.y - p.y) < minSep);
-      if (near) {
-        mergeProcessDebug.push(`SKIP id=${p.peakId || '-'} y=${(y0+p.y).toFixed(0)} with=${near.peakId || '-'} y=${(y0+near.y).toFixed(0)} diff=${Math.abs(near.y-p.y)} minSep=${minSep}`);
-        continue;
-      }
-      mergeProcessDebug.push(`KEEP id=${p.peakId || '-'} y=${(y0+p.y).toFixed(0)} score=${p.score.toFixed(1)} src=${p.peakSource || '-'}`);
+      if (selected.some(s=>Math.abs(s.y - p.y) < minSep)) continue;
       selected.push(p);
       if (selected.length >= 3) break;
     }
     selected.forEach(p => { p.selected = true; });
     selected.sort((a,b)=>a.y-b.y);
 
-    const selectedBeforeRefineDebug = selected.slice(0, 8).map(p =>
-      `id=${p.peakId || '-'}, y=${(y0+p.y).toFixed(0)}, local=${p.y}, rawY=${(p.rawAbsY || (y0+p.y)).toFixed(0)}, score=${p.score.toFixed(1)}, src=${p.peakSource || '-'}, reject=${p.reject}`
-    );
-
     let cQ = null;
     let tQ = null;
     const upperLimit = h * 0.58;
 
-    const pairDecisionDebug = [];
     if (selected.length >= 2) {
       // 取上下距離足夠的前兩個峰；上方 = C，下方 = T。
       let bestPair = null;
@@ -1491,42 +1437,12 @@
       for (let i=0; i<selected.length; i++) {
         for (let j=i+1; j<selected.length; j++) {
           const dy = selected[j].y - selected[i].y;
-          if (dy < minSep) {
-            pairDecisionDebug.push(`PAIR reject ${selected[i].peakId || '-'}:${(y0+selected[i].y).toFixed(0)} -> ${selected[j].peakId || '-'}:${(y0+selected[j].y).toFixed(0)} dy=${dy} < minSep=${minSep}`);
-            continue;
-          }
-          // v31.35：C/T pair 不可只偏好距離。
-          // 問題樣本中，真正 C 在 y=329/331、T 在 y=387/388，
-          // 但舊版會把 y=278 的肩峰當 C，只因為 278->329 距離漂亮。
-          // 修正：C 位置若低於 threshold 且品質差，要扣分；
-          // C/T 都有紅色/暗線強度時，優先選分數較可信的 pair。
-          const cCand = selected[i];
-          const tCand = selected[j];
-          const cQuality = cCand.quality || 0;
-          const tQuality = tCand.quality || 0;
-          const cShoulder = cCand.shoulderRatio || 0;
-          const cNearShoulder = cCand.nearShoulderRatio || 0;
-          const cBelowThreshold = cCand.score < threshold;
-          const cFatShoulder = cCand.width > Math.max(36, (cCand.maxWidth || 1) * 3.2) || cShoulder > 0.88 || cNearShoulder > 0.88;
-          const cPenalty = (cBelowThreshold ? threshold * 0.95 : 0) + (cBelowThreshold && cFatShoulder ? threshold * 0.75 : 0) + (cQuality < 1.2 ? threshold * 0.35 : 0);
-          const tPenalty = (tCand.score < (threshold * 0.45) ? threshold * 0.20 : 0);
-          const distanceBonus = Math.min(1, dy / Math.max(1, h*0.28)) * threshold * 0.25;
-          const pairScore =
-            cCand.score * 1.25 +
-            tCand.score * 1.05 +
-            Math.min(4, cQuality) * 0.35 +
-            Math.min(4, tQuality) * 0.25 +
-            distanceBonus -
-            cPenalty -
-            tPenalty;
-          pairDecisionDebug.push(`PAIR ${cCand.peakId || '-'}:${(y0+cCand.y).toFixed(0)} -> ${tCand.peakId || '-'}:${(y0+tCand.y).toFixed(0)} dy=${dy} score=${pairScore.toFixed(1)} cPenalty=${cPenalty.toFixed(1)} tPenalty=${tPenalty.toFixed(1)}`);
-          if (pairScore > bestPairScore) { bestPairScore = pairScore; bestPair = [cCand, tCand]; }
+          if (dy < minSep) continue;
+          const pairScore = selected[i].score + selected[j].score + Math.min(1, dy / Math.max(1, h*0.28)) * threshold * 0.25;
+          if (pairScore > bestPairScore) { bestPairScore = pairScore; bestPair = [selected[i], selected[j]]; }
         }
       }
-      if (bestPair) {
-        pairDecisionDebug.push(`PAIR chosen C=${bestPair[0].peakId || '-'}:${(y0+bestPair[0].y).toFixed(0)} T=${bestPair[1].peakId || '-'}:${(y0+bestPair[1].y).toFixed(0)} bestScore=${bestPairScore.toFixed(1)}`);
-        cQ = bestPair[0]; tQ = bestPair[1];
-      }
+      if (bestPair) { cQ = bestPair[0]; tQ = bestPair[1]; }
     }
 
     if (!cQ && selected.length === 1) {
@@ -1536,7 +1452,7 @@
 
     // 顯示用 fallback：即使沒有 detected，也列出 C/T 區域附近最強峰，方便 debug。
     const cFallbackRange = {start:Math.round(h*0.08), end:Math.round(h*0.55)};
-    const tFallbackRange = {start:Math.round(h*0.34), end:Math.round(h*0.92)};
+    const tFallbackRange = {start:Math.round(h*0.42), end:Math.round(h*0.92)};
     function fallbackPeak(label, range) {
       const raw = maxInRange(positive, range.start, range.end);
       const q = qualifyPeak(positive, raw, threshold, range, h, label);
@@ -1558,145 +1474,20 @@
     // T 線：改成相對 C 線門檻，避免淡 T 被全域 threshold 誤殺。
     const cSelected = selected.includes(cQ);
     const tSelected = selected.includes(tQ);
-
-    const refineDebug = [];
-    refineDebug.push(`BEFORE C id=${cQ.peakId || '-'} y=${(y0+cQ.y).toFixed(0)} local=${cQ.y} rawY=${(cQ.rawAbsY || (y0+cQ.y)).toFixed(0)} selected=${cSelected ? 'YES':'NO'} score=${cQ.score.toFixed(1)} src=${cQ.peakSource || '-'}`);
-    refineDebug.push(`BEFORE T id=${tQ.peakId || '-'} y=${(y0+tQ.y).toFixed(0)} local=${tQ.y} rawY=${(tQ.rawAbsY || (y0+tQ.y)).toFixed(0)} selected=${tSelected ? 'YES':'NO'} score=${tQ.score.toFixed(1)} src=${tQ.peakSource || '-'}`);
-
-    let cRed = refinePeakToRedLine(cQ.y, cFallbackRange);
-
-    // v31.33：C refine 防呆。
-    // 已經由配對邏輯選好的 C，不可以在 refine 時被吸到下方 T 線。
-    // 這次問題樣本：C rawY=201、T rawY=239，但 C REFINE 被拉到 239，導致 C/T 同點而判 Negative。
-    const cBeforeLocalY = cQ.y;
-    const cBeforeAbsY = y0 + cBeforeLocalY;
-    const tBeforeLocalYForGuard = tQ ? tQ.y : null;
-    const minRefineGapToT = Math.max(10, Math.round(h * 0.08));
-    const maxCRefineShift = Math.max(10, Math.round(h * 0.16));
-    let cRefineGuardReason = '';
-
-    if (cRed && cRed.ok) {
-      const cAfterLocalY = cRed.localY;
-      const cAfterAbsY = y0 + cAfterLocalY;
-      const shift = Math.abs(cAfterLocalY - cBeforeLocalY);
-      const hitTZone = tBeforeLocalYForGuard != null && cAfterLocalY >= (tBeforeLocalYForGuard - minRefineGapToT);
-      const tooFar = shift > maxCRefineShift;
-
-      if (hitTZone || tooFar) {
-        // v31.35：若 C refine 找到的是明顯更強的 C 線，不能一律打回舊位置。
-        // 但若真的太靠近 T，仍然阻擋，避免 C 被吸到 T。
-        const refinedCandidate = qualifyPeak(positive, cAfterLocalY, threshold, cFallbackRange, h, 'C');
-        refinedCandidate.quality = calcQuality(refinedCandidate);
-        const refinedIsMuchBetter = refinedCandidate.score >= Math.max(cQ.score * 1.45, threshold * 0.95);
-        const refinedHasBetterQuality = (refinedCandidate.quality || 0) >= Math.max(1.4, (cQ.quality || 0) * 1.35);
-        const stillKeepsGapToT = tBeforeLocalYForGuard == null || cAfterLocalY <= (tBeforeLocalYForGuard - Math.max(6, Math.round(h * 0.03)));
-        const allowStrongCShift = tooFar && refinedIsMuchBetter && (refinedHasBetterQuality || cQ.score < threshold) && stillKeepsGapToT;
-
-        if (!allowStrongCShift) {
-          cRefineGuardReason = `${hitTZone ? 'hit-t-zone' : ''}${hitTZone && tooFar ? '+' : ''}${tooFar ? 'shift-too-far' : ''}`;
-          cRed = {
-            ...cRed,
-            ok: true,
-            localY: cBeforeLocalY,
-            absY: cBeforeAbsY,
-            offset: 0,
-            guardBlocked: true,
-            guardReason: cRefineGuardReason,
-            guardedFromAbsY: cAfterAbsY,
-            guardedFromLocalY: cAfterLocalY
-          };
-        } else {
-          cRed = {
-            ...cRed,
-            guardBlocked: false,
-            guardReason: 'ALLOW-strong-c-shift',
-            guardedFromAbsY: cAfterAbsY,
-            guardedFromLocalY: cAfterLocalY
-          };
-          cQ.score = Math.max(cQ.score, refinedCandidate.score);
-          cQ.quality = Math.max(cQ.quality || 0, refinedCandidate.quality || 0);
-          cQ.reject = cQ.score >= threshold ? 'PASS' : cQ.reject;
-        }
-      }
-    }
-
-    // v31.29：T refine 不能回頭吸到 C 線。
-    // 先用原始 C/T 位置建立動態 T 搜尋範圍，只允許在 C 下方合理距離內找真正 T 線。
-    const preTMinGap = Math.max(12, Math.round(h * 0.10));
-    const preTMaxGap = Math.max(preTMinGap + 12, Math.round(h * 0.62));
-    const tRefineRange = {
-      start: Math.max(tFallbackRange.start, Math.round(cQ.y + preTMinGap)),
-      end: Math.min(tFallbackRange.end, Math.round(cQ.y + preTMaxGap), h - 1)
-    };
-    if (tRefineRange.end <= tRefineRange.start + 2) {
-      tRefineRange.start = tFallbackRange.start;
-      tRefineRange.end = tFallbackRange.end;
-    }
-
-    // v31.36：弱 T 不做大範圍 refine。
-    // v31.35 已經修正 C 線會選到 y=329/332 的問題，
-    // 但淡 T 原本在 y=387 時是正確的，卻會被 refine 拉到 y=441 的空白區。
-    // 因此：T 分數低於全域門檻時，只驗證原位置紅色連續性，不允許位置被改寫。
-    const tBeforeLocalY = tQ.y;
-    const tBeforeAbsY = y0 + tBeforeLocalY;
-    const tWeakForNoRefine = !!(
-      tQ &&
-      (
-        tQ.score < threshold * 0.95 ||
-        (tQ.quality || 0) < 3.0
-      )
-    );
-
-    let tRed = null;
-    if (tWeakForNoRefine) {
-      const cont = rowLineContinuity(tBeforeAbsY, 'faintT');
-      const profileScore = positive[Math.round(tBeforeLocalY)] || 0;
-      tRed = Object.assign({}, cont, {
-        localY: tBeforeLocalY,
-        absY: tBeforeAbsY,
-        profileScore,
-        totalScore: cont.score * 1.35 + profileScore * 0.22,
-        offset: 0,
-        searchStart: tBeforeAbsY,
-        searchEnd: tBeforeAbsY,
-        guardBlocked: true,
-        guardReason: 'weak-t-no-refine',
-        guardedFromAbsY: tBeforeAbsY,
-        guardedFromLocalY: tBeforeLocalY
-      });
-    } else {
-      tRed = refinePeakToRedLine(tQ.y, tRefineRange, 'faintT');
-
-      // 強 T 仍可 refine，但不可一次跳太遠，避免被下方背景/槽底吸走。
-      const maxTRefineShift = Math.max(10, Math.round(h * 0.12));
-      if (tRed && tRed.ok && Math.abs(tRed.localY - tBeforeLocalY) > maxTRefineShift) {
-        const cont = rowLineContinuity(tBeforeAbsY, 'faintT');
-        const profileScore = positive[Math.round(tBeforeLocalY)] || 0;
-        tRed = Object.assign({}, cont, {
-          localY: tBeforeLocalY,
-          absY: tBeforeAbsY,
-          profileScore,
-          totalScore: cont.score * 1.35 + profileScore * 0.22,
-          offset: 0,
-          searchStart: tRefineRange.start,
-          searchEnd: tRefineRange.end,
-          guardBlocked: true,
-          guardReason: `t-shift-too-far>${maxTRefineShift}`,
-          guardedFromAbsY: y0 + tRed.localY,
-          guardedFromLocalY: tRed.localY
-        });
-      }
-    }
-
-    refineDebug.push(`C REFINE range=${cFallbackRange.start}-${cFallbackRange.end} before=${(y0+cQ.y).toFixed(0)} after=${cRed ? cRed.absY : '-'} ok=${cRed && cRed.ok ? 'YES':'NO'} offset=${cRed ? cRed.offset : '-'} total=${cRed ? cRed.totalScore.toFixed(1) : '-'} cont=${cRed ? cRed.score.toFixed(1) : '-'} profile=${cRed ? cRed.profileScore.toFixed(1) : '-'} guard=${cRed && cRed.guardBlocked ? 'BLOCKED-'+cRed.guardReason+':'+cRed.guardedFromAbsY+'->'+cRed.absY : 'NO'}`);
-    refineDebug.push(`T REFINE range=${tRefineRange.start}-${tRefineRange.end} before=${(y0+tQ.y).toFixed(0)} after=${tRed ? tRed.absY : '-'} ok=${tRed && tRed.ok ? 'YES':'NO'} offset=${tRed ? tRed.offset : '-'} total=${tRed ? tRed.totalScore.toFixed(1) : '-'} cont=${tRed ? tRed.score.toFixed(1) : '-'} profile=${tRed ? tRed.profileScore.toFixed(1) : '-'} guard=${tRed && tRed.guardBlocked ? 'BLOCKED-'+tRed.guardReason+':'+tRed.guardedFromAbsY+'->'+tRed.absY : 'NO'}`);
+    const cRed = refinePeakToRedLine(cQ.y, cFallbackRange);
+    const tRed = refinePeakToRedLine(tQ.y, tFallbackRange, 'faintT');
 
     // refine 後，把實際畫線/Debug 的 y 改成真正連續線段的位置。
     // score 保留原 peak score，因為它代表波峰強度；y 則改成紅線中心。
     if (cRed && cRed.ok) cQ.y = cRed.localY;
     if (tRed && tRed.ok) tQ.y = tRed.localY;
-    refineDebug.push(`AFTER C id=${cQ.peakId || '-'} y=${(y0+cQ.y).toFixed(0)} local=${cQ.y} selected=${cSelected ? 'YES':'NO'}`);
-    refineDebug.push(`AFTER T id=${tQ.peakId || '-'} y=${(y0+tQ.y).toFixed(0)} local=${tQ.y} selected=${tSelected ? 'YES':'NO'}`);
+
+    const cDetected = !!(
+      cQ &&
+      cSelected &&
+      cQ.score >= threshold &&
+      cRed.ok
+    );
 
     const tThreshold = Math.min(
       threshold * 0.65,
@@ -1705,87 +1496,29 @@
 
     const tcRatio = cQ && cQ.score > 0 ? tQ.score / cQ.score : 0;
 
-    // v31.34：Weak C pass
-    // 有些陽性樣本的 C 線很淡，分數會略低於全域 threshold，
-    // 但若 C/T pair 已經成立、C 有紅色連續性、T 線明確，則允許 C 通過。
-    // 這避免「C=5.5、threshold=6.1、T=15.4」這類明顯陽性被判 Invalid。
-    const cWeakPass = !!(
-      cQ &&
-      tQ &&
-      cSelected &&
-      tSelected &&
-      cRed && cRed.ok &&
-      tRed && tRed.ok &&
-      cQ.score >= threshold * 0.82 &&
-      tQ.score >= Math.max(tThreshold, threshold * 0.90) &&
-      (tQ.y - cQ.y) >= Math.max(16, Math.round(h * 0.12)) &&
-      tcRatio >= 0.85
-    );
-
-    refineDebug.push(`C WEAK PASS=${cWeakPass ? 'YES' : 'NO'} cScore=${cQ ? cQ.score.toFixed(1) : '-'} threshold=${threshold.toFixed(1)} ratio=${tcRatio.toFixed(2)}`);
-
-    const cDetected = !!(
-      cQ &&
-      cSelected &&
-      cRed.ok &&
-      (
-        cQ.score >= threshold ||
-        cWeakPass
-      )
-    );
-
-    // v31.21：T 線加回「平台假線」硬性過濾。
-    // 問題樣本：T 位置肉眼無色帶，但背景/陰影形成寬平台，會讓 T score 過門檻。
-    // 真 T 線可以很淡，但仍應是窄、局部、相對尖的色帶；若 width/shoulder/nearShoulder 過大，直接排除。
+    // v31.19：T 線加回 shape gate。
+    // 目的：保留淡 T 線，但排除大面積陰影/底色平台造成的假 T。
+    // 真 T 可以淡，但仍應該具備一定 sharpness / quality，且不能寬到像整片平台。
     const tCoreWidth = tQ ? (tQ.halfWidth || tQ.width || 9999) : 9999;
     const tCoreSharpness = tQ ? (tQ.halfSharpness || tQ.sharpness || 0) : 0;
-    const tQuality = tQ ? (tQ.quality || 0) : 0;
-    const tShoulder = tQ ? (tQ.shoulderRatio || 0) : 0;
-    const tNearShoulder = tQ ? (tQ.nearShoulderRatio || 0) : 0;
-    const tMaxWidth = tQ ? (tQ.maxWidth || 1) : 1;
 
-    const tHardPlatformReject = !!(
-      tQ &&
-      (
-        tCoreWidth > Math.max(40, tMaxWidth * 3.4) ||
-        (tQuality < 4.0 && tShoulder > 0.90) ||
-        (tQuality < 4.0 && tNearShoulder > 0.90) ||
-        (tCoreSharpness < 0.35 && (tShoulder > 0.85 || tNearShoulder > 0.85))
-      )
-    );
-
+    // v31.20：T shape gate 改看 half-width 核心寬度，不再看容易被背景緩坡放大的 full width。
+    // 這樣清楚陽性的 T 線不會因 full width=100+ 被誤殺；真正平台型假 T 仍會因 core 太寬/太鈍被踢掉。
     const tWeakShapeOk = !!(
       tQ &&
-      !tHardPlatformReject &&
       tCoreSharpness >= 0.85 &&
-      tCoreWidth <= Math.max(12, tMaxWidth * 2.4) &&
-      (tQuality >= 1.8 || tcRatio >= 0.55)
+      tCoreWidth <= Math.max(12, (tQ.maxWidth || 1) * 2.4) &&
+      ((tQ.quality || 0) >= 1.8 || tcRatio >= 0.55)
     );
 
     const tStrongShapeOk = !!(
       tQ &&
-      !tHardPlatformReject &&
       tcRatio >= 0.45 &&
       tCoreSharpness >= 0.55 &&
-      tCoreWidth <= Math.max(16, tMaxWidth * 3.2) &&
-      !(tQuality < 3.2 && tShoulder > 0.88 && tNearShoulder > 0.88)
+      tCoreWidth <= Math.max(16, (tQ.maxWidth || 1) * 3.2)
     );
 
-    // v31.23：T 線位置保險。
-    // T 一定要在 C 線下方一段合理距離，且不能落到 Window/slot 太底部。
-    // 這可避免把 C 線下方的背景陰影、試紙槽底部平台或 W 框底部亮度變化誤判成 T。
-    const tGapFromC = (tQ && cQ) ? (tQ.y - cQ.y) : -9999;
-    const tMinGap = Math.max(16, Math.round(h * 0.12));
-    const tMaxGap = Math.max(tMinGap + 12, Math.round(h * 0.62));
-    const tMaxYFromWindow = Math.round(h * 0.92);
-    const tPositionOk = !!(
-      tQ && cQ &&
-      tGapFromC >= tMinGap &&
-      tGapFromC <= tMaxGap &&
-      tQ.y <= tMaxYFromWindow
-    );
-
-    const tShapeOk = (tWeakShapeOk || tStrongShapeOk) && !tHardPlatformReject;
+    const tShapeOk = tWeakShapeOk || tStrongShapeOk;
 
     const tDetected = !!(
       tQ &&
@@ -1793,25 +1526,21 @@
       cDetected &&
       tQ.score >= tThreshold &&
       tRed.ok &&
-      tShapeOk &&
-      tPositionOk
+      tShapeOk
     );
 
     cQ.detected = cDetected;
     tQ.detected = tDetected;
 
     if (!cSelected) cQ.reject = 'not-selected';
-    else if (!cRed.ok) cQ.reject = 'no-red-continuity';
-    else if (cWeakPass && cQ.score < threshold) cQ.reject = 'weak-c-pass';
     else if (cQ.score < threshold) cQ.reject = 'below-threshold';
+    else if (!cRed.ok) cQ.reject = 'no-red-continuity';
     else cQ.reject = 'PASS';
 
     if (!tSelected) tQ.reject = 'not-selected';
     else if (tQ.score < tThreshold) tQ.reject = 'below-relative-threshold';
     else if (!tRed.ok) tQ.reject = 'no-red-continuity';
-    else if (tHardPlatformReject) tQ.reject = 'platform-false-t';
     else if (!tShapeOk) tQ.reject = 'bad-t-shape-platform';
-    else if (!tPositionOk) tQ.reject = 'bad-t-position';
     else tQ.reject = 'PASS';
 
     // 防呆：單峰若在下半部，只能算 T-like，沒有 C，所以 Invalid。
@@ -1828,11 +1557,7 @@
     const tRange = {start:tFallbackRange.start, end:tFallbackRange.end};
 
     const peakDebug = allPeaks.slice(0, 8).map(p =>
-      `y=${(y0+p.y).toFixed(0)}, local=${p.y}, score=${p.score.toFixed(1)}, q=${p.quality.toFixed(1)}, src=${p.peakSource || '-'}, pink=${(p.pinkScore || 0).toFixed(1)}, dark=${(p.darkScore || 0).toFixed(1)}, combined=${(p.combinedScore || 0).toFixed(1)}, selected=${p.selected ? 'YES' : 'NO'}, w=${p.width}, shoulder=${p.shoulderRatio.toFixed(2)}, near=${p.nearShoulderRatio.toFixed(2)}, reject=${p.reject}, warning=${p.warning || '-'}`
-    );
-
-    const selectedDebug = selected.slice(0, 8).map(p =>
-      `y=${(y0+p.y).toFixed(0)}, local=${p.y}, score=${p.score.toFixed(1)}, src=${p.peakSource || '-'}, reject=${p.reject}`
+      `y=${(y0+p.y).toFixed(0)}, score=${p.score.toFixed(1)}, q=${p.quality.toFixed(1)}, selected=${p.selected ? 'YES' : 'NO'}, w=${p.width}, shoulder=${p.shoulderRatio.toFixed(2)}, near=${p.nearShoulderRatio.toFixed(2)}, reject=${p.reject}, warning=${p.warning || '-'}`
     );
 
     return {
@@ -1845,13 +1570,6 @@
       cPeak:{y:cQ.y, absY:y0+cQ.y, score:cQ.score, detected:cDetected, selected:cSelected, redContinuity:cRed, width:cQ.width, left:y0+cQ.left, right:y0+cQ.right, drop:cQ.drop, sharpness:cQ.sharpness, shoulderRatio:cQ.shoulderRatio, shoulderMaxRatio:cQ.shoulderMaxRatio, nearShoulderRatio:cQ.nearShoulderRatio, quality:cQ.quality || 0, reject:cQ.reject, warning:cQ.warning || '-', maxWidth:cQ.maxWidth},
       tPeak:{y:tQ.y, absY:y0+tQ.y, score:tQ.score, detected:tDetected, selected:tSelected, redContinuity:tRed, width:tQ.width, left:y0+tQ.left, right:y0+tQ.right, drop:tQ.drop, sharpness:tQ.sharpness, shoulderRatio:tQ.shoulderRatio, shoulderMaxRatio:tQ.shoulderMaxRatio, nearShoulderRatio:tQ.nearShoulderRatio, quality:tQ.quality || 0, reject:tQ.reject, warning:tQ.warning || '-', maxWidth:tQ.maxWidth},
       rejectedPeaks:allPeaks.filter(p=>!p.detected).slice(0,6).map(p=>`y${(y0+p.y).toFixed(0)}:${p.reject}`),
-      rawPeakDebug,
-      allPeaksBeforeMergeDebug,
-      mergeProcessDebug,
-      selectedBeforeRefineDebug,
-      pairDecisionDebug,
-      refineDebug,
-      selectedDebug,
       peakDebug,
       allPeakCount:allPeaks.length,
       selectedPeakCount:selected.length,
@@ -2543,23 +2261,11 @@ scored.forEach((c,i)=>
       if (!(ct.selectedPeakCount || 0)) dbg += `<b style="color:#dc2626">No CT peak selected：C/T guide lines are hidden.</b><br>`;
       if (ct.zone) dbg += `CT Analyze Zone=x${ct.zone.x}, y${ct.zone.y}, w=${ct.zone.w}, h=${ct.zone.h} / ratio=${(ct.zone.widthRatio*100).toFixed(1)}% / xRatio=${(ct.zone.startRatio*100).toFixed(1)}-${(ct.zone.endRatio*100).toFixed(1)}%<br>`;
       dbg += `Dynamic Peaks=${ct.allPeakCount || 0} / Selected=${ct.selectedPeakCount || 0} / CandidateFloor=${(ct.candidateFloor || 0).toFixed(1)} / MinSep=${ct.minSep || 0}<br>`;
-      if (ct.rawPeakDebug) {
-        if (ct.rawPeakDebug.pink && ct.rawPeakDebug.pink.length) dbg += `Raw Pink Peaks：${ct.rawPeakDebug.pink.join(' | ')}<br>`;
-        if (ct.rawPeakDebug.dark && ct.rawPeakDebug.dark.length) dbg += `Raw Dark Peaks：${ct.rawPeakDebug.dark.join(' | ')}<br>`;
-        if (ct.rawPeakDebug.combined && ct.rawPeakDebug.combined.length) dbg += `Raw Combined Peaks：${ct.rawPeakDebug.combined.join(' | ')}<br>`;
-      }
-      if (ct.allPeaksBeforeMergeDebug && ct.allPeaksBeforeMergeDebug.length) dbg += `All Peaks Before Select/Merge：${ct.allPeaksBeforeMergeDebug.join(' | ')}<br>`;
-      if (ct.mergeProcessDebug && ct.mergeProcessDebug.length) dbg += `Select/Merge Process：${ct.mergeProcessDebug.join(' | ')}<br>`;
-      if (ct.selectedBeforeRefineDebug && ct.selectedBeforeRefineDebug.length) dbg += `Selected Before Refine：${ct.selectedBeforeRefineDebug.join(' | ')}<br>`;
-      if (ct.pairDecisionDebug && ct.pairDecisionDebug.length) dbg += `C/T Pair Decision：${ct.pairDecisionDebug.join(' | ')}<br>`;
-      if (ct.refineDebug && ct.refineDebug.length) dbg += `Refine Trace：${ct.refineDebug.join(' | ')}<br>`;
-      if (ct.selectedDebug && ct.selectedDebug.length) dbg += `Selected Peaks After Refine：${ct.selectedDebug.join(' | ')}<br>`;
       dbg += `C Score=${ct.cPeak.score.toFixed(1)} / C Y=${ct.cPeak.absY.toFixed(0)} / C Detected=${ct.cPeak.detected ? 'YES' : 'NO'} / C Selected=${ct.cPeak.selected ? 'YES' : 'NO'} / C Range=${ct.cRange.start}-${ct.cRange.end}<br>`;
       dbg += `C Red Continuity=${ct.cPeak.redContinuity.ok ? 'YES' : 'NO'} / Run=${ct.cPeak.redContinuity.run}/${ct.cPeak.redContinuity.minRun} / Ratio=${ct.cPeak.redContinuity.ratio.toFixed(2)}<br>`;
       dbg += `C Width=${ct.cPeak.width} / HalfWidth=${ct.cPeak.halfWidth || ct.cPeak.width} / MaxWidth=${ct.cPeak.maxWidth} / Drop=${ct.cPeak.drop.toFixed(1)} / Sharpness=${ct.cPeak.sharpness.toFixed(2)} / Quality=${(ct.cPeak.quality || 0).toFixed(1)} / Shoulder=${ct.cPeak.shoulderRatio.toFixed(2)} / NearShoulder=${ct.cPeak.nearShoulderRatio.toFixed(2)} / Reject=${ct.cPeak.reject}<br>`;
       dbg += `T Score=${ct.tPeak.score.toFixed(1)} / T Y=${ct.tPeak.absY.toFixed(0)} / T Detected=${ct.tPeak.detected ? 'YES' : 'NO'} / T Selected=${ct.tPeak.selected ? 'YES' : 'NO'} / T Range=${ct.tRange.start}-${ct.tRange.end}<br>`;
       dbg += `T Relative Threshold=${ct.tThreshold.toFixed(1)} / T/C Ratio=${ct.tcRatio.toFixed(2)}<br>`;
-      if (ct.tPositionGate) dbg += `T Position Gate：gap=${ct.tPositionGate.gap} / allow=${ct.tPositionGate.minGap}-${ct.tPositionGate.maxGap} / maxY=${ct.tPositionGate.maxY} / ok=${ct.tPositionGate.ok ? 'YES' : 'NO'}<br>`;
       dbg += `T Red Continuity=${ct.tPeak.redContinuity.ok ? 'YES' : 'NO'} / Run=${ct.tPeak.redContinuity.run}/${ct.tPeak.redContinuity.minRun} / Ratio=${ct.tPeak.redContinuity.ratio.toFixed(2)}<br>`;
       dbg += `T Width=${ct.tPeak.width} / HalfWidth=${ct.tPeak.halfWidth || ct.tPeak.width} / MaxWidth=${ct.tPeak.maxWidth} / Drop=${ct.tPeak.drop.toFixed(1)} / Sharpness=${ct.tPeak.sharpness.toFixed(2)} / Quality=${(ct.tPeak.quality || 0).toFixed(1)} / Shoulder=${ct.tPeak.shoulderRatio.toFixed(2)} / NearShoulder=${ct.tPeak.nearShoulderRatio.toFixed(2)} / Reject=${ct.tPeak.reject}<br>`;
       if (ct.rejectedPeaks && ct.rejectedPeaks.length) dbg += `Rejected Peaks=${ct.rejectedPeaks.join(', ')}<br>`;

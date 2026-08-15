@@ -38,6 +38,21 @@
         <div id="result" class="result neutral"></div>
       </section>
 
+      <section class="card qrCard">
+        <h2>QR Code Information</h2>
+        <div id="qrStatus" class="qrStatus neutral">No QR code detected yet</div>
+        <div id="qrFields" class="qrFields hidden">
+          <div class="qrRow"><span>Test Item</span><strong id="qrItem">-</strong></div>
+          <div class="qrRow"><span>Lot No.</span><strong id="qrLot">-</strong></div>
+          <div class="qrRow"><span>Expiry Date</span><strong id="qrExp">-</strong></div>
+          <div class="qrRow"><span>Product No.</span><strong id="qrPn">-</strong></div>
+        </div>
+        <details id="qrRawWrap" class="qrRawWrap hidden">
+          <summary>Raw QR Data</summary>
+          <pre id="qrRaw"></pre>
+        </details>
+      </section>
+
       <section class="card imageCard">
         <h2>Detection Image</h2>
         <canvas id="combinedCanvas"></canvas>
@@ -64,8 +79,9 @@
     </main>
   </div>
 
+  <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
   <script async src="https://docs.opencv.org/4.9.0/opencv.js" onload="window.__opencvLoaded && window.__opencvLoaded()"></script>
-  <script src="detector.js?v=31.36"></script>
-  <script src="app.js?v=31.36"></script>
+  <script src="detector.js?v=31.20"></script>
+  <script src="app.js?v=31.20-qr1"></script>
 </body>
 </html>
