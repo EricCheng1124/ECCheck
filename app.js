@@ -10,7 +10,12 @@
   const lockMsg = document.getElementById('lockMsg');
   const cvStatus = document.getElementById('cvStatus');
 
-  const cameraInput = document.getElementById('cameraInput');
+  const startCameraBtn = document.getElementById('startCameraBtn');
+  const cameraPanel = document.getElementById('cameraPanel');
+  const cameraVideo = document.getElementById('cameraVideo');
+  const captureBtn = document.getElementById('captureBtn');
+  const closeCameraBtn = document.getElementById('closeCameraBtn');
+  const cameraStatus = document.getElementById('cameraStatus');
   const galleryInput = document.getElementById('galleryInput');
   const canvas = document.getElementById('canvas');
   const cropCanvas = document.getElementById('cropCanvas');
@@ -33,7 +38,12 @@
   const qrLot = document.getElementById('qrLot');
   const qrExp = document.getElementById('qrExp');
   const qrPn = document.getElementById('qrPn');
+  const rescanQrBtn = document.getElementById('rescanQrBtn');
   let lastQr = { raw: '', item: '', lot: '', exp: '', pn: '', expired: false };
+  let qrLocked = false;
+  let cameraStream = null;
+  let qrScanTimer = null;
+  let qrScanCanvas = null;
   let lastResultText = 'Invalid';
   const advancedLock = document.getElementById('advancedLock');
   const advancedContent = document.getElementById('advancedContent');
@@ -172,28 +182,167 @@
     if (qrPn) qrPn.textContent = lastQr.pn || '-';
   }
 
-  function scanQrFromCanvas() {
-    if (!canvas || !canvas.width || !canvas.height) return;
+  function decodeQrImageData(imageData) {
+    if (typeof window.jsQR !== 'function' || !imageData) return null;
+    try {
+      return window.jsQR(imageData.data, imageData.width, imageData.height, {
+        inversionAttempts: 'attemptBoth'
+      });
+    } catch (ex) {
+      console.error('QR decode failed:', ex);
+      return null;
+    }
+  }
+
+  function acceptQrCode(raw, lockIt) {
+    if (!raw) return false;
+    updateQrDisplay(parseQrData(raw), true);
+    if (lockIt) qrLocked = true;
+    if (cameraStatus) cameraStatus.textContent = qrLocked ? 'QR detected and locked. You can capture the test now.' : 'QR detected';
+    return true;
+  }
+
+  function clearQrData() {
+    qrLocked = false;
+    updateQrDisplay({ raw: '', item: '', lot: '', exp: '', pn: '', expired: false }, false);
+    if (cameraStatus && cameraStream) cameraStatus.textContent = 'Scanning QR code...';
+  }
+
+  function scanQrFromCanvas(forceClear) {
+    if (!canvas || !canvas.width || !canvas.height) return false;
+    if (qrLocked) return true;
     if (typeof window.jsQR !== 'function') {
       if (qrStatus) {
         qrStatus.className = 'qrStatus neutral';
         qrStatus.textContent = 'QR decoder unavailable';
       }
-      return;
+      return false;
     }
 
     try {
       const ctx = canvas.getContext('2d', { willReadFrequently: true });
       const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-      const code = window.jsQR(imageData.data, imageData.width, imageData.height, {
-        inversionAttempts: 'attemptBoth'
-      });
-      if (code && code.data) updateQrDisplay(parseQrData(code.data), true);
-      else updateQrDisplay({ raw: '', item: '', lot: '', exp: '', pn: '', expired: false }, false);
+      const code = decodeQrImageData(imageData);
+      if (code && code.data) return acceptQrCode(code.data, false);
+      if (forceClear) updateQrDisplay({ raw: '', item: '', lot: '', exp: '', pn: '', expired: false }, false);
+      return false;
     } catch (ex) {
       console.error('QR scan failed:', ex);
-      updateQrDisplay({ raw: '', item: '', lot: '', exp: '', pn: '', expired: false }, false);
+      if (forceClear) updateQrDisplay({ raw: '', item: '', lot: '', exp: '', pn: '', expired: false }, false);
+      return false;
     }
+  }
+
+  function stopQrLoop() {
+    if (qrScanTimer) {
+      clearTimeout(qrScanTimer);
+      qrScanTimer = null;
+    }
+  }
+
+  function scheduleLiveQrScan() {
+    stopQrLoop();
+    const loop = () => {
+      if (!cameraStream || !cameraVideo || cameraVideo.readyState < 2) {
+        if (cameraStream) qrScanTimer = setTimeout(loop, 250);
+        return;
+      }
+
+      if (!qrLocked && typeof window.jsQR === 'function') {
+        try {
+          const vw = cameraVideo.videoWidth || 0;
+          const vh = cameraVideo.videoHeight || 0;
+          if (vw > 0 && vh > 0) {
+            if (!qrScanCanvas) qrScanCanvas = document.createElement('canvas');
+            const maxW = 720;
+            const scale = Math.min(1, maxW / vw);
+            qrScanCanvas.width = Math.max(1, Math.round(vw * scale));
+            qrScanCanvas.height = Math.max(1, Math.round(vh * scale));
+            const qctx = qrScanCanvas.getContext('2d', { willReadFrequently: true });
+            qctx.drawImage(cameraVideo, 0, 0, qrScanCanvas.width, qrScanCanvas.height);
+            const imageData = qctx.getImageData(0, 0, qrScanCanvas.width, qrScanCanvas.height);
+            const code = decodeQrImageData(imageData);
+            if (code && code.data) acceptQrCode(code.data, true);
+          }
+        } catch (ex) {
+          console.error('Live QR scan failed:', ex);
+        }
+      }
+
+      if (cameraStream) qrScanTimer = setTimeout(loop, qrLocked ? 500 : 180);
+    };
+    loop();
+  }
+
+  async function startCamera() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      if (cameraStatus) cameraStatus.textContent = 'Live camera requires HTTPS and a supported browser.';
+      if (cameraPanel) cameraPanel.classList.remove('hidden');
+      return;
+    }
+
+    stopCamera();
+    if (cameraPanel) cameraPanel.classList.remove('hidden');
+    if (cameraStatus) cameraStatus.textContent = 'Opening rear camera...';
+
+    try {
+      cameraStream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: { ideal: 'environment' },
+          width: { ideal: 1920 },
+          height: { ideal: 1080 }
+        },
+        audio: false
+      });
+      cameraVideo.srcObject = cameraStream;
+      await cameraVideo.play();
+      if (cameraStatus) cameraStatus.textContent = qrLocked ? 'QR already locked. You can capture the test.' : 'Scanning QR code...';
+      scheduleLiveQrScan();
+    } catch (ex) {
+      console.error('Camera open failed:', ex);
+      cameraStream = null;
+      if (cameraStatus) cameraStatus.textContent = 'Unable to open camera. Check browser camera permission and HTTPS.';
+    }
+  }
+
+  function stopCamera() {
+    stopQrLoop();
+    if (cameraStream) {
+      cameraStream.getTracks().forEach(t => t.stop());
+      cameraStream = null;
+    }
+    if (cameraVideo) cameraVideo.srcObject = null;
+    if (cameraPanel) cameraPanel.classList.add('hidden');
+  }
+
+  function captureFromCamera() {
+    if (!cameraVideo || !cameraStream || cameraVideo.readyState < 2) return;
+    const vw = cameraVideo.videoWidth;
+    const vh = cameraVideo.videoHeight;
+    if (!vw || !vh) return;
+
+    const shot = document.createElement('canvas');
+    shot.width = vw;
+    shot.height = vh;
+    shot.getContext('2d').drawImage(cameraVideo, 0, 0, vw, vh);
+
+    // Last chance QR scan from the full-resolution captured frame.
+    if (!qrLocked && typeof window.jsQR === 'function') {
+      try {
+        const sctx = shot.getContext('2d', { willReadFrequently: true });
+        const imageData = sctx.getImageData(0, 0, shot.width, shot.height);
+        const code = decodeQrImageData(imageData);
+        if (code && code.data) acceptQrCode(code.data, true);
+      } catch (_) {}
+    }
+
+    const img = new Image();
+    img.onload = function () {
+      lastImage = img;
+      stopCamera();
+      analyze();
+    };
+    img.src = shot.toDataURL('image/jpeg', 0.94);
   }
 
   function getRegionText() {
@@ -656,7 +805,7 @@ function renderCombinedDetectionView() {
   function analyze() {
     if (!lastImage) { clearRoiOnlyView(); return; }
     resizeAndDrawImage(lastImage);
-    scanQrFromCanvas();
+    scanQrFromCanvas(!qrLocked);
     if (!cvReady) {
       resultEl.className = 'result neutral';
       lastResultText = 'Invalid';
@@ -689,6 +838,8 @@ function renderCombinedDetectionView() {
 
   function loadFile(file) {
     if (!file) return;
+    stopCamera();
+    clearQrData();
     const img = new Image();
     img.onload = function () {
       lastImage = img;
@@ -746,8 +897,12 @@ function renderCombinedDetectionView() {
   passInput.addEventListener('keydown', e => { if (e.key === 'Enter') unlock(); });
   if (advancedUnlockBtn) advancedUnlockBtn.addEventListener('click', unlockAdvanced);
   if (advancedPassInput) advancedPassInput.addEventListener('keydown', e => { if (e.key === 'Enter') unlockAdvanced(); });
-  cameraInput.addEventListener('change', e => loadFile(e.target.files[0]));
+  if (startCameraBtn) startCameraBtn.addEventListener('click', startCamera);
+  if (captureBtn) captureBtn.addEventListener('click', captureFromCamera);
+  if (closeCameraBtn) closeCameraBtn.addEventListener('click', stopCamera);
+  if (rescanQrBtn) rescanQrBtn.addEventListener('click', () => { clearQrData(); if (cameraStream) scheduleLiveQrScan(); });
   galleryInput.addEventListener('change', e => loadFile(e.target.files[0]));
+  window.addEventListener('pagehide', stopCamera);
   if (sessionStorage.getItem('asap_access') === '1') {
     lockPanel.classList.add('hidden');
     mainPanel.classList.remove('hidden');

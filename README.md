@@ -1,16 +1,18 @@
-# ASAP Check v31.20 + QR
+# ASAP Check v31.21 Live QR
 
-Base: v31.20 Half-width T shape gate + auto GPS metadata overlay.
+Based on v31.20 detector logic.
 
-Added QR Code support:
-- Reads QR Code from the same uploaded/taken photo.
-- Displays arbitrary QR raw text.
-- Auto-parses JSON or key/value data such as LOT, ITEM, EXP, PN.
-- Checks YYYY-MM-DD expiry dates and marks expired tests.
-- Adds parsed QR fields to the Detection Image metadata overlay.
-- QR failure does not block the original rapid-test C/T detection.
+Added:
+- Live rear-camera preview using `getUserMedia()`.
+- Continuous QR scanning while the camera preview is open.
+- QR data is locked after detection so the values remain stable during capture.
+- `Rescan QR` clears the lock and scans for another code.
+- `Capture & Detect` captures the current camera frame and runs the existing cassette / C-T detection.
+- QR Raw Data is always shown when detected.
+- Structured QR data can parse ITEM / LOT / EXP / PN from JSON or `KEY=VALUE` text.
+- Gallery upload remains available as a fallback.
 
-Example QR data:
+Example QR content:
 `LOT=AS26081501;ITEM=COVID-19;EXP=2027-08-15;PN=ASAP-COV01`
 
-Note: The page loads jsQR 1.4.0 from jsDelivr and OpenCV.js 4.9.0 from the existing OpenCV CDN, so internet access is required unless those libraries are hosted locally.
+Important: live camera access normally requires HTTPS (or localhost during PC development).

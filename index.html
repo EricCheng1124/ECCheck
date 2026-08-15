@@ -24,8 +24,19 @@
       <section class="card">
         <h2>Image Source</h2>
         <div class="row">
-          <label class="fileBtn">Take Photo<input id="cameraInput" type="file" accept="image/*" capture="environment" /></label>
+          <button id="startCameraBtn" class="primaryAction" type="button">Open Camera</button>
           <label class="fileBtn secondary">Choose Photo<input id="galleryInput" type="file" accept="image/*" /></label>
+        </div>
+        <div id="cameraPanel" class="cameraPanel hidden">
+          <div class="cameraViewport">
+            <video id="cameraVideo" autoplay playsinline muted></video>
+            <div class="cameraGuide">Keep the QR code and test cassette in view</div>
+          </div>
+          <div class="cameraControls">
+            <button id="captureBtn" class="primaryAction" type="button">Capture &amp; Detect</button>
+            <button id="closeCameraBtn" class="secondaryBtn" type="button">Close Camera</button>
+          </div>
+          <p id="cameraStatus" class="hint">Camera ready</p>
         </div>
         <div class="metaRow">
           <input id="regionInput" type="text" placeholder="GPS locating..." autocomplete="off" />
@@ -40,7 +51,10 @@
 
       <section class="card qrCard">
         <h2>QR Code Information</h2>
-        <div id="qrStatus" class="qrStatus neutral">No QR code detected yet</div>
+        <div class="qrHeadRow">
+          <div id="qrStatus" class="qrStatus neutral">No QR code detected yet</div>
+          <button id="rescanQrBtn" class="miniBtn" type="button">Rescan QR</button>
+        </div>
         <div id="qrFields" class="qrFields hidden">
           <div class="qrRow"><span>Test Item</span><strong id="qrItem">-</strong></div>
           <div class="qrRow"><span>Lot No.</span><strong id="qrLot">-</strong></div>
@@ -82,6 +96,6 @@
   <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
   <script async src="https://docs.opencv.org/4.9.0/opencv.js" onload="window.__opencvLoaded && window.__opencvLoaded()"></script>
   <script src="detector.js?v=31.20"></script>
-  <script src="app.js?v=31.20-qr1"></script>
+  <script src="app.js?v=31.21-liveqr"></script>
 </body>
 </html>
