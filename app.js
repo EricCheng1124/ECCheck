@@ -663,8 +663,9 @@ function drawMetadataPanel(ctx, x, y, width, height, baseW) {
     ['Date', ts.date], ['Time', ts.time], ['Region', getRegionText()]
   ].filter(r => r[1]);
   const pad = Math.max(8, Math.round(baseW * 0.04));
-  const labelSize = Math.max(9, Math.round(baseW / 24));
-  const valueSize = Math.max(11, Math.round(baseW / 18));
+  // Larger metadata for the phone-sized three-column result view.
+  const labelSize = Math.max(11, Math.round(baseW / 20));
+  const valueSize = Math.max(14, Math.round(baseW / 15));
   let cy = y + pad;
   ctx.save();
   ctx.textBaseline = 'top';
@@ -673,7 +674,7 @@ function drawMetadataPanel(ctx, x, y, width, height, baseW) {
     ctx.font = `700 ${labelSize}px "Segoe UI", sans-serif`;
     ctx.fillStyle = '#94A3B8';
     ctx.fillText(label, x + pad, cy);
-    cy += labelSize * 1.25;
+    cy += labelSize * 1.32;
     ctx.font = `800 ${valueSize}px "Segoe UI", "Noto Sans TC", sans-serif`;
     ctx.fillStyle = label === 'Result' && lastResultText === 'Positive' ? '#FCA5A5' : '#F8FAFC';
     const words = String(value).split(/\s+/);
@@ -684,7 +685,7 @@ function drawMetadataPanel(ctx, x, y, width, height, baseW) {
         ctx.fillText(line, x + pad, cy); cy += valueSize * 1.25; line = word;
       } else line = next;
     }
-    if (line) { ctx.fillText(line, x + pad, cy); cy += valueSize * 1.45; }
+    if (line) { ctx.fillText(line, x + pad, cy); cy += valueSize * 1.52; }
     ctx.strokeStyle = '#1E293B';
     ctx.beginPath(); ctx.moveTo(x + pad, cy - valueSize * .25); ctx.lineTo(x + width - pad, cy - valueSize * .25); ctx.stroke();
   }

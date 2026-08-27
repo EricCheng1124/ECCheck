@@ -1,4 +1,9 @@
-# ASAP Check v31.36 Branded Reader
+# ASAP Check v31.37 Large Result Metadata
+
+## v31.37
+
+- Enlarges labels and values in the right-side result metadata panel by approximately 20-25%.
+- Adds slightly more line spacing while keeping all information inside the right black panel.
 
 ## v31.36
 
