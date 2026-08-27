@@ -53,6 +53,8 @@
   let cameraStream = null;
   let qrScanTimer = null;
   let qrScanCanvas = null;
+  let nativeQrDetector = null;
+  let nativeQrBusy = false;
   let lastResultText = 'Ready';
   const advancedLock = document.getElementById('advancedLock');
   const advancedContent = document.getElementById('advancedContent');
@@ -311,6 +313,68 @@
     }
   }
 
+  function enhanceQrImageData(imageData, thresholdMode) {
+    const src = imageData.data;
+    const out = new ImageData(new Uint8ClampedArray(src), imageData.width, imageData.height);
+    const data = out.data;
+    let sum = 0;
+    for (let i = 0; i < data.length; i += 4) {
+      sum += data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114;
+    }
+    const mean = sum / Math.max(1, data.length / 4);
+    for (let i = 0; i < data.length; i += 4) {
+      let gray = data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114;
+      if (thresholdMode) gray = gray < mean * 0.92 ? 0 : 255;
+      else gray = Math.max(0, Math.min(255, (gray - mean) * 1.65 + 128));
+      data[i] = data[i + 1] = data[i + 2] = gray;
+    }
+    return out;
+  }
+
+  // Dense QR codes are retried at several crops and with enhanced contrast.
+  function decodeQrCanvas(sourceCanvas) {
+    if (!sourceCanvas || !sourceCanvas.width || !sourceCanvas.height) return null;
+    const ctx = sourceCanvas.getContext('2d', { willReadFrequently: true });
+    const W = sourceCanvas.width;
+    const H = sourceCanvas.height;
+    const attempts = [
+      { x: 0, y: 0, w: W, h: H },
+      { x: W * 0.06, y: H * 0.06, w: W * 0.88, h: H * 0.88 }
+    ];
+
+    const square = Math.min(W, H) * 0.82;
+    attempts.push({ x: (W - square) / 2, y: (H - square) / 2, w: square, h: square });
+
+    for (const a of attempts) {
+      const imageData = ctx.getImageData(
+        Math.max(0, Math.round(a.x)), Math.max(0, Math.round(a.y)),
+        Math.max(1, Math.min(W - Math.round(a.x), Math.round(a.w))),
+        Math.max(1, Math.min(H - Math.round(a.y), Math.round(a.h)))
+      );
+      let code = decodeQrImageData(imageData);
+      if (code && code.data) return code;
+      code = decodeQrImageData(enhanceQrImageData(imageData, false));
+      if (code && code.data) return code;
+      code = decodeQrImageData(enhanceQrImageData(imageData, true));
+      if (code && code.data) return code;
+    }
+    return null;
+  }
+
+  async function tryNativeQrDetector() {
+    if (nativeQrBusy || qrLocked || !cameraVideo || typeof window.BarcodeDetector !== 'function') return;
+    nativeQrBusy = true;
+    try {
+      if (!nativeQrDetector) nativeQrDetector = new window.BarcodeDetector({ formats: ['qr_code'] });
+      const codes = await nativeQrDetector.detect(cameraVideo);
+      if (codes && codes[0] && codes[0].rawValue) acceptQrCode(codes[0].rawValue, true);
+    } catch (_) {
+      // Safari versions without BarcodeDetector continue with the jsQR fallback.
+    } finally {
+      nativeQrBusy = false;
+    }
+  }
+
   function acceptQrCode(raw, lockIt) {
     if (!raw) return false;
     updateQrDisplay(parseQrData(raw), true);
@@ -338,8 +402,7 @@
 
     try {
       const ctx = canvas.getContext('2d', { willReadFrequently: true });
-      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-      const code = decodeQrImageData(imageData);
+      const code = decodeQrCanvas(canvas);
       if (code && code.data) return acceptQrCode(code.data, false);
       if (forceClear) updateQrDisplay(emptyQr(), false);
       return false;
@@ -365,20 +428,21 @@
         return;
       }
 
+      if (!qrLocked) tryNativeQrDetector();
+
       if (!qrLocked && typeof window.jsQR === 'function') {
         try {
           const vw = cameraVideo.videoWidth || 0;
           const vh = cameraVideo.videoHeight || 0;
           if (vw > 0 && vh > 0) {
             if (!qrScanCanvas) qrScanCanvas = document.createElement('canvas');
-            const maxW = 720;
+            const maxW = 1100;
             const scale = Math.min(1, maxW / vw);
             qrScanCanvas.width = Math.max(1, Math.round(vw * scale));
             qrScanCanvas.height = Math.max(1, Math.round(vh * scale));
             const qctx = qrScanCanvas.getContext('2d', { willReadFrequently: true });
             qctx.drawImage(cameraVideo, 0, 0, qrScanCanvas.width, qrScanCanvas.height);
-            const imageData = qctx.getImageData(0, 0, qrScanCanvas.width, qrScanCanvas.height);
-            const code = decodeQrImageData(imageData);
+            const code = decodeQrCanvas(qrScanCanvas);
             if (code && code.data) acceptQrCode(code.data, true);
           }
         } catch (ex) {
@@ -386,7 +450,7 @@
         }
       }
 
-      if (cameraStream) qrScanTimer = setTimeout(loop, qrLocked ? 500 : 180);
+      if (cameraStream) qrScanTimer = setTimeout(loop, qrLocked ? 500 : 260);
     };
     loop();
   }

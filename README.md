@@ -26,3 +26,9 @@ Compact mobile reader UI based on detector v31.20.
 - Supports `Name of Test`, `Manufacturer`, `Date of Manufacturer`, `Lot Number`, and `Expired Date of Test`.
 - Slash-formatted dates such as `2027/08/17` are supported for expiry checking.
 - Unknown structured fields are preserved and shown, so all information contained in the QR remains visible.
+
+## v31.25
+- Improves dense QR recognition with native BarcodeDetector when available.
+- Adds full-frame, inset, and center-square jsQR retries.
+- Adds grayscale contrast and threshold retries for difficult camera images.
+- Raises live scan resolution from 720 to 1100 pixels while reducing scan frequency to control CPU use.
