@@ -56,6 +56,7 @@
   let nativeQrDetector = null;
   let nativeQrBusy = false;
   let lastQrGeometry = null;
+  let captureBusy = false;
   let lastResultText = 'Ready';
   const advancedLock = document.getElementById('advancedLock');
   const advancedContent = document.getElementById('advancedContent');
@@ -501,6 +502,8 @@
       return;
     }
 
+    captureBusy = false;
+    if (captureBtn) captureBtn.disabled = false;
     stopCamera();
     showCameraStage();
     if (cameraStatus) cameraStatus.textContent = 'Opening rear camera...';
@@ -535,11 +538,35 @@
     if (!keepStage) showDetectionStage(!!(combinedCanvas && combinedCanvas.width && combinedCanvas.height));
   }
 
-  function captureFromCamera() {
-    if (!cameraVideo || !cameraStream || cameraVideo.readyState < 2) return;
+  async function captureFromCamera() {
+    if (captureBusy || !cameraVideo || !cameraStream) return;
+    captureBusy = true;
+    if (captureBtn) captureBtn.disabled = true;
+    if (cameraStatus) cameraStatus.textContent = 'Preparing image...';
+
+    // On iPhone/Safari the first tap can arrive before videoWidth/videoHeight
+    // are populated even though play() has resolved. Wait for a real frame.
+    const deadline = Date.now() + 2500;
+    while (cameraStream && (cameraVideo.readyState < 2 || !cameraVideo.videoWidth || !cameraVideo.videoHeight) && Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    if (cameraVideo.requestVideoFrameCallback) {
+      await new Promise(resolve => {
+        let done = false;
+        const finish = () => { if (!done) { done = true; resolve(); } };
+        cameraVideo.requestVideoFrameCallback(finish);
+        setTimeout(finish, 350);
+      });
+    }
+
+    if (!cameraStream || cameraVideo.readyState < 2 || !cameraVideo.videoWidth || !cameraVideo.videoHeight) {
+      captureBusy = false;
+      if (captureBtn) captureBtn.disabled = false;
+      if (cameraStatus) cameraStatus.textContent = 'Camera frame not ready. Please tap Capture again.';
+      return;
+    }
     const vw = cameraVideo.videoWidth;
     const vh = cameraVideo.videoHeight;
-    if (!vw || !vh) return;
 
     const shot = document.createElement('canvas');
     shot.width = vw;
@@ -558,11 +585,25 @@
 
     const img = new Image();
     img.onload = function () {
+      captureBusy = false;
+      if (captureBtn) captureBtn.disabled = false;
       lastImage = img;
       stopCamera(true);
       analyze();
     };
-    img.src = shot.toDataURL('image/jpeg', 0.94);
+    img.onerror = function () {
+      captureBusy = false;
+      if (captureBtn) captureBtn.disabled = false;
+      if (cameraStatus) cameraStatus.textContent = 'Capture failed. Please try again.';
+    };
+    try {
+      img.src = shot.toDataURL('image/jpeg', 0.94);
+    } catch (ex) {
+      console.error('Capture conversion failed:', ex);
+      captureBusy = false;
+      if (captureBtn) captureBtn.disabled = false;
+      if (cameraStatus) cameraStatus.textContent = 'Capture failed. Please try again.';
+    }
   }
 
   function getRegionText() {

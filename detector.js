@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v31.32-distinct-ct-refine';
+  const VERSION = 'v31.33-angled-ct-first-capture';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -1443,6 +1443,21 @@
     }
 
     const rawPeaks = findLocalPeaks(positive);
+
+    // Perspective correction can turn a narrow line into a short plateau,
+    // which has no strict local maximum. Recover strong maxima from the
+    // non-overlapping expected C and T zones before peak qualification.
+    const expectedCRange = {start:Math.round(h*0.08), end:Math.round(h*0.48)};
+    const expectedTRange = {start:Math.round(h*0.52), end:Math.round(h*0.84)};
+    const expectedCandidates = [
+      Object.assign(maxInRange(positive, expectedCRange.start, expectedCRange.end), {synthetic:'expected-C'}),
+      Object.assign(maxInRange(positive, expectedTRange.start, expectedTRange.end), {synthetic:'expected-T'})
+    ];
+    for (const q of expectedCandidates) {
+      if (q.score < candidateFloor) continue;
+      if (rawPeaks.some(p=>Math.abs(p.y-q.y)<Math.max(3,Math.round(minSep*0.35)))) continue;
+      rawPeaks.push(q);
+    }
     const allPeaks = rawPeaks.map(p => {
       const q = qualifyPeak(positive, p, threshold, fullRange, h, 'P');
       const quality = calcQuality(q);
@@ -1451,6 +1466,7 @@
       let reject = '';
       if (q.score < threshold) reject = 'below-threshold';
       return Object.assign({}, q, {
+        synthetic: p.synthetic || '',
         quality,
         detected: !reject,
         reject: reject || 'PASS'
@@ -1529,7 +1545,10 @@
       tRefineRange.start = Math.max(tRefineRange.start, splitY + splitGuard);
     }
 
-    const cRed = refinePeakToRedLine(cQ.y, cRefineRange);
+    // C can also become faint/soft after an angled perspective warp. It still
+    // needs peak score and position gates, but uses the same tolerant line
+    // continuity recovery as a faint T.
+    const cRed = refinePeakToRedLine(cQ.y, cRefineRange, 'faintT');
     const tRed = refinePeakToRedLine(tQ.y, tRefineRange, 'faintT');
 
     // refine 後，把實際畫線/Debug 的 y 改成真正連續線段的位置。

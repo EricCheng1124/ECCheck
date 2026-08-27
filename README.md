@@ -74,3 +74,10 @@ Compact mobile reader UI based on detector v31.20.
 - Splits C/T refinement ranges at the midpoint between their original peaks.
 - Requires the refined C and T positions to remain separately ordered.
 - Moves marker dots and guide lines outside the physical test window so the original C/T lines remain visible.
+
+## v31.33
+- Recovers strong C/T candidates when angled perspective correction produces a plateau without a strict local maximum.
+- Adds non-overlapping expected C and T candidate zones before final continuity and shape gates.
+- Allows tolerant continuity recovery for a blurred/faint C while retaining score and position requirements.
+- Waits for a real video frame before first capture on iPhone/Safari and automatically retries readiness for up to 2.5 seconds.
+- Prevents double capture and reports a retry message instead of silently doing nothing.
