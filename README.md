@@ -32,3 +32,11 @@ Compact mobile reader UI based on detector v31.20.
 - Adds full-frame, inset, and center-square jsQR retries.
 - Adds grayscale contrast and threshold retries for difficult camera images.
 - Raises live scan resolution from 720 to 1100 pixels while reducing scan frequency to control CPU use.
+
+## v31.26
+- QR position is the mandatory orientation reference; the cassette end nearest the QR becomes the top.
+- The captured still image is rescanned so stale live-preview QR coordinates are never reused.
+- Missing QR returns `Invalid - QR not detected`; S/R well orientation fallback is disabled.
+- Supports compact QR keys N/M/D/L/E and displays their full field names.
+- Combined result canvas uses three columns: original photo on the left black panel, corrected cassette in the center, and QR/result metadata on the right black panel.
+- Original photo and metadata no longer overlap the cassette.

@@ -55,6 +55,7 @@
   let qrScanCanvas = null;
   let nativeQrDetector = null;
   let nativeQrBusy = false;
+  let lastQrGeometry = null;
   let lastResultText = 'Ready';
   const advancedLock = document.getElementById('advancedLock');
   const advancedContent = document.getElementById('advancedContent');
@@ -172,20 +173,24 @@
       return '';
     };
 
-    const exp = pick('EXP', 'EXPIRY', 'EXPIRYDATE', 'EXPIRY_DATE', 'EXPIRE', 'EXPIREDDATE', 'EXPIREDDATEOFTEST', 'EXPIRATIONDATE', 'VALIDUNTIL', 'VALID_UNTIL');
+    const exp = pick('E', 'EXP', 'EXPIRY', 'EXPIRYDATE', 'EXPIRY_DATE', 'EXPIRE', 'EXPIREDDATE', 'EXPIREDDATEOFTEST', 'EXPIRATIONDATE', 'VALIDUNTIL', 'VALID_UNTIL');
+    const displayDate = value => /^\d{8}$/.test(value || '')
+      ? `${value.slice(0,4)}/${value.slice(4,6)}/${value.slice(6,8)}`
+      : value;
     let expired = false;
-    if (exp && /^\d{4}[-/]\d{2}[-/]\d{2}$/.test(exp)) {
-      const end = new Date(exp.replace(/\//g, '-') + 'T23:59:59');
+    const expiryForCheck = displayDate(exp);
+    if (expiryForCheck && /^\d{4}[-/]\d{2}[-/]\d{2}$/.test(expiryForCheck)) {
+      const end = new Date(expiryForCheck.replace(/\//g, '-') + 'T23:59:59');
       expired = !Number.isNaN(end.getTime()) && end.getTime() < Date.now();
     }
 
     return {
       raw: text,
-      item: pick('ITEM', 'TEST', 'TESTITEM', 'TEST_ITEM', 'ASSAY', 'NAMEOFTEST', 'TESTNAME'),
-      manufacturer: pick('MANUFACTURER', 'MANUFACTURE', 'MFR', 'MAKER'),
-      mfgDate: pick('DATEOFMANUFACTURER', 'DATEOFMANUFACTURE', 'MANUFACTUREDATE', 'MANUFACTURINGDATE', 'MFGDATE'),
-      lot: pick('LOT', 'LOTNO', 'LOT_NO', 'LOTNUMBER', 'BATCH', 'BATCHNO', 'BATCH_NO'),
-      exp,
+      item: pick('N', 'ITEM', 'TEST', 'TESTITEM', 'TEST_ITEM', 'ASSAY', 'NAMEOFTEST', 'TESTNAME'),
+      manufacturer: pick('M', 'MANUFACTURER', 'MANUFACTURE', 'MFR', 'MAKER'),
+      mfgDate: displayDate(pick('D', 'DATEOFMANUFACTURER', 'DATEOFMANUFACTURE', 'MANUFACTUREDATE', 'MANUFACTURINGDATE', 'MFGDATE')),
+      lot: pick('L', 'LOT', 'LOTNO', 'LOT_NO', 'LOTNUMBER', 'BATCH', 'BATCHNO', 'BATCH_NO'),
+      exp: displayDate(exp),
       pn: pick('PN', 'PRODUCT', 'PRODUCTNO', 'PRODUCT_NO', 'MODEL', 'SKU'),
       fields,
       expired
@@ -203,7 +208,13 @@
       return;
     }
 
-    const displayFields = lastQr.fields && lastQr.fields.length ? lastQr.fields : [
+    const knownLabels = { N:'Name of Test', M:'Manufacturer', D:'Date of Manufacturer', L:'Lot Number', E:'Expired Date of the Test' };
+    const displayFields = lastQr.fields && lastQr.fields.length ? lastQr.fields.map(f => ({
+      label: knownLabels[f.key] || f.label,
+      value: (f.key === 'D' || f.key === 'E') && /^\d{8}$/.test(f.value)
+        ? `${f.value.slice(0,4)}/${f.value.slice(4,6)}/${f.value.slice(6,8)}`
+        : f.value
+    })) : [
       { label: 'Name of Test', value: lastQr.item },
       { label: 'Manufacturer', value: lastQr.manufacturer },
       { label: 'Date of Manufacture', value: lastQr.mfgDate },
@@ -352,13 +363,39 @@
         Math.max(1, Math.min(H - Math.round(a.y), Math.round(a.h)))
       );
       let code = decodeQrImageData(imageData);
-      if (code && code.data) return code;
+      if (code && code.data) { code.__offsetX = a.x; code.__offsetY = a.y; return code; }
       code = decodeQrImageData(enhanceQrImageData(imageData, false));
-      if (code && code.data) return code;
+      if (code && code.data) { code.__offsetX = a.x; code.__offsetY = a.y; return code; }
       code = decodeQrImageData(enhanceQrImageData(imageData, true));
-      if (code && code.data) return code;
+      if (code && code.data) { code.__offsetX = a.x; code.__offsetY = a.y; return code; }
     }
     return null;
+  }
+
+  function qrGeometryFromJsQr(code) {
+    if (!code || !code.location) return null;
+    const keys = ['topLeftCorner', 'topRightCorner', 'bottomRightCorner', 'bottomLeftCorner'];
+    const ox = Number(code.__offsetX || 0);
+    const oy = Number(code.__offsetY || 0);
+    const points = keys.map(k => code.location[k]).filter(Boolean).map(p => ({ x: p.x + ox, y: p.y + oy }));
+    if (!points.length) return null;
+    return {
+      points,
+      center: {
+        x: points.reduce((s, p) => s + p.x, 0) / points.length,
+        y: points.reduce((s, p) => s + p.y, 0) / points.length
+      }
+    };
+  }
+
+  function qrGeometryFromNative(code) {
+    if (!code) return null;
+    const points = Array.from(code.cornerPoints || []).map(p => ({ x: p.x, y: p.y }));
+    if (points.length) {
+      return { points, center: { x: points.reduce((s,p)=>s+p.x,0)/points.length, y: points.reduce((s,p)=>s+p.y,0)/points.length } };
+    }
+    const b = code.boundingBox;
+    return b ? { points: [], center: { x: b.x + b.width/2, y: b.y + b.height/2 } } : null;
   }
 
   async function tryNativeQrDetector() {
@@ -367,7 +404,7 @@
     try {
       if (!nativeQrDetector) nativeQrDetector = new window.BarcodeDetector({ formats: ['qr_code'] });
       const codes = await nativeQrDetector.detect(cameraVideo);
-      if (codes && codes[0] && codes[0].rawValue) acceptQrCode(codes[0].rawValue, true);
+      if (codes && codes[0] && codes[0].rawValue) acceptQrCode(codes[0].rawValue, true, qrGeometryFromNative(codes[0]));
     } catch (_) {
       // Safari versions without BarcodeDetector continue with the jsQR fallback.
     } finally {
@@ -375,9 +412,10 @@
     }
   }
 
-  function acceptQrCode(raw, lockIt) {
+  function acceptQrCode(raw, lockIt, geometry) {
     if (!raw) return false;
     updateQrDisplay(parseQrData(raw), true);
+    if (geometry && geometry.center) lastQrGeometry = geometry;
     if (lockIt) qrLocked = true;
     if (cameraStatus) cameraStatus.textContent = qrLocked ? 'QR detected and locked. You can capture the test now.' : 'QR detected';
     return true;
@@ -385,13 +423,14 @@
 
   function clearQrData() {
     qrLocked = false;
+    lastQrGeometry = null;
     updateQrDisplay(emptyQr(), false);
     if (cameraStatus && cameraStream) cameraStatus.textContent = 'Scanning QR code...';
   }
 
-  function scanQrFromCanvas(forceClear) {
+  function scanQrFromCanvas(forceClear, forceRescan) {
     if (!canvas || !canvas.width || !canvas.height) return false;
-    if (qrLocked) return true;
+    if (qrLocked && !forceRescan) return true;
     if (typeof window.jsQR !== 'function') {
       if (qrStatus) {
         qrStatus.className = 'qrStatus neutral';
@@ -403,7 +442,7 @@
     try {
       const ctx = canvas.getContext('2d', { willReadFrequently: true });
       const code = decodeQrCanvas(canvas);
-      if (code && code.data) return acceptQrCode(code.data, false);
+      if (code && code.data) return acceptQrCode(code.data, false, qrGeometryFromJsQr(code));
       if (forceClear) updateQrDisplay(emptyQr(), false);
       return false;
     } catch (ex) {
@@ -443,7 +482,7 @@
             const qctx = qrScanCanvas.getContext('2d', { willReadFrequently: true });
             qctx.drawImage(cameraVideo, 0, 0, qrScanCanvas.width, qrScanCanvas.height);
             const code = decodeQrCanvas(qrScanCanvas);
-            if (code && code.data) acceptQrCode(code.data, true);
+            if (code && code.data) acceptQrCode(code.data, true, qrGeometryFromJsQr(code));
           }
         } catch (ex) {
           console.error('Live QR scan failed:', ex);
@@ -539,195 +578,92 @@
     return { date, time };
   }
 
-function drawMetadataOverlay(ctx, W, H) {
+function drawMetadataPanel(ctx, x, y, width, height, baseW) {
   const ts = getTimestampParts();
-
-  const lines = [
-    `Result : ${lastResultText || 'Invalid'}`,
-    ...(lastQr.item ? [`Test   : ${lastQr.item}`] : []),
-    ...(lastQr.manufacturer ? [`Maker  : ${lastQr.manufacturer}`] : []),
-    ...(lastQr.mfgDate ? [`MFG    : ${lastQr.mfgDate}`] : []),
-    ...(lastQr.lot ? [`LOT    : ${lastQr.lot}`] : []),
-    ...(lastQr.exp ? [`EXP    : ${lastQr.exp}${lastQr.expired ? ' (EXPIRED)' : ''}`] : []),
-    ...(lastQr.pn ? [`PN     : ${lastQr.pn}`] : []),
-    `Date   : ${ts.date}`,
-    `Time   : ${ts.time}`,
-    `Region : ${getRegionText()}`
-  ];
-
-  const fontSize = Math.max(18, Math.round(W / 15));
-  const pad = Math.max(12, Math.round(W * 0.035));
-
+  const rows = [
+    ['Result', lastResultText || 'Invalid'],
+    ['Name of Test', lastQr.item],
+    ['Manufacturer', lastQr.manufacturer],
+    ['Date of Manufacturer', lastQr.mfgDate],
+    ['Lot Number', lastQr.lot],
+    ['Expired Date', `${lastQr.exp || ''}${lastQr.expired ? ' (EXPIRED)' : ''}`],
+    ['Date', ts.date], ['Time', ts.time], ['Region', getRegionText()]
+  ].filter(r => r[1]);
+  const pad = Math.max(8, Math.round(baseW * 0.04));
+  const labelSize = Math.max(9, Math.round(baseW / 24));
+  const valueSize = Math.max(11, Math.round(baseW / 18));
+  let cy = y + pad;
   ctx.save();
-  ctx.font = `800 ${fontSize}px "Segoe UI", "Noto Sans TC", sans-serif`;
-
-  const textW = Math.max(...lines.map(t => ctx.measureText(t).width));
-  const lineH = Math.round(fontSize * 1.45);
-
-  const boxW = Math.min(W * 0.68, textW + pad * 2);
-  const boxH = lineH * lines.length + pad * 1.7;
-
-  const x = Math.max(pad, Math.round(W - boxW - pad));
-  const y = Math.max(pad, Math.round(H - boxH - pad));
-
-  const radius = Math.max(10, Math.round(W * 0.035));
-
-  // shadow
-  ctx.shadowColor = 'rgba(15, 23, 42, 0.35)';
-  ctx.shadowBlur = 18;
-  ctx.shadowOffsetX = 0;
-  ctx.shadowOffsetY = 8;
-
-  // background
-  const grad = ctx.createLinearGradient(x, y, x + boxW, y + boxH);
-  grad.addColorStop(0, 'rgba(15, 23, 42, 0.96)');
-  grad.addColorStop(0.55, 'rgba(30, 64, 175, 0.94)');
-  grad.addColorStop(1, 'rgba(14, 165, 233, 0.90)');
-
-  ctx.fillStyle = grad;
-  ctx.beginPath();
-  ctx.moveTo(x + radius, y);
-  ctx.lineTo(x + boxW - radius, y);
-  ctx.quadraticCurveTo(x + boxW, y, x + boxW, y + radius);
-  ctx.lineTo(x + boxW, y + boxH - radius);
-  ctx.quadraticCurveTo(x + boxW, y + boxH, x + boxW - radius, y + boxH);
-  ctx.lineTo(x + radius, y + boxH);
-  ctx.quadraticCurveTo(x, y + boxH, x, y + boxH - radius);
-  ctx.lineTo(x, y + radius);
-  ctx.quadraticCurveTo(x, y, x + radius, y);
-  ctx.closePath();
-  ctx.fill();
-
-  ctx.shadowColor = 'transparent';
-
-  // border
-  ctx.strokeStyle = 'rgba(125, 211, 252, 0.95)';
-  ctx.lineWidth = Math.max(2, Math.round(W / 180));
-  ctx.stroke();
-
-  // left accent line
-  ctx.fillStyle = '#38BDF8';
-  ctx.fillRect(x + pad * 0.55, y + pad * 0.7, Math.max(3, W / 90), boxH - pad * 1.4);
-
-  // text
-  for (let i = 0; i < lines.length; i++) {
-    if (i === 0) {
-      const isPositive = String(lastResultText).toLowerCase() === 'positive';
-      const isNegative = String(lastResultText).toLowerCase() === 'negative';
-
-      ctx.fillStyle = isPositive
-        ? '#FEE2E2'
-        : isNegative
-          ? '#DCFCE7'
-          : '#F8FAFC';
-    } else {
-      ctx.fillStyle = '#E0F2FE';
+  ctx.textBaseline = 'top';
+  for (const [label, value] of rows) {
+    if (cy > y + height - valueSize * 2) break;
+    ctx.font = `700 ${labelSize}px "Segoe UI", sans-serif`;
+    ctx.fillStyle = '#94A3B8';
+    ctx.fillText(label, x + pad, cy);
+    cy += labelSize * 1.25;
+    ctx.font = `800 ${valueSize}px "Segoe UI", "Noto Sans TC", sans-serif`;
+    ctx.fillStyle = label === 'Result' && lastResultText === 'Positive' ? '#FCA5A5' : '#F8FAFC';
+    const words = String(value).split(/\s+/);
+    let line = '';
+    for (const word of words) {
+      const next = line ? `${line} ${word}` : word;
+      if (ctx.measureText(next).width > width - pad * 2 && line) {
+        ctx.fillText(line, x + pad, cy); cy += valueSize * 1.25; line = word;
+      } else line = next;
     }
-
-    ctx.fillText(
-      lines[i],
-      x + pad * 1.15,
-      y + pad + fontSize + i * lineH
-    );
+    if (line) { ctx.fillText(line, x + pad, cy); cy += valueSize * 1.45; }
+    ctx.strokeStyle = '#1E293B';
+    ctx.beginPath(); ctx.moveTo(x + pad, cy - valueSize * .25); ctx.lineTo(x + width - pad, cy - valueSize * .25); ctx.stroke();
   }
-
   ctx.restore();
 }
 
 function renderCombinedDetectionView() {
   if (!combinedCanvas || !cropCanvas || !canvas || !cropCanvas.width || !cropCanvas.height) return;
-
-  const W = cropCanvas.width;
-  const H = cropCanvas.height;
-
-  combinedCanvas.width = W;
+  const W = cropCanvas.width, H = cropCanvas.height;
+  const sideW = Math.max(150, Math.round(W * 0.92));
+  const totalW = W + sideW * 2;
+  combinedCanvas.width = totalW;
   combinedCanvas.height = H;
-
   const ctx = combinedCanvas.getContext('2d');
-  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = '#0F172A';
+  ctx.fillRect(0, 0, totalW, H);
 
-  // main detection image
-  ctx.drawImage(cropCanvas, 0, 0, W, H);
+  // Center: corrected cassette only. Nothing is drawn over it.
+  ctx.drawImage(cropCanvas, sideW, 0, W, H);
+  ctx.strokeStyle = '#334155';
+  ctx.strokeRect(sideW, 0, W, H);
 
-  // original image thumbnail, bigger and placed on upper-left
+  // Left black panel: original photo.
   if (canvas.width && canvas.height) {
-    const thumbW = Math.max(120, Math.round(W * 0.42));
-    const thumbH = Math.round(canvas.height * thumbW / Math.max(1, canvas.width));
-
-    const pad = Math.max(8, Math.round(W * 0.035));
-    const x = pad;
+    const pad = Math.max(8, Math.round(W * 0.04));
+    const maxW = sideW - pad * 2;
+    const maxH = H - pad * 4 - Math.max(12, W / 18);
+    const scale = Math.min(maxW / canvas.width, maxH / canvas.height);
+    const thumbW = Math.max(1, Math.round(canvas.width * scale));
+    const thumbH = Math.max(1, Math.round(canvas.height * scale));
+    const x = Math.round((sideW - thumbW) / 2);
     const y = pad;
-
-    const boxPad = Math.max(6, Math.round(W * 0.018));
-    const radius = Math.max(8, Math.round(W * 0.03));
-
-    ctx.save();
-
-    // shadow
-    ctx.shadowColor = 'rgba(15, 23, 42, 0.30)';
-    ctx.shadowBlur = 16;
-    ctx.shadowOffsetX = 0;
-    ctx.shadowOffsetY = 6;
-
-    // glass card
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.92)';
-    ctx.beginPath();
-    ctx.moveTo(x - boxPad + radius, y - boxPad);
-    ctx.lineTo(x - boxPad + thumbW + boxPad * 2 - radius, y - boxPad);
-    ctx.quadraticCurveTo(
-      x - boxPad + thumbW + boxPad * 2,
-      y - boxPad,
-      x - boxPad + thumbW + boxPad * 2,
-      y - boxPad + radius
-    );
-    ctx.lineTo(
-      x - boxPad + thumbW + boxPad * 2,
-      y - boxPad + thumbH + boxPad * 2 - radius
-    );
-    ctx.quadraticCurveTo(
-      x - boxPad + thumbW + boxPad * 2,
-      y - boxPad + thumbH + boxPad * 2,
-      x - boxPad + thumbW + boxPad * 2 - radius,
-      y - boxPad + thumbH + boxPad * 2
-    );
-    ctx.lineTo(x - boxPad + radius, y - boxPad + thumbH + boxPad * 2);
-    ctx.quadraticCurveTo(
-      x - boxPad,
-      y - boxPad + thumbH + boxPad * 2,
-      x - boxPad,
-      y - boxPad + thumbH + boxPad * 2 - radius
-    );
-    ctx.lineTo(x - boxPad, y - boxPad + radius);
-    ctx.quadraticCurveTo(x - boxPad, y - boxPad, x - boxPad + radius, y - boxPad);
-    ctx.closePath();
-    ctx.fill();
-
-    ctx.shadowColor = 'transparent';
-
-    // blue medical-tech border
-    ctx.strokeStyle = '#38BDF8';
-    ctx.lineWidth = Math.max(2, Math.round(W / 160));
-    ctx.stroke();
-
     ctx.drawImage(canvas, x, y, thumbW, thumbH);
-
-    // small label
-    const labelFont = Math.max(10, Math.round(W / 30));
-    ctx.font = `800 ${labelFont}px "Segoe UI", sans-serif`;
-    ctx.fillStyle = '#0F172A';
-    ctx.fillText('Original Image', x, y + thumbH + labelFont + boxPad);
-
-    ctx.restore();
+    ctx.strokeStyle = '#38BDF8'; ctx.lineWidth = 2; ctx.strokeRect(x, y, thumbW, thumbH);
+    ctx.font = `800 ${Math.max(10, Math.round(W/22))}px "Segoe UI", sans-serif`;
+    ctx.fillStyle = '#E2E8F0'; ctx.textAlign = 'center';
+    ctx.fillText('Original Image', sideW/2, Math.min(H-pad, y+thumbH+Math.max(15,W/15)));
+    ctx.textAlign = 'left';
   }
 
-  drawMetadataOverlay(ctx, W, H);
+  // Right black panel: QR and result metadata.
+  drawMetadataPanel(ctx, sideW + W, 0, sideW, H, W);
 }
   function updateTexts() {
     // Settings UI removed.
   }
 
   function getOptions() {
-    return DEFAULT_OPTIONS;
+    return Object.assign({}, DEFAULT_OPTIONS, {
+      qrRequired: true,
+      qrCenter: lastQrGeometry && lastQrGeometry.center ? lastQrGeometry.center : null
+    });
   }
 
   function resizeAndDrawImage(img) {
@@ -990,7 +926,20 @@ function renderCombinedDetectionView() {
   function analyze() {
     if (!lastImage) { clearRoiOnlyView(); return; }
     resizeAndDrawImage(lastImage);
-    scanQrFromCanvas(!qrLocked);
+    // Always locate the QR again on the captured still image. Live-preview
+    // coordinates are not reused because the phone may move before capture.
+    lastQrGeometry = null;
+    const qrFoundOnCapture = scanQrFromCanvas(false, true);
+    if (!qrFoundOnCapture || !lastQrGeometry || !lastQrGeometry.center) {
+      lastResultText = 'Invalid';
+      resultEl.className = 'result invalid';
+      resultEl.textContent = 'Invalid';
+      if (resultSub) resultSub.textContent = 'QR not detected';
+      detailEl.innerHTML = 'Failure reason: QR not detected on captured image.';
+      if (debugText) debugText.innerHTML = 'Orientation gate: FAIL<br>Reason: QR not detected';
+      showDetectionStage(false);
+      return;
+    }
     if (!cvReady) {
       resultEl.className = 'result neutral';
       lastResultText = 'Invalid';

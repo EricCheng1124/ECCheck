@@ -102,6 +102,19 @@
     src.delete(); srcTri.delete(); dstTri.delete(); M.delete(); dst.delete();
   }
 
+  function orientPointsWithQr(pts, qrCenter) {
+    const p = orderPoints(pts);
+    if (!qrCenter) return { points:p, applied:false, rotated180:false };
+    const top = { x:(p[0].x+p[1].x)/2, y:(p[0].y+p[1].y)/2 };
+    const bottom = { x:(p[2].x+p[3].x)/2, y:(p[2].y+p[3].y)/2 };
+    const rotate180 = dist(qrCenter, bottom) < dist(qrCenter, top);
+    return {
+      points: rotate180 ? [p[2],p[3],p[0],p[1]] : p,
+      applied:true,
+      rotated180:rotate180
+    };
+  }
+
   function makeNormalizedGray(src) {
     const gray = new cv.Mat(); cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
     const bg = new cv.Mat(); cv.GaussianBlur(gray, bg, new cv.Size(0,0), 31,31, cv.BORDER_DEFAULT);
@@ -1687,13 +1700,19 @@
     if (f.window && f.ctAnalysis) drawCTWaveform(ctx, W, H, f.window, f.ctAnalysis);
   }
 
-  function findInternalFeaturesOnCrop(cropCanvas, draw) {
+  function findInternalFeaturesOnCrop(cropCanvas, draw, forceQrTop) {
     const src = cv.imread(cropCanvas);
     const W = src.cols;
     const H = src.rows;
     const ctx = cropCanvas.getContext('2d');
 
     const directionAnalysis = analyzeThirdDirection(cropCanvas, W, H);
+    if (forceQrTop) {
+      directionAnalysis.rotate180 = false;
+      directionAnalysis.direction = 'qr-top';
+      directionAnalysis.chosenBox = directionAnalysis.bottom.box;
+      directionAnalysis.chosenScore = directionAnalysis.bottom;
+    }
     const chosen = makeFixedInternalByDirection(cropCanvas, W, H, directionAnalysis);
 
     const win = chosen.window || fallbackWindowFromGeometry(W, H, chosen.name);
@@ -1744,19 +1763,20 @@
     return out;
   }
 
-  function detectInternalFeatures(cropCanvas) {
-    let f = findInternalFeaturesOnCrop(cropCanvas,false);
+  function detectInternalFeatures(cropCanvas, forceQrTop) {
+    let f = findInternalFeaturesOnCrop(cropCanvas,false,forceQrTop);
     let orientationCorrected = false;
 
-    if (f.needsRotation180) {
+    if (!forceQrTop && f.needsRotation180) {
       rotateCanvas180(cropCanvas);
       orientationCorrected = true;
-      f = findInternalFeaturesOnCrop(cropCanvas,false);
+      f = findInternalFeaturesOnCrop(cropCanvas,false,false);
     }
 
-    const finalF = findInternalFeaturesOnCrop(cropCanvas,true);
+    const finalF = findInternalFeaturesOnCrop(cropCanvas,true,forceQrTop);
     finalF.orientationCorrected = orientationCorrected;
-    finalF.orientation = finalF.chosenTemplate === 'normal' ? 'window-above-sample' : 'sample-above-window';
+    finalF.orientation = forceQrTop ? 'qr-top-window-below' : (finalF.chosenTemplate === 'normal' ? 'window-above-sample' : 'sample-above-window');
+    finalF.orientationSource = forceQrTop ? 'qr-position' : 'sample-zone';
     finalF.directionBeforeRotation = f.directionAnalysis ? f.directionAnalysis.direction : '-';
     return finalF;
   }
@@ -2144,7 +2164,12 @@ function candidateFeatureScore(srcCanvas, cand)
     let result;
     if(best){
       let features=null;
-      try{ warpCropToCanvas(canvas,cropCanvas,best.pts); features=detectInternalFeatures(cropCanvas); } catch(e){ console.error(e); }
+      const qrOrientation = orientPointsWithQr(best.pts, options.qrCenter || null);
+      try{
+        warpCropToCanvas(canvas,cropCanvas,qrOrientation.points);
+        features=detectInternalFeatures(cropCanvas,qrOrientation.applied);
+        if (features) features.qrOrientation = qrOrientation;
+      } catch(e){ console.error(e); }
 
       // v29.1 final gate 修正：
       // v29.0 會把「已找到正確外框 + red-line-window」的候選誤殺，
