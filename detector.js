@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v31.31-qr-corner-orientation';
+  const VERSION = 'v31.32-distinct-ct-refine';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -1516,8 +1516,21 @@
     // T 線：改成相對 C 線門檻，避免淡 T 被全域 threshold 誤殺。
     const cSelected = selected.includes(cQ);
     const tSelected = selected.includes(tQ);
-    const cRed = refinePeakToRedLine(cQ.y, cFallbackRange);
-    const tRed = refinePeakToRedLine(tQ.y, tFallbackRange, 'faintT');
+    let cRefineRange = Object.assign({}, cFallbackRange);
+    let tRefineRange = Object.assign({}, tFallbackRange);
+
+    // Two selected peaks must remain two separate lines during refinement.
+    // The previous overlapping ranges could pull both C and T onto the same
+    // stronger row. Split their search areas at the midpoint of the raw peaks.
+    if (cSelected && tSelected && tQ.y > cQ.y) {
+      const splitY = Math.round((cQ.y + tQ.y) / 2);
+      const splitGuard = Math.max(1, Math.round(minSep * 0.12));
+      cRefineRange.end = Math.min(cRefineRange.end, splitY - splitGuard);
+      tRefineRange.start = Math.max(tRefineRange.start, splitY + splitGuard);
+    }
+
+    const cRed = refinePeakToRedLine(cQ.y, cRefineRange);
+    const tRed = refinePeakToRedLine(tQ.y, tRefineRange, 'faintT');
 
     // refine 後，把實際畫線/Debug 的 y 改成真正連續線段的位置。
     // score 保留原 peak score，因為它代表波峰強度；y 則改成紅線中心。
@@ -1561,6 +1574,11 @@
     );
 
     const tShapeOk = tWeakShapeOk || tStrongShapeOk;
+    const refinedSeparationOk = !!(
+      cRed && tRed &&
+      tRed.absY > cRed.absY &&
+      (tRed.absY - cRed.absY) >= Math.max(3, minSep * 0.45)
+    );
 
     // 最下緣常是試紙/塑膠槽的水平邊界。即使有明暗峰，也不能當 T。
     const edgeGuard = Math.max(4, Math.round(h * 0.08));
@@ -1572,6 +1590,7 @@
       cDetected &&
       tQ.score >= tThreshold &&
       tRed.ok &&
+      refinedSeparationOk &&
       tAwayFromBottomEdge &&
       tShapeOk
     );
@@ -1587,6 +1606,7 @@
     if (!tSelected) tQ.reject = 'not-selected';
     else if (tQ.score < tThreshold) tQ.reject = 'below-relative-threshold';
     else if (!tRed.ok) tQ.reject = 'no-red-continuity';
+    else if (!refinedSeparationOk) tQ.reject = 'ct-refined-to-same-line';
     else if (!tAwayFromBottomEdge) tQ.reject = 'too-close-to-window-bottom-edge';
     else if (!tShapeOk) tQ.reject = 'bad-t-shape-platform';
     else tQ.reject = 'PASS';
@@ -1601,8 +1621,8 @@
     else if (cDetected && !tDetected) result = 'Negative';
     else result = 'Invalid';
 
-    const cRange = {start:cFallbackRange.start, end:cFallbackRange.end};
-    const tRange = {start:tFallbackRange.start, end:tFallbackRange.end};
+    const cRange = {start:cRefineRange.start, end:cRefineRange.end};
+    const tRange = {start:tRefineRange.start, end:tRefineRange.end};
 
     const peakDebug = allPeaks.slice(0, 8).map(p =>
       `y=${(y0+p.y).toFixed(0)}, score=${p.score.toFixed(1)}, q=${p.quality.toFixed(1)}, selected=${p.selected ? 'YES' : 'NO'}, w=${p.width}, shoulder=${p.shoulderRatio.toFixed(2)}, near=${p.nearShoulderRatio.toFixed(2)}, reject=${p.reject}, warning=${p.warning || '-'}`
@@ -1667,16 +1687,20 @@
     // C/T peak horizontal guides
     function drawPeak(p, label, color) {
       const markerY = clamp(Math.round(p.absY), 2, H - 3);
-      const markerX = clamp(Math.round(win.x + win.w * 0.50), 2, W - 3);
+      const markerX = clamp(Math.round(axisX), 2, W - 3);
       ctx.strokeStyle = color;
       ctx.fillStyle = color;
       ctx.lineWidth = Math.max(3, W/82);
+      // Keep the original C/T pixels unobstructed: draw guides only outside
+      // the physical test window.
       ctx.beginPath();
       ctx.moveTo(Math.max(2, win.x - W * 0.08), markerY);
+      ctx.lineTo(Math.max(2, win.x - 2), markerY);
+      ctx.moveTo(Math.min(W-2, win.x + win.w + 2), markerY);
       ctx.lineTo(axisX + waveW, markerY);
       ctx.stroke();
 
-      // Filled point directly on the actual test strip peak.
+      // Marker point sits on the waveform axis, not over the real C/T line.
       ctx.beginPath();
       ctx.arc(markerX, markerY, Math.max(5, W/32), 0, Math.PI * 2);
       ctx.fill();

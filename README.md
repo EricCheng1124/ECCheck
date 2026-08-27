@@ -68,3 +68,9 @@ Compact mobile reader UI based on detector v31.20.
 - Finds the cassette's two short-end edge pairs directly from its four corners.
 - Uses the short end nearest the QR as the top and preserves that order through perspective correction.
 - Corrects horizontal, upside-down, and angled cassette photos to QR-on-top output.
+
+## v31.32
+- Prevents C and T refinement from collapsing two raw peaks onto the same stronger row.
+- Splits C/T refinement ranges at the midpoint between their original peaks.
+- Requires the refined C and T positions to remain separately ordered.
+- Moves marker dots and guide lines outside the physical test window so the original C/T lines remain visible.
