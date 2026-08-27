@@ -51,3 +51,8 @@ Compact mobile reader UI based on detector v31.20.
 - Hides the separate Ready/Result card because the result is already shown in the three-column image.
 - Hides Rescan QR and QR detected/not detected status from the main UI.
 - Keeps Open Camera, Choose Photo, the result image, and Advanced Info for a simpler workflow.
+
+## v31.29
+- Fixes the hidden detection panel being shown underneath the live camera due to a CSS display override.
+- Live camera mode now shows only the camera preview; the three-column result appears only after capture.
+- Enlarges the live camera preview to use the freed vertical space.
