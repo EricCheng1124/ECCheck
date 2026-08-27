@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v31.30-visible-ct-markers';
+  const VERSION = 'v31.31-qr-corner-orientation';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -82,8 +82,10 @@
     const ctx = canvas.getContext('2d'); ctx.clearRect(0,0,canvas.width,canvas.height); ctx.drawImage(tmp,0,0);
   }
 
-  function warpCropToCanvas(srcCanvas, cropCanvas, pts) {
-    const ordered = orderPoints(pts);
+  function warpCropToCanvas(srcCanvas, cropCanvas, pts, preserveOrder) {
+    // QR orientation already supplies TL,TR,BR,BL. Do not reorder those
+    // points by the photo's screen coordinates or rotation will be lost.
+    const ordered = preserveOrder ? pts.slice() : orderPoints(pts);
     const topW = dist(ordered[0], ordered[1]);
     const bottomW = dist(ordered[3], ordered[2]);
     const leftH = dist(ordered[0], ordered[3]);
@@ -103,15 +105,40 @@
   }
 
   function orientPointsWithQr(pts, qrCenter) {
-    const p = orderPoints(pts);
-    if (!qrCenter) return { points:p, applied:false, rotated180:false };
-    const top = { x:(p[0].x+p[1].x)/2, y:(p[0].y+p[1].y)/2 };
-    const bottom = { x:(p[2].x+p[3].x)/2, y:(p[2].y+p[3].y)/2 };
-    const rotate180 = dist(qrCenter, bottom) < dist(qrCenter, top);
+    const p = pts.slice();
+    if (!qrCenter || p.length !== 4) return { points:orderPoints(p), applied:false, rotated180:false };
+
+    // The two shortest disjoint corner pairs are the cassette's short ends.
+    // The end nearest the QR is always the physical top of the cassette.
+    const pairs = [];
+    for (let i=0;i<4;i++) for (let j=i+1;j<4;j++) pairs.push({i,j,d:dist(p[i],p[j])});
+    pairs.sort((a,b)=>a.d-b.d);
+    const endA = pairs[0];
+    const endB = pairs.find(q => q.i!==endA.i && q.i!==endA.j && q.j!==endA.i && q.j!==endA.j);
+    if (!endB) return { points:orderPoints(p), applied:false, rotated180:false };
+
+    const centerOf = pair => ({x:(p[pair.i].x+p[pair.j].x)/2, y:(p[pair.i].y+p[pair.j].y)/2});
+    const centerA = centerOf(endA), centerB = centerOf(endB);
+    const topPair = dist(qrCenter,centerA) <= dist(qrCenter,centerB) ? endA : endB;
+    const bottomPair = topPair === endA ? endB : endA;
+    const topCenter = centerOf(topPair), bottomCenter = centerOf(bottomPair);
+
+    // Device axis points from QR/top toward the sample-well/bottom.
+    const vx = bottomCenter.x-topCenter.x, vy = bottomCenter.y-topCenter.y;
+    const right = {x:vy, y:-vx};
+    const projection = point => point.x*right.x + point.y*right.y;
+    const sortLeftRight = pair => [p[pair.i],p[pair.j]].sort((a,b)=>projection(a)-projection(b));
+    const topLR = sortLeftRight(topPair);
+    const bottomLR = sortLeftRight(bottomPair);
+    const axisAngle = Math.atan2(vy,vx)*180/Math.PI;
     return {
-      points: rotate180 ? [p[2],p[3],p[0],p[1]] : p,
+      points:[topLR[0],topLR[1],bottomLR[1],bottomLR[0]],
       applied:true,
-      rotated180:rotate180
+      rotated180:false,
+      axisAngle,
+      correctionAngle:90-axisAngle,
+      topCenter,
+      bottomCenter
     };
   }
 
@@ -2203,7 +2230,7 @@ function candidateFeatureScore(srcCanvas, cand)
       let features=null;
       const qrOrientation = orientPointsWithQr(best.pts, options.qrCenter || null);
       try{
-        warpCropToCanvas(canvas,cropCanvas,qrOrientation.points);
+        warpCropToCanvas(canvas,cropCanvas,qrOrientation.points,qrOrientation.applied);
         features=detectInternalFeatures(cropCanvas,qrOrientation.applied);
         if (features) features.qrOrientation = qrOrientation;
       } catch(e){ console.error(e); }

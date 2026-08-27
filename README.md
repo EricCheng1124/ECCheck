@@ -62,3 +62,9 @@ Compact mobile reader UI based on detector v31.20.
 - Draws a thicker horizontal guide, a filled point on the actual strip peak, and a large C or T badge.
 - Keeps the numeric peak score beside the waveform.
 - Updates the detector version shown in Advanced Info.
+
+## v31.31
+- Fixes QR-directed rotation being lost because the perspective crop reordered corners again by screen coordinates.
+- Finds the cassette's two short-end edge pairs directly from its four corners.
+- Uses the short end nearest the QR as the top and preserves that order through perspective correction.
+- Corrects horizontal, upside-down, and angled cassette photos to QR-on-top output.
