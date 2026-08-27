@@ -22,17 +22,6 @@
     </section>
 
     <main id="mainPanel" class="hidden">
-      <!-- QR information grows as needed so no decoded field is hidden. -->
-      <section class="testStrip" aria-label="Test information">
-        <div class="testStripHead">
-          <strong>Test Information</strong>
-          <span id="compactValidity" class="validity neutral">QR --</span>
-        </div>
-        <div id="compactQrFields" class="compactQrFields">
-          <div class="compactQrEmpty">Waiting for test QR...</div>
-        </div>
-      </section>
-
       <!-- Camera and final detection image share the same visual stage. -->
       <section class="card stageCard">
         <div id="cameraPanel" class="cameraPanel hidden">
@@ -120,7 +109,7 @@
 
   <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
   <script async src="https://docs.opencv.org/4.9.0/opencv.js" onload="window.__opencvLoaded && window.__opencvLoaded()"></script>
-  <script src="detector.js?v=31.26-qr-direction"></script>
-  <script src="app.js?v=31.26-qr-direction"></script>
+  <script src="detector.js?v=31.27-ct-edge-guard"></script>
+  <script src="app.js?v=31.27-ct-edge-guard"></script>
 </body>
 </html>

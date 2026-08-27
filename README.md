@@ -40,3 +40,9 @@ Compact mobile reader UI based on detector v31.20.
 - Supports compact QR keys N/M/D/L/E and displays their full field names.
 - Combined result canvas uses three columns: original photo on the left black panel, corrected cassette in the center, and QR/result metadata on the right black panel.
 - Original photo and metadata no longer overlap the cassette.
+
+## v31.27
+- Removes the large Test Information card above the result image.
+- After capture, the three-column photo/result area is the first main content shown.
+- Shrinks the C/T analysis zone to the inner 86% of the detected window.
+- Excludes the lower edge region and rejects T candidates too close to the window bottom.

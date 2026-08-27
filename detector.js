@@ -1309,7 +1309,9 @@
     const windowInnerTop = win.y + win.h * 0.04;
     const ctY0Float = Math.max(windowInnerTop, topThirdY + topThirdPadding);
     const y0 = clamp(Math.floor(ctY0Float), 0, H-1);
-    const y1 = clamp(Math.ceil(win.y + win.h * 0.96), y0 + 1, H);
+    // QR 已提供穩定方向後，C/T 只需要看判讀槽內部。
+    // 排除下方約 14%，避免把試紙墊/槽底邊緣誤當成 T 線。
+    const y1 = clamp(Math.ceil(win.y + win.h * 0.86), y0 + 1, H);
     const h = Math.max(1, y1-y0);
 
     // v31.11：CT 不只看紅/粉紅，也看暗線。
@@ -1464,8 +1466,8 @@
     }
 
     // 顯示用 fallback：即使沒有 detected，也列出 C/T 區域附近最強峰，方便 debug。
-    const cFallbackRange = {start:Math.round(h*0.08), end:Math.round(h*0.55)};
-    const tFallbackRange = {start:Math.round(h*0.42), end:Math.round(h*0.92)};
+    const cFallbackRange = {start:Math.round(h*0.08), end:Math.round(h*0.54)};
+    const tFallbackRange = {start:Math.round(h*0.43), end:Math.round(h*0.84)};
     function fallbackPeak(label, range) {
       const raw = maxInRange(positive, range.start, range.end);
       const q = qualifyPeak(positive, raw, threshold, range, h, label);
@@ -1533,12 +1535,17 @@
 
     const tShapeOk = tWeakShapeOk || tStrongShapeOk;
 
+    // 最下緣常是試紙/塑膠槽的水平邊界。即使有明暗峰，也不能當 T。
+    const edgeGuard = Math.max(4, Math.round(h * 0.08));
+    const tAwayFromBottomEdge = !!(tRed && tRed.absY <= y1 - edgeGuard);
+
     const tDetected = !!(
       tQ &&
       tSelected &&
       cDetected &&
       tQ.score >= tThreshold &&
       tRed.ok &&
+      tAwayFromBottomEdge &&
       tShapeOk
     );
 
@@ -1553,6 +1560,7 @@
     if (!tSelected) tQ.reject = 'not-selected';
     else if (tQ.score < tThreshold) tQ.reject = 'below-relative-threshold';
     else if (!tRed.ok) tQ.reject = 'no-red-continuity';
+    else if (!tAwayFromBottomEdge) tQ.reject = 'too-close-to-window-bottom-edge';
     else if (!tShapeOk) tQ.reject = 'bad-t-shape-platform';
     else tQ.reject = 'PASS';
 
