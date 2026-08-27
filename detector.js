@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v31.33-angled-ct-first-capture';
+  const VERSION = 'v31.34-peak-anchor-ntfy';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -1276,8 +1276,11 @@
       // 先掃整個 C/T 合理範圍，因為 peak 可能落在陰影或肩峰，不一定在線中心。
       const rangeStart = localRange ? localRange.start : 0;
       const rangeEnd = localRange ? localRange.end : h - 1;
-      const startY = clamp(y0 + rangeStart, y0, y1 - 1);
-      const endY = clamp(y0 + rangeEnd, y0, y1 - 1);
+      // Anchor refinement near the profile peak. Scanning the full C/T range
+      // could jump to a different dark row after perspective correction.
+      const refineRadius = Math.max(5, Math.round(h * 0.045));
+      const startY = clamp(Math.max(y0 + rangeStart, absCenter - refineRadius), y0, y1 - 1);
+      const endY = clamp(Math.min(y0 + rangeEnd, absCenter + refineRadius), startY, y1 - 1);
 
       let best = null;
       for (let yy = startY; yy <= endY; yy++) {
@@ -1296,6 +1299,8 @@
           profileScore,
           totalScore,
           offset: yy - absCenter,
+          anchorAbsY: absCenter,
+          refineRadius,
           searchStart:startY,
           searchEnd:endY
         });
@@ -1310,6 +1315,8 @@
           profileScore: positive[Math.round(localY)] || 0,
           totalScore: cont.score,
           offset: 0,
+          anchorAbsY: absCenter,
+          refineRadius,
           searchStart:startY,
           searchEnd:endY
         });

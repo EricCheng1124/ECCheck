@@ -1,4 +1,10 @@
-# ASAP Check v31.22 Compact Live QR
+# ASAP Check v31.34 Peak Anchor + ntfy
+
+## v31.34
+
+- Keeps C/T red-line refinement anchored near the original detected peak, preventing perspective correction from moving a marker onto a different dark row or slot edge.
+- Sends one non-blocking ntfy message after each completed reading to topic `ASAPRapidReader`.
+- The ntfy message contains result, test name, lot number, time, and available region.
 
 Compact mobile reader UI based on detector v31.20.
 

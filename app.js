@@ -58,6 +58,8 @@
   let lastQrGeometry = null;
   let captureBusy = false;
   let lastResultText = 'Ready';
+  const NTFY_TOPIC = 'ASAPRapidReader';
+  let notificationSerial = 0;
   const advancedLock = document.getElementById('advancedLock');
   const advancedContent = document.getElementById('advancedContent');
   const advancedPassInput = document.getElementById('advancedPassInput');
@@ -125,6 +127,36 @@
     const ct = r && r.features && r.features.ctAnalysis ? r.features.ctAnalysis : null;
     if (!ct || !ct.result) return 'Invalid';
     return ct.result;
+  }
+
+  async function publishNtfyResult(resultText) {
+    const serial = ++notificationSerial;
+    const ts = getTimestampParts();
+    const testName = lastQr.item || 'ASAP Rapid Test';
+    const lot = lastQr.lot ? `\nLot: ${lastQr.lot}` : '';
+    const region = getRegionText();
+    const location = region && !/locating|unavailable|supported/i.test(region) ? `\nRegion: ${region}` : '';
+    const message = `Result: ${resultText}\nTest: ${testName}${lot}\nTime: ${ts.date} ${ts.time}${location}`;
+    const tags = resultText === 'Positive' ? 'warning' : (resultText === 'Negative' ? 'white_check_mark' : 'grey_question');
+    const url = `https://ntfy.sh/${encodeURIComponent(NTFY_TOPIC)}?title=${encodeURIComponent('ASAP Rapid Reader')}&tags=${encodeURIComponent(tags)}`;
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=UTF-8' },
+        body: message,
+        mode: 'cors',
+        cache: 'no-store'
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      if (debugText && serial === notificationSerial) {
+        debugText.insertAdjacentHTML('afterbegin', 'ntfy: sent to ASAPRapidReader<br><hr>');
+      }
+    } catch (error) {
+      console.warn('ntfy publish failed', error);
+      if (debugText && serial === notificationSerial) {
+        debugText.insertAdjacentHTML('afterbegin', `ntfy: failed (${String(error && error.message || error)})<br><hr>`);
+      }
+    }
   }
 
   function normalizeQrObject(obj) {
@@ -962,6 +994,7 @@ function renderCombinedDetectionView() {
     renderCombinedDetectionView();
     showDetectionStage(true);
     updateResultSubtitle();
+    publishNtfyResult(lastResultText);
   }
 
   function analyze() {
