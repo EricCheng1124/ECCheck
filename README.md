@@ -56,3 +56,9 @@ Compact mobile reader UI based on detector v31.20.
 - Fixes the hidden detection panel being shown underneath the live camera due to a CSS display override.
 - Live camera mode now shows only the camera preview; the three-column result appears only after capture.
 - Enlarges the live camera preview to use the freed vertical space.
+
+## v31.30
+- Makes detected C/T peaks clearly visible in the result image.
+- Draws a thicker horizontal guide, a filled point on the actual strip peak, and a large C or T badge.
+- Keeps the numeric peak score beside the waveform.
+- Updates the detector version shown in Advanced Info.

@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v31.20-halfwidth-t-gate-auto-gps';
+  const VERSION = 'v31.30-visible-ct-markers';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -1639,15 +1639,44 @@
 
     // C/T peak horizontal guides
     function drawPeak(p, label, color) {
+      const markerY = clamp(Math.round(p.absY), 2, H - 3);
+      const markerX = clamp(Math.round(win.x + win.w * 0.50), 2, W - 3);
       ctx.strokeStyle = color;
       ctx.fillStyle = color;
-      ctx.lineWidth = Math.max(1.5, W/210);
+      ctx.lineWidth = Math.max(3, W/82);
       ctx.beginPath();
-      ctx.moveTo(win.x, p.absY);
-      ctx.lineTo(axisX + waveW, p.absY);
+      ctx.moveTo(Math.max(2, win.x - W * 0.08), markerY);
+      ctx.lineTo(axisX + waveW, markerY);
       ctx.stroke();
-      ctx.font = `${Math.max(9, Math.round(W/28))}px sans-serif`;
-      ctx.fillText(`${label} ${Math.round(p.score)}`, axisX + 2, clamp(p.absY - 3, 10, H-4));
+
+      // Filled point directly on the actual test strip peak.
+      ctx.beginPath();
+      ctx.arc(markerX, markerY, Math.max(5, W/32), 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = '#FFFFFF';
+      ctx.lineWidth = Math.max(1.5, W/180);
+      ctx.stroke();
+
+      // Large C/T badge at the left of the window so it remains readable
+      // after the three-column image is scaled on a phone.
+      const fontSize = Math.max(14, Math.round(W/17));
+      const badgeW = Math.max(20, fontSize * 1.55);
+      const badgeH = Math.max(20, fontSize * 1.45);
+      const badgeX = clamp(win.x - badgeW - Math.max(5, W*0.025), 2, W - badgeW - 2);
+      const badgeY = clamp(markerY - badgeH/2, 2, H - badgeH - 2);
+      ctx.fillStyle = color;
+      ctx.fillRect(badgeX, badgeY, badgeW, badgeH);
+      ctx.font = `900 ${fontSize}px "Segoe UI", sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = '#FFFFFF';
+      ctx.fillText(label, badgeX + badgeW/2, badgeY + badgeH/2);
+
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'alphabetic';
+      ctx.font = `800 ${Math.max(11, Math.round(W/22))}px "Segoe UI", sans-serif`;
+      ctx.fillStyle = color;
+      ctx.fillText(`${label} ${Math.round(p.score)}`, axisX + 3, clamp(markerY - 5, 12, H-5));
     }
     // v31.9：沒選到 Dynamic Peak 就不畫假 C/T 標線，避免標到空白處。
     if (ct.cPeak && ct.cPeak.detected) drawPeak(ct.cPeak, 'C', 'rgba(22,163,74,0.95)');
