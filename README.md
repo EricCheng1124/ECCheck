@@ -1,4 +1,12 @@
-# ASAP Check v31.34 Peak Anchor + ntfy
+# ASAP Check v31.35 QR-Enclosed White Outer Frame
+
+## v31.35
+
+- Uses QR geometry as an anchor and accepts only outer-frame candidates that fully enclose all QR corners.
+- Does not use any fixed QR-to-cassette size ratio.
+- Keeps broad cassette aspect support for different manufacturers.
+- Orients every candidate with QR before evaluating its internal test window.
+- Returns `Invalid` when a trustworthy white outer frame enclosing the QR cannot be found.
 
 ## v31.34
 

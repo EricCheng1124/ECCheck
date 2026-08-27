@@ -70,8 +70,8 @@
   // Settings UI removed; keep fixed detection defaults here.
   const DEFAULT_OPTIONS = {
     minAreaRatio: 0.01,
-    ratioMin: 2.2,
-    ratioMax: 6.5
+    ratioMin: 1.20,
+    ratioMax: 10.0
   };
 
   function unlock() {
@@ -735,7 +735,8 @@ function renderCombinedDetectionView() {
   function getOptions() {
     return Object.assign({}, DEFAULT_OPTIONS, {
       qrRequired: true,
-      qrCenter: lastQrGeometry && lastQrGeometry.center ? lastQrGeometry.center : null
+      qrCenter: lastQrGeometry && lastQrGeometry.center ? lastQrGeometry.center : null,
+      qrPoints: lastQrGeometry && Array.isArray(lastQrGeometry.points) ? lastQrGeometry.points : []
     });
   }
 

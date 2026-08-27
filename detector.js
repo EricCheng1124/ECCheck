@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v31.34-peak-anchor-ntfy';
+  const VERSION = 'v31.35-qr-enclosed-white-outer';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -142,6 +142,49 @@
     };
   }
 
+  function pointInPolygon(point, polygon) {
+    if (!point || !polygon || polygon.length < 3) return false;
+    let inside = false;
+    for (let i=0, j=polygon.length-1; i<polygon.length; j=i++) {
+      const a = polygon[i], b = polygon[j];
+      const crosses = ((a.y > point.y) !== (b.y > point.y)) &&
+        (point.x < (b.x-a.x) * (point.y-a.y) / ((b.y-a.y) || 1e-9) + a.x);
+      if (crosses) inside = !inside;
+    }
+    return inside;
+  }
+
+  function pointSegmentDistance(p, a, b) {
+    const vx=b.x-a.x, vy=b.y-a.y;
+    const denom=vx*vx+vy*vy;
+    const t=denom ? clamp(((p.x-a.x)*vx+(p.y-a.y)*vy)/denom,0,1) : 0;
+    return Math.hypot(p.x-(a.x+t*vx),p.y-(a.y+t*vy));
+  }
+
+  function qrEnclosureMetrics(cand, qrCenter, qrPoints) {
+    const polygon = orderPoints(cand.pts || []);
+    const points = (qrPoints && qrPoints.length >= 4) ? qrPoints.slice(0,4) : (qrCenter ? [qrCenter] : []);
+    if (!qrCenter || polygon.length !== 4 || !points.length) {
+      return {pass:false, reason:'qr-geometry-missing', centerInside:false, cornersInside:false, minClearance:0};
+    }
+    const centerInside = pointInPolygon(qrCenter, polygon);
+    const cornersInside = points.every(p=>pointInPolygon(p,polygon));
+    let minClearance = Infinity;
+    for (const p of points) {
+      for (let i=0;i<polygon.length;i++) {
+        minClearance=Math.min(minClearance,pointSegmentDistance(p,polygon[i],polygon[(i+1)%polygon.length]));
+      }
+    }
+    if (!Number.isFinite(minClearance)) minClearance=0;
+    // This is only a small pixel clearance gate, not a QR-to-cassette size ratio.
+    const clearanceOk = minClearance >= 2;
+    return {
+      pass:centerInside && cornersInside && clearanceOk,
+      reason:!centerInside?'qr-center-outside':(!cornersInside?'qr-corner-outside':(!clearanceOk?'qr-on-candidate-edge':'PASS')),
+      centerInside,cornersInside,minClearance
+    };
+  }
+
   function makeNormalizedGray(src) {
     const gray = new cv.Mat(); cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
     const bg = new cv.Mat(); cv.GaussianBlur(gray, bg, new cv.Size(0,0), 31,31, cv.BORDER_DEFAULT);
@@ -238,12 +281,17 @@
 
     white.delete(); norm.delete(); blur.delete(); edges.delete(); k.delete(); fg.delete();
 
+    // QR-enclosing candidates come first so a strong unrelated table edge
+    // cannot push the cassette out of the retained candidate set.
+    for (const c of all) c.qrEnclosure = qrEnclosureMetrics(c, options.qrCenter || null, options.qrPoints || []);
+    all.sort((a,b)=>(Number(b.qrEnclosure.pass)-Number(a.qrEnclosure.pass)) || (b.score-a.score));
+
     // 去重
     const unique = [];
-    for (const c of all.sort((a,b)=>b.score-a.score)) {
+    for (const c of all) {
       const dup = unique.some(u => Math.hypot(u.rect.center.x-c.rect.center.x, u.rect.center.y-c.rect.center.y) < 20 && Math.abs(u.rectArea-c.rectArea)/Math.max(u.rectArea,c.rectArea) < 0.25);
       if (!dup) unique.push(c);
-      if (unique.length >= 14) break;
+      if (unique.length >= 30) break;
     }
     return unique;
   }
@@ -1922,6 +1970,7 @@ function longAxisVerticalScore(c)
 function outerGeometryScore(c, imgArea, imgW, imgH)
 {
     const areaRatio = c.rectArea / Math.max(1, imgArea);
+    const qrAnchored = !!(c.qrEnclosure && c.qrEnclosure.pass);
 
     let areaScore = 0;
     if(areaRatio < 0.035)
@@ -1937,11 +1986,9 @@ function outerGeometryScore(c, imgArea, imgW, imgH)
     else
         areaScore = 0.35;
 
-    const ratioScore =
-        1 - Math.min(
-            1,
-            Math.abs(c.ratio - 3.6) / 2.9
-        );
+    // No manufacturer-specific aspect target. QR enclosure plus the actual
+    // white boundary is the gate; aspect is retained only for debug.
+    const ratioScore = qrAnchored ? 1.0 : 0.5;
 
     const edgeLike = c.method.includes('edge');
     const fillTarget = edgeLike ? 0.22 : 0.50;
@@ -1958,10 +2005,10 @@ function outerGeometryScore(c, imgArea, imgW, imgH)
 
     const vertical = longAxisVerticalScore(c);
 
-    const horizontalPenalty =
-        vertical.score < 0.25 ? 5600 :
-        vertical.score < 0.45 ? 2600 :
-        0;
+    // Photo rotation is irrelevant once QR defines the physical top.
+    const horizontalPenalty = qrAnchored ? 0 :
+        (vertical.score < 0.25 ? 5600 :
+        vertical.score < 0.45 ? 2600 : 0);
 
     const smallPenalty =
         areaRatio < 0.050 ? 2400 : 0;
@@ -2025,7 +2072,7 @@ function outerGeometryScore(c, imgArea, imgW, imgH)
         areaScore * 4200 +
         ratioScore * 1300 +
         fillScore * 750 +
-        vertical.score * 3000 +
+        (qrAnchored ? 3000 : vertical.score * 3000) +
         closedEdgeScore * 2300 +
         centerScore * 3600 +
         methodBonus -
@@ -2039,6 +2086,7 @@ function outerGeometryScore(c, imgArea, imgW, imgH)
 
     return {
         score: Math.max(0, score),
+        qrAnchored,
         areaScore,
         ratioScore,
         fillScore,
@@ -2129,25 +2177,22 @@ function candidateAppearanceScore(canvas)
     };
 }
 
-function candidateFeatureScore(srcCanvas, cand)
+function candidateFeatureScore(srcCanvas, cand, qrCenter)
 {
     const tmp =
         document.createElement('canvas');
 
     try
     {
-        warpCropToCanvas(
-            srcCanvas,
-            tmp,
-            cand.pts
-        );
+        const qrOrientation = orientPointsWithQr(cand.pts, qrCenter || null);
+        warpCropToCanvas(srcCanvas,tmp,qrOrientation.points,qrOrientation.applied);
 
         const appearance = candidateAppearanceScore(tmp);
 
         const f =
             findInternalFeaturesOnCrop(
                 tmp,
-                false
+                !!qrOrientation.applied
             );
 
         let score = appearance.score;
@@ -2233,12 +2278,21 @@ function candidateFeatureScore(srcCanvas, cand)
 
   function detectOuterFrame(canvas, cropCanvas, options) {
     if (typeof cv === 'undefined' || !cv.Mat) return {version:VERSION,ok:false,reason:'opencv-not-ready'};
-    options = Object.assign({ minAreaRatio:0.01, ratioMin:2.2, ratioMax:6.5 }, options||{});
+    options = Object.assign({ minAreaRatio:0.01, ratioMin:1.20, ratioMax:10.0 }, options||{});
     const ctx=canvas.getContext('2d'); const src=cv.imread(canvas); const imgArea=src.cols*src.rows;
     const rawCands=collectOuterCandidates(src, options);
+    const qrCenter=options.qrCenter || null;
+    const qrPoints=Array.isArray(options.qrPoints) ? options.qrPoints : [];
+    const qrRejected=[];
+    const enclosingCands=[];
+    for (const c of rawCands) {
+      c.qrEnclosure=qrEnclosureMetrics(c,qrCenter,qrPoints);
+      if (c.qrEnclosure.pass) enclosingCands.push(c);
+      else qrRejected.push(c);
+    }
     const scored=[];
-    for(const c of rawCands.slice(0,8)){
-      const fs=candidateFeatureScore(canvas,c);
+    for(const c of enclosingCands.slice(0,10)){
+      const fs=candidateFeatureScore(canvas,c,qrCenter);
       const geo=outerGeometryScore(c,imgArea,src.cols,src.rows);
       const hasRedWindow = !!fs.hasRedWindow;
       const hasRealWindow = !!fs.hasRealWindow;
@@ -2342,6 +2396,9 @@ dbg += 'White Mask: generated<br>';
 dbg += 'Edge: generated<br>';
 dbg += 'Bright Foreground: included as candidate source<br>';
 dbg += 'Raw Candidates: ' + rawCands.length + '<br>';
+dbg += 'QR-enclosing white candidates: ' + enclosingCands.length + '<br>';
+dbg += 'QR rejected candidates: ' + qrRejected.length + '<br>';
+if (qrRejected.length) dbg += 'QR rejection detail: ' + qrRejected.slice(0,8).map(c=>`${c.method}:${c.qrEnclosure.reason},clear=${c.qrEnclosure.minClearance.toFixed(1)}`).join(' | ') + '<br>';
 dbg += 'Scored Candidates: ' + scored.length + '<br>';
 dbg += 'Final Gate: outer=' + (bestOuterGeometryOk ? 'PASS' : 'FAIL') + ' / trustedFeature=' + (bestHasTrustedFeature ? 'PASS' : 'FAIL') + ' / redWindow=' + (bestHasTrustedRedWindow ? 'YES' : 'NO') + ' / realSample=' + (bestHasRealSample ? 'YES' : 'NO') + '<br>';
 dbg += 'UI Status: ' + (bestHasRealSample ? 'FULL PASS - S Well confirmed' : (outerOnlyOk ? 'OUTER ONLY' : (partialMessage ? 'PARTIAL' : (bestOk ? 'PASS' : 'FAIL')))) + '<br>';
@@ -2472,7 +2529,7 @@ result={
 
 
     } else {
-      cropCanvas.width=1; cropCanvas.height=1; result={version:VERSION,ok:false,reason:'no-candidate',candidates:rawCands.length};
+      cropCanvas.width=1; cropCanvas.height=1; result={version:VERSION,ok:false,reason:(rawCands.length && !enclosingCands.length)?'qr-enclosed-white-outer-not-found':'no-candidate',candidates:enclosingCands.length,rawCandidates:rawCands.length};
     }
     src.delete(); return result;
   }
