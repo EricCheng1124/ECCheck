@@ -50,6 +50,7 @@
 .actionBar{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:5px}
 .actionBar button,.actionBar .fileBtn{width:100%;min-width:0;margin:0;padding:12px 8px;border-radius:12px;font-size:14px}
 .utilityRow{height:28px;display:flex;justify-content:space-between;align-items:center;padding:0 4px 0 2px;margin-bottom:4px;gap:8px}
+.utilityRow.hidden,.resultCompact.hidden{display:none!important}
 .textBtn{padding:2px 4px!important;min-width:0!important;background:transparent!important;color:#2563eb!important;font-size:12px!important;width:auto!important}
 .qrStatus{font-size:11px;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:right}
 .qrStatus.ok{color:#15803d}.qrStatus.expired{color:#b91c1c}.qrStatus.neutral{color:#64748b}

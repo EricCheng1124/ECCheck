@@ -46,3 +46,8 @@ Compact mobile reader UI based on detector v31.20.
 - After capture, the three-column photo/result area is the first main content shown.
 - Shrinks the C/T analysis zone to the inner 86% of the detected window.
 - Excludes the lower edge region and rejects T candidates too close to the window bottom.
+
+## v31.28
+- Hides the separate Ready/Result card because the result is already shown in the three-column image.
+- Hides Rescan QR and QR detected/not detected status from the main UI.
+- Keeps Open Camera, Choose Photo, the result image, and Advanced Info for a simpler workflow.

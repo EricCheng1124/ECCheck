@@ -46,7 +46,7 @@
       </section>
 
       <!-- One-line result only. -->
-      <section class="resultCompact" aria-label="Detection result">
+      <section class="resultCompact hidden" aria-label="Detection result">
         <div id="result" class="result neutral">Ready</div>
         <div id="resultSub" class="resultSub">Scan QR and capture the cassette</div>
       </section>
@@ -59,7 +59,7 @@
         <button id="closeCameraBtn" class="secondaryBtn hidden" type="button">Close</button>
       </section>
 
-      <div class="utilityRow">
+      <div class="utilityRow hidden">
         <button id="rescanQrBtn" class="textBtn" type="button">Rescan QR</button>
         <span id="qrStatus" class="qrStatus neutral">QR not detected</span>
       </div>
@@ -109,7 +109,7 @@
 
   <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
   <script async src="https://docs.opencv.org/4.9.0/opencv.js" onload="window.__opencvLoaded && window.__opencvLoaded()"></script>
-  <script src="detector.js?v=31.27-ct-edge-guard"></script>
-  <script src="app.js?v=31.27-ct-edge-guard"></script>
+  <script src="detector.js?v=31.28-clean-ui"></script>
+  <script src="app.js?v=31.28-clean-ui"></script>
 </body>
 </html>
