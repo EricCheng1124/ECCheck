@@ -1,4 +1,10 @@
-# ASAP Check v31.35 QR-Enclosed White Outer Frame
+# ASAP Check v31.36 Branded Reader
+
+## v31.36
+
+- Adds the supplied horizontal A.S.A.P logo to the main header.
+- Replaces the large text heading while keeping the browser title `ASAP Check`.
+- Keeps the logo proportional and compact on mobile screens.
 
 ## v31.35
 

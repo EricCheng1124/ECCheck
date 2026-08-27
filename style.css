@@ -17,6 +17,7 @@
 .compactApp{max-width:540px;padding:10px 12px calc(12px + env(safe-area-inset-bottom))}
 .compactHeader{margin-bottom:8px;min-height:38px}
 .compactHeader h1{font-size:22px;letter-spacing:-.3px}
+.brandLogo{display:block;width:clamp(190px,52vw,270px);height:auto;max-height:64px;object-fit:contain;object-position:left center}
 .systemDot{width:9px;height:9px;border-radius:50%;background:#94a3b8;overflow:hidden;text-indent:-9999px}
 .loginCard{margin-top:8px}
 
@@ -70,7 +71,7 @@
   .compactApp{padding:8px 9px calc(10px + env(safe-area-inset-bottom))}
   .cameraPanel{height:62vh;min-height:390px;max-height:590px}
   .detectionPanel{height:44vh;min-height:235px;max-height:350px}
-  .compactHeader{margin-bottom:5px}.compactHeader h1{font-size:20px}
+  .compactHeader{margin-bottom:5px}.compactHeader h1{font-size:20px}.brandLogo{width:clamp(180px,58vw,240px);max-height:58px}
   .testStrip{padding:9px 10px;margin-bottom:6px}
   .stageCard,.resultCompact{margin-bottom:6px}
   .resultCompact .result{font-size:25px;padding:8px 10px;min-height:44px}
@@ -82,7 +83,7 @@
 @media(max-height:700px) and (max-width:520px){
   .cameraPanel{height:56vh;min-height:320px;max-height:460px}
   .detectionPanel{height:38vh;min-height:210px}
-  .compactHeader h1{font-size:19px}.compactHeader{min-height:30px}
+  .compactHeader h1{font-size:19px}.compactHeader{min-height:30px}.brandLogo{width:190px;max-height:52px}
   .testStrip{padding:7px 9px}.compactQrRow{padding:5px 0}
   .resultCompact .result{font-size:23px;min-height:40px;padding:7px 8px}.resultSub{height:22px;line-height:22px}
 }
