@@ -35,18 +35,20 @@
   const qrRawWrap = document.getElementById('qrRawWrap');
   const qrRaw = document.getElementById('qrRaw');
   const qrItem = document.getElementById('qrItem');
+  const qrManufacturer = document.getElementById('qrManufacturer');
+  const qrMfgDate = document.getElementById('qrMfgDate');
   const qrLot = document.getElementById('qrLot');
   const qrExp = document.getElementById('qrExp');
   const qrPn = document.getElementById('qrPn');
   const rescanQrBtn = document.getElementById('rescanQrBtn');
-  const compactItem = document.getElementById('compactItem');
+  const compactQrFields = document.getElementById('compactQrFields');
   const compactValidity = document.getElementById('compactValidity');
-  const compactLotExp = document.getElementById('compactLotExp');
   const resultSub = document.getElementById('resultSub');
   const detectionPanel = document.getElementById('detectionPanel');
   const stagePlaceholder = document.getElementById('stagePlaceholder');
   const galleryLabel = document.getElementById('galleryLabel');
-  let lastQr = { raw: '', item: '', lot: '', exp: '', pn: '', expired: false };
+  const emptyQr = () => ({ raw: '', item: '', manufacturer: '', mfgDate: '', lot: '', exp: '', pn: '', fields: [], expired: false });
+  let lastQr = emptyQr();
   let qrLocked = false;
   let cameraStream = null;
   let qrScanTimer = null;
@@ -133,77 +135,123 @@
   function parseQrData(raw) {
     const text = String(raw || '').trim();
     let map = {};
+    const fields = [];
+
+    const addField = (label, value) => {
+      const cleanLabel = String(label || '').replace(/^\s*[a-z0-9]+[.)]\s*/i, '').trim();
+      const cleanValue = String(value == null ? '' : value).trim();
+      if (!cleanLabel || !cleanValue) return;
+      const key = cleanLabel.toUpperCase().replace(/[^A-Z0-9]/g, '');
+      map[key] = cleanValue;
+      const old = fields.find(f => f.key === key);
+      if (old) old.value = cleanValue;
+      else fields.push({ key, label: cleanLabel, value: cleanValue });
+    };
 
     if (text) {
       try {
         const parsed = JSON.parse(text);
-        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) map = normalizeQrObject(parsed);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          Object.keys(parsed).forEach(key => addField(key, parsed[key]));
+        }
       } catch (_) {
         text.split(/[;\n\r&|]+/).forEach(part => {
-          const m = part.match(/^\s*([^:=]+)\s*[:=]\s*(.*?)\s*$/);
-          if (m) map[m[1].trim().toUpperCase()] = m[2].trim();
+          const m = part.match(/^\s*(.+?)\s*[:=]\s*(.*?)\s*$/);
+          if (m) addField(m[1], m[2]);
         });
       }
     }
 
     const pick = (...keys) => {
-      for (const k of keys) if (map[k]) return map[k];
+      for (const k of keys) {
+        const normalized = String(k).toUpperCase().replace(/[^A-Z0-9]/g, '');
+        if (map[normalized]) return map[normalized];
+      }
       return '';
     };
 
-    const exp = pick('EXP', 'EXPIRY', 'EXPIRYDATE', 'EXPIRY_DATE', 'EXPIRE', 'VALIDUNTIL', 'VALID_UNTIL');
+    const exp = pick('EXP', 'EXPIRY', 'EXPIRYDATE', 'EXPIRY_DATE', 'EXPIRE', 'EXPIREDDATE', 'EXPIREDDATEOFTEST', 'EXPIRATIONDATE', 'VALIDUNTIL', 'VALID_UNTIL');
     let expired = false;
-    if (exp && /^\d{4}-\d{2}-\d{2}$/.test(exp)) {
-      const end = new Date(exp + 'T23:59:59');
+    if (exp && /^\d{4}[-/]\d{2}[-/]\d{2}$/.test(exp)) {
+      const end = new Date(exp.replace(/\//g, '-') + 'T23:59:59');
       expired = !Number.isNaN(end.getTime()) && end.getTime() < Date.now();
     }
 
     return {
       raw: text,
-      item: pick('ITEM', 'TEST', 'TESTITEM', 'TEST_ITEM', 'ASSAY'),
-      lot: pick('LOT', 'LOTNO', 'LOT_NO', 'BATCH', 'BATCHNO', 'BATCH_NO'),
+      item: pick('ITEM', 'TEST', 'TESTITEM', 'TEST_ITEM', 'ASSAY', 'NAMEOFTEST', 'TESTNAME'),
+      manufacturer: pick('MANUFACTURER', 'MANUFACTURE', 'MFR', 'MAKER'),
+      mfgDate: pick('DATEOFMANUFACTURER', 'DATEOFMANUFACTURE', 'MANUFACTUREDATE', 'MANUFACTURINGDATE', 'MFGDATE'),
+      lot: pick('LOT', 'LOTNO', 'LOT_NO', 'LOTNUMBER', 'BATCH', 'BATCHNO', 'BATCH_NO'),
       exp,
       pn: pick('PN', 'PRODUCT', 'PRODUCTNO', 'PRODUCT_NO', 'MODEL', 'SKU'),
+      fields,
       expired
     };
   }
 
+  function renderCompactQrFields(found) {
+    if (!compactQrFields) return;
+    compactQrFields.replaceChildren();
+    if (!found) {
+      const empty = document.createElement('div');
+      empty.className = 'compactQrEmpty';
+      empty.textContent = 'Waiting for test QR...';
+      compactQrFields.appendChild(empty);
+      return;
+    }
+
+    const displayFields = lastQr.fields && lastQr.fields.length ? lastQr.fields : [
+      { label: 'Name of Test', value: lastQr.item },
+      { label: 'Manufacturer', value: lastQr.manufacturer },
+      { label: 'Date of Manufacture', value: lastQr.mfgDate },
+      { label: 'Lot Number', value: lastQr.lot },
+      { label: 'Expiry Date', value: lastQr.exp },
+      { label: 'Product No.', value: lastQr.pn }
+    ].filter(f => f.value);
+
+    if (!displayFields.length) {
+      const row = document.createElement('div');
+      row.className = 'compactQrRaw';
+      row.textContent = lastQr.raw || 'QR Code detected';
+      compactQrFields.appendChild(row);
+      return;
+    }
+
+    displayFields.forEach(field => {
+      const row = document.createElement('div');
+      row.className = 'compactQrRow';
+      const label = document.createElement('span');
+      const value = document.createElement('strong');
+      label.textContent = field.label;
+      value.textContent = field.value;
+      row.append(label, value);
+      compactQrFields.appendChild(row);
+    });
+  }
+
   function updateQrDisplay(info, found) {
-    lastQr = info || { raw: '', item: '', lot: '', exp: '', pn: '', expired: false };
+    lastQr = info || emptyQr();
     if (qrStatus) {
       qrStatus.className = 'qrStatus ' + (found ? (lastQr.expired ? 'expired' : 'ok') : 'neutral');
       qrStatus.textContent = found ? (lastQr.expired ? 'QR detected · EXPIRED' : 'QR detected ✓') : 'QR not detected';
     }
 
-    const hasFields = !!(lastQr.item || lastQr.lot || lastQr.exp || lastQr.pn);
-    if (compactItem) {
-      compactItem.textContent = found
-        ? (hasFields ? (lastQr.item || lastQr.pn || lastQr.raw) : (lastQr.raw || 'QR detected'))
-        : 'Waiting for test QR...';
-      compactItem.title = compactItem.textContent;
-    }
+    const hasFields = !!(lastQr.fields?.length || lastQr.item || lastQr.manufacturer || lastQr.mfgDate || lastQr.lot || lastQr.exp || lastQr.pn);
+    renderCompactQrFields(found);
     if (compactValidity) {
       compactValidity.className = 'validity ' + (found ? (lastQr.expired ? 'expired' : 'ok') : 'neutral');
       compactValidity.textContent = found
         ? (hasFields ? (lastQr.expired ? 'Expired' : 'Valid ✓') : 'QR ✓')
         : 'QR --';
     }
-    if (compactLotExp) {
-      if (found && !hasFields) {
-        compactLotExp.textContent = 'QR Code detected';
-      } else {
-        const lotText = lastQr.lot || '--';
-        const expText = lastQr.exp || '--';
-        compactLotExp.textContent = `LOT ${lotText} · EXP ${expText}`;
-      }
-      compactLotExp.title = compactLotExp.textContent;
-    }
-
     if (qrRaw) qrRaw.textContent = lastQr.raw || '';
     if (qrRawWrap) qrRawWrap.classList.toggle('hidden', !found);
 
     if (qrFields) qrFields.classList.toggle('hidden', !hasFields);
     if (qrItem) qrItem.textContent = lastQr.item || '-';
+    if (qrManufacturer) qrManufacturer.textContent = lastQr.manufacturer || '-';
+    if (qrMfgDate) qrMfgDate.textContent = lastQr.mfgDate || '-';
     if (qrLot) qrLot.textContent = lastQr.lot || '-';
     if (qrExp) {
       qrExp.textContent = lastQr.exp || '-';
@@ -273,7 +321,7 @@
 
   function clearQrData() {
     qrLocked = false;
-    updateQrDisplay({ raw: '', item: '', lot: '', exp: '', pn: '', expired: false }, false);
+    updateQrDisplay(emptyQr(), false);
     if (cameraStatus && cameraStream) cameraStatus.textContent = 'Scanning QR code...';
   }
 
@@ -293,11 +341,11 @@
       const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
       const code = decodeQrImageData(imageData);
       if (code && code.data) return acceptQrCode(code.data, false);
-      if (forceClear) updateQrDisplay({ raw: '', item: '', lot: '', exp: '', pn: '', expired: false }, false);
+      if (forceClear) updateQrDisplay(emptyQr(), false);
       return false;
     } catch (ex) {
       console.error('QR scan failed:', ex);
-      if (forceClear) updateQrDisplay({ raw: '', item: '', lot: '', exp: '', pn: '', expired: false }, false);
+      if (forceClear) updateQrDisplay(emptyQr(), false);
       return false;
     }
   }
@@ -433,6 +481,8 @@ function drawMetadataOverlay(ctx, W, H) {
   const lines = [
     `Result : ${lastResultText || 'Invalid'}`,
     ...(lastQr.item ? [`Test   : ${lastQr.item}`] : []),
+    ...(lastQr.manufacturer ? [`Maker  : ${lastQr.manufacturer}`] : []),
+    ...(lastQr.mfgDate ? [`MFG    : ${lastQr.mfgDate}`] : []),
     ...(lastQr.lot ? [`LOT    : ${lastQr.lot}`] : []),
     ...(lastQr.exp ? [`EXP    : ${lastQr.exp}${lastQr.expired ? ' (EXPIRED)' : ''}`] : []),
     ...(lastQr.pn ? [`PN     : ${lastQr.pn}`] : []),

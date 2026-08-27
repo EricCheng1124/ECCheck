@@ -19,3 +19,10 @@ Compact mobile reader UI based on detector v31.20.
 - Any successfully decoded QR now appears on the compact main screen.
 - Structured QR data still maps to ITEM / LOT / EXP / PN.
 - Unstructured QR text falls back to Raw QR content with `QR ✓`.
+
+## v31.24
+- QR information is displayed as clear label/value rows instead of a fixed two-line strip.
+- Long values wrap automatically; decoded information is no longer truncated with ellipses.
+- Supports `Name of Test`, `Manufacturer`, `Date of Manufacturer`, `Lot Number`, and `Expired Date of Test`.
+- Slash-formatted dates such as `2027/08/17` are supported for expiry checking.
+- Unknown structured fields are preserved and shown, so all information contained in the QR remains visible.

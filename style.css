@@ -20,12 +20,16 @@
 .systemDot{width:9px;height:9px;border-radius:50%;background:#94a3b8;overflow:hidden;text-indent:-9999px}
 .loginCard{margin-top:8px}
 
-.testStrip{background:#fff;border:1px solid var(--line);border-radius:14px;padding:9px 12px;margin-bottom:8px;box-shadow:0 4px 14px rgba(15,23,42,.045);min-height:56px;overflow:hidden}
-.testStripLine1{display:flex;gap:10px;align-items:center;justify-content:space-between;min-width:0}
-.compactItem{font-size:16px;line-height:1.25;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;display:block}
+.testStrip{background:#fff;border:1px solid var(--line);border-radius:14px;padding:10px 12px;margin-bottom:8px;box-shadow:0 4px 14px rgba(15,23,42,.045)}
+.testStripHead{display:flex;gap:10px;align-items:center;justify-content:space-between;margin-bottom:7px;font-size:15px}
 .validity{flex:0 0 auto;font-size:12px;font-weight:900;padding:4px 8px;border-radius:999px;background:#f1f5f9;color:#64748b}
 .validity.ok{background:#dcfce7;color:#15803d}.validity.expired{background:#fee2e2;color:#b91c1c}.validity.neutral{background:#f1f5f9;color:#64748b}
-.testStripLine2{margin-top:4px;font-size:13px;color:#64748b;font-weight:750;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.compactQrFields{border-top:1px solid #eef2f7}
+.compactQrRow{display:grid;grid-template-columns:minmax(118px,38%) minmax(0,1fr);gap:10px;padding:7px 0;border-bottom:1px solid #f1f5f9;align-items:start}
+.compactQrRow:last-child{border-bottom:0;padding-bottom:1px}
+.compactQrRow span{color:#64748b;font-size:12px;font-weight:800;line-height:1.35}
+.compactQrRow strong{font-size:14px;line-height:1.35;overflow-wrap:anywhere;word-break:break-word}
+.compactQrEmpty,.compactQrRaw{padding:8px 0 1px;color:#64748b;font-size:13px;line-height:1.45;overflow-wrap:anywhere;white-space:pre-wrap}
 
 .stageCard{padding:0;margin-bottom:8px;overflow:hidden;border-radius:16px;background:#0f172a}
 .cameraPanel,.detectionPanel{width:100%;height:min(48vh,390px);min-height:260px;position:relative;background:#0f172a;overflow:hidden}
@@ -63,7 +67,7 @@
   .compactApp{padding:8px 9px calc(10px + env(safe-area-inset-bottom))}
   .cameraPanel,.detectionPanel{height:44vh;min-height:235px;max-height:350px}
   .compactHeader{margin-bottom:5px}.compactHeader h1{font-size:20px}
-  .testStrip{padding:8px 10px;margin-bottom:6px;min-height:52px}
+  .testStrip{padding:9px 10px;margin-bottom:6px}
   .stageCard,.resultCompact{margin-bottom:6px}
   .resultCompact .result{font-size:25px;padding:8px 10px;min-height:44px}
   .actionBar{gap:6px;margin-bottom:2px}
@@ -74,6 +78,6 @@
 @media(max-height:700px) and (max-width:520px){
   .cameraPanel,.detectionPanel{height:38vh;min-height:210px}
   .compactHeader h1{font-size:19px}.compactHeader{min-height:30px}
-  .testStrip{min-height:48px;padding:6px 9px}.compactItem{font-size:15px}
+  .testStrip{padding:7px 9px}.compactQrRow{padding:5px 0}
   .resultCompact .result{font-size:23px;min-height:40px;padding:7px 8px}.resultSub{height:22px;line-height:22px}
 }

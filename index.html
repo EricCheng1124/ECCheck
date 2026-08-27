@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="theme-color" content="#f4f6fb" />
   <title>ASAP Check</title>
-  <link rel="stylesheet" href="style.css?v=31.23-compact" />
+  <link rel="stylesheet" href="style.css?v=31.24-qr-layout" />
 </head>
 <body>
   <div class="app compactApp">
@@ -22,13 +22,15 @@
     </section>
 
     <main id="mainPanel" class="hidden">
-      <!-- Fixed two-line test information. It never grows vertically. -->
+      <!-- QR information grows as needed so no decoded field is hidden. -->
       <section class="testStrip" aria-label="Test information">
-        <div class="testStripLine1">
-          <strong id="compactItem" class="compactItem">Waiting for test QR...</strong>
+        <div class="testStripHead">
+          <strong>Test Information</strong>
           <span id="compactValidity" class="validity neutral">QR --</span>
         </div>
-        <div id="compactLotExp" class="testStripLine2">LOT -- · EXP --</div>
+        <div id="compactQrFields" class="compactQrFields">
+          <div class="compactQrEmpty">Waiting for test QR...</div>
+        </div>
       </section>
 
       <!-- Camera and final detection image share the same visual stage. -->
@@ -86,7 +88,9 @@
           <div id="advancedContent" class="hidden">
             <h3>Test Information</h3>
             <div id="qrFields" class="qrFields hidden">
-              <div class="qrRow"><span>Test Item</span><strong id="qrItem">-</strong></div>
+              <div class="qrRow"><span>Name of Test</span><strong id="qrItem">-</strong></div>
+              <div class="qrRow"><span>Manufacturer</span><strong id="qrManufacturer">-</strong></div>
+              <div class="qrRow"><span>Date of Manufacture</span><strong id="qrMfgDate">-</strong></div>
               <div class="qrRow"><span>Lot No.</span><strong id="qrLot">-</strong></div>
               <div class="qrRow"><span>Expiry Date</span><strong id="qrExp">-</strong></div>
               <div class="qrRow"><span>Product No.</span><strong id="qrPn">-</strong></div>
@@ -117,6 +121,6 @@
   <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
   <script async src="https://docs.opencv.org/4.9.0/opencv.js" onload="window.__opencvLoaded && window.__opencvLoaded()"></script>
   <script src="detector.js?v=31.20"></script>
-  <script src="app.js?v=31.23-compact"></script>
+  <script src="app.js?v=31.24-qr-layout"></script>
 </body>
 </html>
