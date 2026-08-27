@@ -60,6 +60,7 @@
   let lastResultText = 'Ready';
   const NTFY_TOPIC = 'ASAPRapidReader';
   let notificationSerial = 0;
+  let gpsLookupToken = 0;
   const advancedLock = document.getElementById('advancedLock');
   const advancedContent = document.getElementById('advancedContent');
   const advancedPassInput = document.getElementById('advancedPassInput');
@@ -664,8 +665,8 @@ function drawMetadataPanel(ctx, x, y, width, height, baseW) {
   ].filter(r => r[1]);
   const pad = Math.max(8, Math.round(baseW * 0.04));
   // Larger metadata for the phone-sized three-column result view.
-  const labelSize = Math.max(11, Math.round(baseW / 20));
-  const valueSize = Math.max(14, Math.round(baseW / 15));
+  const labelSize = Math.max(13, Math.round(baseW / 16));
+  const valueSize = Math.max(17, Math.round(baseW / 12));
   let cy = y + pad;
   ctx.save();
   ctx.textBaseline = 'top';
@@ -1076,6 +1077,42 @@ function renderCombinedDetectionView() {
     renderCombinedDetectionView();
   }
 
+  async function reverseGeocodeCurrentGps(latitude, longitude, coordinateText) {
+    const token = ++gpsLookupToken;
+    const controller = typeof AbortController === 'function' ? new AbortController() : null;
+    const timeoutId = setTimeout(() => { if (controller) controller.abort(); }, 8000);
+    try {
+      const query = new URLSearchParams({
+        latitude: String(latitude),
+        longitude: String(longitude),
+        localityLanguage: 'zh-TW'
+      });
+      const response = await fetch(`https://api.bigdatacloud.net/data/reverse-geocode-client?${query.toString()}`, {
+        method: 'GET',
+        mode: 'cors',
+        cache: 'no-store',
+        signal: controller ? controller.signal : undefined
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const data = await response.json();
+      if (token !== gpsLookupToken) return;
+
+      const parts = [
+        data.locality || data.city || '',
+        data.principalSubdivision || '',
+        data.countryName || data.countryCode || ''
+      ].map(v => String(v || '').trim()).filter(Boolean);
+      const unique = parts.filter((v, i, list) => list.findIndex(x => x.toLowerCase() === v.toLowerCase()) === i);
+      if (unique.length) setRegionText(unique.join(', '), true);
+      else setRegionText(coordinateText, true);
+    } catch (error) {
+      if (token === gpsLookupToken) setRegionText(coordinateText, true);
+      console.warn('Reverse geocoding failed', error);
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
   function autoFetchGps() {
     if (!navigator.geolocation) {
       setRegionText(localStorage.getItem('asap_region') || 'GPS not supported', false);
@@ -1086,7 +1123,10 @@ function renderCombinedDetectionView() {
       pos => {
         const lat = pos.coords.latitude.toFixed(5);
         const lng = pos.coords.longitude.toFixed(5);
-        setRegionText(`${lat}, ${lng}`, true);
+        const coordinateText = `${lat}, ${lng}`;
+        // Show coordinates immediately, then replace them with locality/country.
+        setRegionText(coordinateText, true);
+        reverseGeocodeCurrentGps(pos.coords.latitude, pos.coords.longitude, coordinateText);
       },
       () => {
         const fallback = localStorage.getItem('asap_region') || 'GPS unavailable';
@@ -1099,6 +1139,8 @@ function renderCombinedDetectionView() {
   if (regionInput) {
     regionInput.value = localStorage.getItem('asap_region') || 'GPS locating...';
     regionInput.addEventListener('input', () => {
+      // Manual input wins over an in-flight automatic locality lookup.
+      gpsLookupToken++;
       localStorage.setItem('asap_region', regionInput.value || '');
       renderCombinedDetectionView();
     });

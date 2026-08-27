@@ -1,4 +1,11 @@
-# ASAP Check v31.37 Large Result Metadata
+# ASAP Check v31.38 Larger Metadata + GPS Locality
+
+## v31.38
+
+- Enlarges right-side result labels and values by another step.
+- Shows GPS coordinates immediately, then resolves the current device location to locality, administrative region, and country.
+- Keeps coordinates as a fallback when reverse geocoding is unavailable.
+- Uses BigDataCloud's browser-only free reverse-geocoding endpoint with no API key.
 
 ## v31.37
 
