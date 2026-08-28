@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v31.35-qr-enclosed-white-outer';
+  const VERSION = 'v31.39-qr-white-cassette-real-window-gate';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -360,8 +360,12 @@
       // v30.0：外框已經裁正後，Window/試紙區應該位於卡匣中線附近，且是細長直向區域。
       if (!reject && cx < W * 0.16) reject = 'too-left';
       if (!reject && cx > W * 0.84) reject = 'too-right';
-      if (!reject && cy < H * 0.08) reject = 'too-high';
-      if (!reject && cy > H * 0.92) reject = 'too-low';
+      // QR occupies the top region. The result window must be below it and
+      // remain inside the cassette; this also excludes QR finder patterns.
+      if (!reject && cy < H * 0.27) reject = 'above-result-zone';
+      if (!reject && cy > H * 0.76) reject = 'below-result-zone';
+      if (!reject && br.x < W * 0.08) reject = 'touch-left-edge';
+      if (!reject && br.x + br.width > W * 0.92) reject = 'touch-right-edge';
       if (!reject && br.width < W * 0.10) reject = 'too-narrow';
       if (!reject && br.width > W * 0.52) reject = 'too-wide';
       if (!reject && br.height < H * 0.10) reject = 'too-short';
@@ -971,21 +975,35 @@
 
     const sampleBox = directionAnalysis.chosenBox;
 
-    let win = fallbackWindowFromGeometry(W, H, name);
-    if (win) {
-      win.source = 'fixed-ratio-window-extended';
-      win = makeWindowSafe(win, W, H);
-    }
-
     const rw = findRedWindowInBox(cropCanvas, windowBox, W, H);
+    // The proportional box is only a search area. It must never become the
+    // measurement window itself, because that shifts C/T after perspective rotation.
+    let contourResult = {win:null, count:0, debug:[]};
+    let norm = null;
+    let cropMat = null;
+    try {
+      cropMat = cv.imread(cropCanvas);
+      norm = makeNormalizedGray(cropMat);
+      contourResult = findWindowByContours(norm, W, H);
+    } catch (e) {
+      contourResult = {win:null, count:0, debug:[]};
+    } finally {
+      if (norm) norm.delete();
+      if (cropMat) cropMat.delete();
+    }
+    let contourWin = contourResult.win;
+    if (contourWin && (
+      contourWin.cy < H * 0.27 || contourWin.y < H * 0.18 ||
+      contourWin.y + contourWin.h > H * 0.78 ||
+      contourWin.x < W * 0.08 || contourWin.x + contourWin.w > W * 0.92
+    )) contourWin = null;
+    let win = rw || contourWin;
+    if (win) win = makeWindowSafe(win, W, H);
     const sample = fixedSampleFromBox(sampleBox, W, H, 'sample-third-score-confirmed', directionAnalysis.chosenScore);
 
     const wf = {
-      count: 1,
-      debug: [{
-        x:Math.round(windowBox.x), y:Math.round(windowBox.y), w:Math.round(windowBox.w), h:Math.round(windowBox.h),
-        aspect:windowBox.h/Math.max(1,windowBox.w), fill:1, centerScore:1, score:0, reject:'fixed-ratio-window-extended'
-      }]
+      count: contourResult.count || 0,
+      debug: contourResult.debug || []
     };
 
     const sf = {
@@ -1877,7 +1895,8 @@
     }
     const chosen = makeFixedInternalByDirection(cropCanvas, W, H, directionAnalysis);
 
-    const win = chosen.window || fallbackWindowFromGeometry(W, H, chosen.name);
+    // No physical result window means no conclusive C/T result.
+    const win = chosen.window || null;
     const sample = chosen.sample || fallbackSampleByWindow(W, H, win, chosen.name);
     const winCx = win ? win.x + win.w/2 : W*0.50;
     const winCy = win ? win.y + win.h/2 : H*0.40;
@@ -1898,7 +1917,7 @@
       sample,
       ctAnalysis,
       ctResult: ctAnalysis ? ctAnalysis.result : '-',
-      windowSource: win.source,
+      windowSource: win ? win.source : 'not-detected',
       sampleSource: sample.source,
       windowCandidates: chosen.windowCandidates,
       sampleCandidates: chosen.sampleCandidates,
@@ -2120,6 +2139,7 @@ function candidateAppearanceScore(canvas)
     let dark = 0;
     let veryDark = 0;
     let lowSatLight = 0;
+    let coloredBackground = 0;
     const total = Math.max(1, W * H);
 
     for(let i=0; i<data.length; i+=4)
@@ -2137,6 +2157,7 @@ function candidateAppearanceScore(canvas)
         if(y < 90) dark++;
         if(y < 55) veryDark++;
         if(y > 135 && sat < 55) lowSatLight++;
+        if(y < 215 && sat > 42) coloredBackground++;
     }
 
     const lightRatio = light / total;
@@ -2144,6 +2165,30 @@ function candidateAppearanceScore(canvas)
     const darkRatio = dark / total;
     const veryDarkRatio = veryDark / total;
     const lowSatLightRatio = lowSatLight / total;
+    const coloredBackgroundRatio = coloredBackground / total;
+
+    function patchIsPlastic(cx, cy) {
+        const rx = Math.max(2, Math.round(W * 0.07));
+        const ry = Math.max(2, Math.round(H * 0.045));
+        let good = 0, n = 0;
+        for (let y=Math.max(0,cy-ry); y<Math.min(H,cy+ry); y+=2) {
+            for (let x=Math.max(0,cx-rx); x<Math.min(W,cx+rx); x+=2) {
+                const i=(y*W+x)*4, r=data[i], g=data[i+1], b=data[i+2];
+                const lum=0.299*r+0.587*g+0.114*b;
+                const sat=Math.max(r,g,b)-Math.min(r,g,b);
+                if (lum >= 125 && sat <= 62) good++;
+                n++;
+            }
+        }
+        return good / Math.max(1,n);
+    }
+    const cornerPlastic = [
+        patchIsPlastic(Math.round(W*.14),Math.round(H*.08)),
+        patchIsPlastic(Math.round(W*.86),Math.round(H*.08)),
+        patchIsPlastic(Math.round(W*.14),Math.round(H*.92)),
+        patchIsPlastic(Math.round(W*.86),Math.round(H*.92))
+    ];
+    const plasticCornerCount = cornerPlastic.filter(v=>v>=0.58).length;
 
     // 快篩卡本體通常是低飽和、偏亮的塑膠面。
     // 手機螢幕 / 滑鼠墊 / 黑色物件即使有封閉邊緣，也會有過高 darkRatio。
@@ -2157,12 +2202,16 @@ function candidateAppearanceScore(canvas)
     if(midLightRatio < 0.45) penalty += 3600;
     if(darkRatio > 0.35) penalty += 5200;
     if(veryDarkRatio > 0.22) penalty += 3800;
+    if(coloredBackgroundRatio > 0.22) penalty += 6800;
+    if(plasticCornerCount < 3) penalty += 9000;
 
     const trustedBrightCard =
-        lowSatLightRatio >= 0.38 &&
-        midLightRatio >= 0.48 &&
-        darkRatio <= 0.34 &&
-        veryDarkRatio <= 0.22;
+        lowSatLightRatio >= 0.52 &&
+        midLightRatio >= 0.62 &&
+        darkRatio <= 0.25 &&
+        veryDarkRatio <= 0.15 &&
+        coloredBackgroundRatio <= 0.22 &&
+        plasticCornerCount >= 3;
 
     return {
         score: bonus - penalty,
@@ -2173,6 +2222,9 @@ function candidateAppearanceScore(canvas)
         darkRatio,
         veryDarkRatio,
         lowSatLightRatio,
+        coloredBackgroundRatio,
+        cornerPlastic,
+        plasticCornerCount,
         trustedBrightCard
     };
 }
@@ -2207,10 +2259,10 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
             !!(rawRedWindow && appearance.trustedBrightCard);
 
         const hasRealWindow =
-            !!(win && win.source && !win.source.includes('fallback'));
+            !!(win && win.source && (win.source.includes('red-line-window') || win.source.includes('opencv-window-contour')));
 
         const hasRealSample =
-            !!(sample && sample.source && !sample.source.includes('fallback'));
+            !!(sample && sample.source && sample.source.includes('contour'));
 
         // v28.7：不能再讓 fallback 特徵幫候選加分。
         // 紅線判讀窗比一般 opencv-window-contour 可信，因為手機/滑鼠墊也可能產生假矩形。
@@ -2423,7 +2475,7 @@ scored.forEach((c,i)=>
     No Real S Penalty=${Math.round(c.noRealSamplePenalty||0)}<br>
     No Trusted Feature Penalty=${Math.round(c.noTrustedFeaturePenalty||0)}<br>
     Red Window=${c.hasRedWindow ? 'YES' : 'NO'} / Raw Red=${c.rawRedWindow ? 'YES' : 'NO'} / Real Sample=${c.hasRealSample ? 'YES' : 'NO'}<br>
-    Appearance=${c.appearanceDetail ? (c.appearanceDetail.trustedBrightCard ? 'PASS' : 'FAIL') : '-'} / LowSatLight=${c.appearanceDetail ? c.appearanceDetail.lowSatLightRatio.toFixed(2) : '-'} / MidLight=${c.appearanceDetail ? c.appearanceDetail.midLightRatio.toFixed(2) : '-'} / Dark=${c.appearanceDetail ? c.appearanceDetail.darkRatio.toFixed(2) : '-'} / Penalty=${c.appearanceDetail ? Math.round(c.appearanceDetail.penalty) : '-'}<br>
+    Appearance=${c.appearanceDetail ? (c.appearanceDetail.trustedBrightCard ? 'PASS' : 'FAIL') : '-'} / LowSatLight=${c.appearanceDetail ? c.appearanceDetail.lowSatLightRatio.toFixed(2) : '-'} / MidLight=${c.appearanceDetail ? c.appearanceDetail.midLightRatio.toFixed(2) : '-'} / Dark=${c.appearanceDetail ? c.appearanceDetail.darkRatio.toFixed(2) : '-'} / ColoredBG=${c.appearanceDetail ? c.appearanceDetail.coloredBackgroundRatio.toFixed(2) : '-'} / PlasticCorners=${c.appearanceDetail ? c.appearanceDetail.plasticCornerCount+'/4' : '-'} / Penalty=${c.appearanceDetail ? Math.round(c.appearanceDetail.penalty) : '-'}<br>
     Window Score=${win ? 3000 : 0} / Source=${win ? win.source : '-'}<br>
     S Well Score=${realSample ? 5000 : (sample ? 600 : 0)} / Source=${sample ? sample.source : '-'}<br>
     Align Score=${Math.round((c.featureAlign||0)*1000)}<br>

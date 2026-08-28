@@ -1,4 +1,13 @@
-# ASAP Check v31.38 Larger Metadata + GPS Locality
+# ASAP Check v31.39 QR White Cassette + Real Window Gate
+
+## v31.39
+
+- QR 仍作為方向基準，QR 必須位於卡匣上方。
+- 外框候選除了必須包住 QR，透視校正後還需通過白色低飽和卡匣驗證。
+- 新增四角白色塑膠檢查與彩色背景比例，排除桌面/木紋大框。
+- 固定比例框只保留為搜尋範圍，不再作為 C/T 測量區。
+- 必須找到真實判讀窗（紅線或 OpenCV 視窗輪廓）才分析 C/T；否則回報 Invalid，避免誤判。
+- 不使用單一廠牌的 QR 尺寸或卡匣長寬比例。
 
 ## v31.38
 
