@@ -160,3 +160,13 @@ Compact mobile reader UI based on detector v31.20.
 - The Share Analysis Image button is hidden whenever the camera is open or a new capture has not finished.
 - Share Analysis Image appears only after a photo has completed analysis.
 - Starting a retake immediately hides Share Analysis Image until the new analysis is available.
+
+
+## v31.45 - Cassette-fixed C/T ROI
+
+- Fixed the C/T analysis box being horizontally offset from the real reaction strip on the new cassette.
+- C/T ROI is now anchored directly to the perspective-corrected full cassette, not derived from the pale Window/slot contour.
+- New-cassette ROI: X 43-61% and Y 33-55% of the normalized cassette image.
+- C/T markers remain locked to the actual selected 1-D profile peaks.
+- The Window/slot rectangle is retained only as a visual/debug reference; it no longer determines the C/T profile position.
+- Share Analysis Image remains visible only after a completed Capture & Detect / photo analysis. Opening the camera for a new capture hides it until the new analysis finishes.

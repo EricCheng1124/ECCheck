@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v31.43-qr-template-cassette-lossless-share-layout';
+  const VERSION = 'v31.45-cassette-fixed-ct-roi';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -1407,28 +1407,30 @@
       return best;
     }
 
-    // v31.8：CT 改成「全 CT zone 動態找峰」。
-    // 不再先硬切 C Range / T Range，避免 T 線因位置偏移而沒被選到。
-    // 流程：Window 中央 40% × 內部 90% → Top S 以下 → 找全部候選峰 → 依上下位置分配 C/T。
-    const centerBandStart = 0.30;
-    const centerBandWidth = 0.40;
-    const innerKeep = 0.90;
-    const innerMargin = centerBandWidth * (1 - innerKeep) / 2;
-    const ctStartRatio = centerBandStart + innerMargin;       // 0.32
-    const ctEndRatio = centerBandStart + centerBandWidth - innerMargin; // 0.68
+    // v31.45：新卡匣的 C/T ROI 不再從淡色 Window/slot 內推算。
+    // 前幾版的 Window contour / fixed window 足以做視覺輔助，但它的寬度較大，
+    // 再取中央 40% 會把 profile 推到真正試紙的左側。
+    // 現在直接使用「透視校正後完整卡匣」的固定比例座標。
+    // QR 端已固定在上方，因此不同距離、旋轉、斜拍都會先歸一到同一座標系。
+    // 這批新卡匣實測：真正反應膜主要位於 cassette X=43~61%，Y=33~55%。
+    const cassetteCtX0 = 0.43;
+    const cassetteCtX1 = 0.61;
+    const cassetteCtY0 = 0.33;
+    const cassetteCtY1 = 0.55;
+    const ctStartRatio = cassetteCtX0;
+    const ctEndRatio = cassetteCtX1;
 
-    const x0 = clamp(Math.floor(win.x + win.w * ctStartRatio), 0, W-1);
-    const x1 = clamp(Math.ceil(win.x + win.w * ctEndRatio), 0, W);
-
-    const topThirdY = H / 3;
-    const topThirdPadding = Math.max(4, Math.round(H * 0.008));
-    const windowInnerTop = win.y + win.h * 0.04;
-    const ctY0Float = Math.max(windowInnerTop, topThirdY + topThirdPadding);
-    const y0 = clamp(Math.floor(ctY0Float), 0, H-1);
-    // QR 已提供穩定方向後，C/T 只需要看判讀槽內部。
-    // 排除下方約 14%，避免把試紙墊/槽底邊緣誤當成 T 線。
-    const y1 = clamp(Math.ceil(win.y + win.h * 0.86), y0 + 1, H);
+    const x0 = clamp(Math.floor(W * cassetteCtX0), 0, W-1);
+    const x1 = clamp(Math.ceil(W * cassetteCtX1), x0 + 1, W);
+    const y0 = clamp(Math.floor(H * cassetteCtY0), 0, H-1);
+    const y1 = clamp(Math.ceil(H * cassetteCtY1), y0 + 1, H);
     const h = Math.max(1, y1-y0);
+
+    // Debug compatibility fields retained for the existing Advanced Info panel.
+    const topThirdY = H / 3;
+    const topThirdPadding = 0;
+    const windowInnerTop = win.y;
+    const ctY0Float = y0;
 
     // v31.11：CT 不只看紅/粉紅，也看暗線。
     // 有些 C 線偏灰紫或很淡，RedScore 會接近 0；但線本身仍比周圍暗。
@@ -1743,9 +1745,9 @@
     );
 
     return {
-      source:'ct-combined-profile-v31-44-peak-locked-red-validation',
+      source:'ct-cassette-fixed-roi-v31-45-peak-locked',
       x0, x1, y0, y1, h,
-      zone:{x:x0, y:y0, w:Math.max(1, x1-x0), h:Math.max(1, y1-y0), startRatio:ctStartRatio, endRatio:ctEndRatio, widthRatio:ctEndRatio-ctStartRatio, topThirdY:Math.round(topThirdY), topThirdPadding:topThirdPadding, yLimitedByTopThird:(ctY0Float > windowInnerTop + 0.5)},
+      zone:{x:x0, y:y0, w:Math.max(1, x1-x0), h:Math.max(1, y1-y0), startRatio:ctStartRatio, endRatio:ctEndRatio, widthRatio:ctEndRatio-ctStartRatio, topThirdY:Math.round(topThirdY), topThirdPadding:topThirdPadding, yLimitedByTopThird:false, coordinateSystem:'cassette-fixed', cassetteX0:cassetteCtX0, cassetteX1:cassetteCtX1, cassetteY0:cassetteCtY0, cassetteY1:cassetteCtY1},
       raw, profile:positive, baseline:bg, rawBaseline, rawMedian, rawMax, pinkMax, darkMax, combinedMax, selectedMode, lumBackground, lumMedian, mean:stat.mean, std:stat.std,
       maxScore, threshold, tThreshold, tcRatio, candidateFloor, minSep,
       cRange, tRange,
