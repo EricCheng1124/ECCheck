@@ -384,10 +384,18 @@
     const H = sourceCanvas.height;
     const attempts = [
       { x: 0, y: 0, w: W, h: H },
-      { x: W * 0.06, y: H * 0.06, w: W * 0.88, h: H * 0.88 }
+      { x: W * 0.04, y: H * 0.04, w: W * 0.92, h: H * 0.92 },
+      // 新卡匣的 QR 佔整張照片比例可能很小。多做幾個重疊區塊，
+      // 讓 jsQR 不必每次都在整張高解析度照片中搜尋。
+      { x: 0, y: 0, w: W * 0.62, h: H * 0.62 },
+      { x: W * 0.38, y: 0, w: W * 0.62, h: H * 0.62 },
+      { x: 0, y: H * 0.38, w: W * 0.62, h: H * 0.62 },
+      { x: W * 0.38, y: H * 0.38, w: W * 0.62, h: H * 0.62 },
+      { x: W * 0.18, y: 0, w: W * 0.64, h: H * 0.58 },
+      { x: W * 0.18, y: H * 0.42, w: W * 0.64, h: H * 0.58 }
     ];
 
-    const square = Math.min(W, H) * 0.82;
+    const square = Math.min(W, H) * 0.86;
     attempts.push({ x: (W - square) / 2, y: (H - square) / 2, w: square, h: square });
 
     for (const a of attempts) {
@@ -743,7 +751,8 @@ function renderCombinedDetectionView() {
   }
 
   function resizeAndDrawImage(img) {
-    const maxW = 900;
+    // 保留更多原始像素：這批新卡匣遠拍時 QR/淡 C-T 線都偏小。
+    const maxW = 1280;
     const scale = Math.min(1, maxW / img.naturalWidth);
     canvas.width = Math.round(img.naturalWidth * scale);
     canvas.height = Math.round(img.naturalHeight * scale);

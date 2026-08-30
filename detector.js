@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v31.39-qr-white-cassette-real-window-gate';
+  const VERSION = 'v31.40-new-cassette-small-qr-fixed-slot';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -964,7 +964,19 @@
     return {score, hasWin, hasSample, alignScore, gapScore, relationOk, yGap};
   }
 
-  function makeFixedInternalByDirection(cropCanvas, W, H, directionAnalysis) {
+  function fixedWindowForNewCassette(W, H, orientation) {
+    // 2026-08 新卡匣：QR 在物理上端，判讀槽固定落在卡匣中央偏上。
+    // 只有 QR 已成功提供方向時才允許拿這個比例框直接做 C/T 分析。
+    // ROI 故意比肉眼看到的槽略大，讓不同拍攝角度/透視校正後仍包住 C/T。
+    const inverted = orientation === 'inverted';
+    const y0 = inverted ? 0.38 : 0.30;
+    const y1 = inverted ? 0.70 : 0.62;
+    const x0 = 0.27, x1 = 0.73;
+    const b = makeRatioBox(W, H, x0, y0, x1, y1);
+    return {x:b.x, y:b.y, w:b.w, h:b.h, cx:b.cx, cy:b.cy, source:'qr-fixed-window-new-cassette'};
+  }
+
+  function makeFixedInternalByDirection(cropCanvas, W, H, directionAnalysis, allowQrFixedWindow) {
     const isInverted = !!directionAnalysis.rotate180;
     const name = isInverted ? 'inverted' : 'normal';
 
@@ -999,6 +1011,9 @@
     )) contourWin = null;
     let win = rw || contourWin;
     if (win) win = makeWindowSafe(win, W, H);
+    // 新卡匣槽邊很淡時 contour 可能消失。QR 已鎖定方向與外框時，
+    // 使用卡匣固定比例 ROI 作最後 fallback，避免直接 Invalid。
+    if (!win && allowQrFixedWindow) win = fixedWindowForNewCassette(W, H, name);
     const sample = fixedSampleFromBox(sampleBox, W, H, 'sample-third-score-confirmed', directionAnalysis.chosenScore);
 
     const wf = {
@@ -1893,7 +1908,7 @@
       directionAnalysis.chosenBox = directionAnalysis.bottom.box;
       directionAnalysis.chosenScore = directionAnalysis.bottom;
     }
-    const chosen = makeFixedInternalByDirection(cropCanvas, W, H, directionAnalysis);
+    const chosen = makeFixedInternalByDirection(cropCanvas, W, H, directionAnalysis, !!forceQrTop);
 
     // No physical result window means no conclusive C/T result.
     const win = chosen.window || null;
@@ -2065,27 +2080,28 @@ function outerGeometryScore(c, imgArea, imgW, imgH)
     const dy = Math.abs(c.rect.center.y - imgCy) / Math.max(1, imgH || 1);
     const centerDist = Math.sqrt(dx * dx + dy * dy);
     const centerScore = 1 - Math.min(1, centerDist / 0.45);
-    const edgePenalty =
-        centerScore < 0.22 ? 6200 :
+    // QR 已經把卡匣身份與位置錨定後，不再因為拍在畫面邊緣而重罰。
+    // 新卡匣在實際照片中常佔畫面很小，且不一定完全置中。
+    const edgePenalty = qrAnchored ? 0 :
+        (centerScore < 0.22 ? 6200 :
         centerScore < 0.38 ? 3200 :
         centerScore < 0.52 ? 1200 :
-        0;
+        0);
 
     // v29.0：外框尺寸保護。
     // 判讀窗/試紙區本身也可能有紅線與橢圓形特徵，
     // 但它在整張照片中的面積會明顯小於真正卡匣外框。
     // 因此候選太小時即使有 Window/S Well，也不能當成外框。
-    const smallOuterPenalty =
-        areaRatio < 0.020 ? 24000 :
-        areaRatio < 0.030 ? 18000 :
-        areaRatio < 0.050 ? 9000 :
-        0;
+    // 新卡匣批次中，遠拍時卡匣本體可能只有約 2~5% 畫面。
+    // 若 QR 四角確實被候選外框包住，就把『小物件』懲罰大幅放寬；
+    // 沒有 QR 錨定時仍保留原本嚴格防呆，避免把判讀窗當外框。
+    const smallOuterPenalty = qrAnchored ?
+        (areaRatio < 0.012 ? 12000 : areaRatio < 0.020 ? 3500 : 0) :
+        (areaRatio < 0.020 ? 24000 : areaRatio < 0.030 ? 18000 : areaRatio < 0.050 ? 9000 : 0);
 
-    // 面積極小但比例又很像 3~4 的候選，常是判讀窗本身。
-    const innerWindowPenalty =
-        areaRatio < 0.020 && c.ratio > 2.4 && c.ratio < 5.2 ? 12000 :
-        areaRatio < 0.030 && c.ratio > 2.4 && c.ratio < 5.2 ? 6000 :
-        0;
+    const innerWindowPenalty = qrAnchored ? 0 :
+        (areaRatio < 0.020 && c.ratio > 2.4 && c.ratio < 5.2 ? 12000 :
+        areaRatio < 0.030 && c.ratio > 2.4 && c.ratio < 5.2 ? 6000 : 0);
 
     const score =
         areaScore * 4200 +
@@ -2259,7 +2275,7 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
             !!(rawRedWindow && appearance.trustedBrightCard);
 
         const hasRealWindow =
-            !!(win && win.source && (win.source.includes('red-line-window') || win.source.includes('opencv-window-contour')));
+            !!(win && win.source && (win.source.includes('red-line-window') || win.source.includes('opencv-window-contour') || win.source.includes('qr-fixed-window-new-cassette')));
 
         const hasRealSample =
             !!(sample && sample.source && sample.source.includes('contour'));
@@ -2353,13 +2369,13 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
       const noTrustedFeaturePenalty = (hasRedWindow || hasRealSample) ? 0 : 8200;
       c.outerScore=geo.score;
       c.outerDetail=geo;
+      // geo.score 已經包含 smallOuterPenalty / innerWindowPenalty，這裡不能再扣第二次。
       const smallOuterTotalPenalty = (geo.smallOuterPenalty || 0) + (geo.innerWindowPenalty || 0);
       c.totalScore =
         geo.score +
         fs.score -
         noRealSamplePenalty -
-        noTrustedFeaturePenalty -
-        smallOuterTotalPenalty;
+        noTrustedFeaturePenalty;
       c.smallOuterTotalPenalty = smallOuterTotalPenalty;
       c.featureScore=fs.score;
       c.featureDetail=fs.f;
@@ -2398,12 +2414,16 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
       const bestAreaRatio = best.rectArea / Math.max(1, imgArea);
       const bestAppearanceOk = !!(best.appearanceDetail && best.appearanceDetail.trustedBrightCard);
       const bestCenterOk = !(best.outerDetail && best.outerDetail.centerScore !== undefined) || best.outerDetail.centerScore >= 0.25;
+      // 新卡匣照片有不少是遠拍；只要 QR 被完整包在白色卡匣外框內，
+      // 面積門檻可由舊版 4.5% 降到 2.0%，且不強制一定在畫面中央。
+      const qrAnchoredBest = !!(best.qrEnclosure && best.qrEnclosure.pass);
+      const minFinalArea = qrAnchoredBest ? 0.020 : 0.045;
       const bestOuterGeometryOk =
-        bestAreaRatio >= 0.045 &&
+        bestAreaRatio >= minFinalArea &&
         best.ratio >= options.ratioMin * 0.82 &&
         best.ratio <= options.ratioMax * 1.22 &&
         bestAppearanceOk &&
-        bestCenterOk;
+        (qrAnchoredBest || bestCenterOk);
 
       const bestHasTrustedRedWindow = !!best.hasRedWindow;
       const bestHasRealSample = !!best.hasRealSample;
@@ -2415,7 +2435,7 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
       const forceOkByFinalGate = !!(bestOuterGeometryOk && bestHasTrustedFeature);
       const forceOkByStrongCandidate = !!(
         best.totalScore > 18000 &&
-        bestAreaRatio >= 0.045 &&
+        bestAreaRatio >= (qrAnchoredBest ? 0.020 : 0.045) &&
         best.appearanceDetail &&
         best.appearanceDetail.trustedBrightCard &&
         (bestHasTrustedRedWindow || bestHasRealSample)
@@ -2424,7 +2444,7 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
         !bestHasTrustedFeature &&
         bestOuterGeometryOk &&
         best.outerScore >= 9000 &&
-        bestAreaRatio >= 0.075 &&
+        bestAreaRatio >= (qrAnchoredBest ? 0.028 : 0.075) &&
         best.ratio >= 2.5 &&
         best.ratio <= 5.2 &&
         best.appearanceDetail &&
