@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="theme-color" content="#f4f6fb" />
   <title>ASAP Check</title>
-  <link rel="stylesheet" href="style.css?v=31.42-share-ct-marker" />
+  <link rel="stylesheet" href="style.css?v=31.43-lossless-fixed-share" />
 </head>
 <body>
   <div class="app compactApp">
@@ -56,7 +56,7 @@
         <button id="startCameraBtn" class="primaryAction" type="button">Open Camera</button>
         <button id="captureBtn" class="primaryAction hidden" type="button">Capture &amp; Detect</button>
         <label id="galleryLabel" class="fileBtn secondary">Choose Photo<input id="galleryInput" type="file" accept="image/*" /></label>
-        <button id="shareAnalysisBtn" class="secondaryBtn shareAnalysisBtn hidden" type="button">Share Analysis Image</button>
+        <button id="shareAnalysisBtn" class="secondaryBtn shareAnalysisBtn" type="button" disabled aria-disabled="true">Share Analysis Image</button>
         <button id="closeCameraBtn" class="secondaryBtn hidden" type="button">Close</button>
       </section>
 
@@ -110,7 +110,7 @@
 
   <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
   <script async src="https://docs.opencv.org/4.9.0/opencv.js" onload="window.__opencvLoaded && window.__opencvLoaded()"></script>
-  <script src="detector.js?v=31.42-share-ct-marker"></script>
-  <script src="app.js?v=31.42-share-ct-marker"></script>
+  <script src="detector.js?v=31.43-lossless-fixed-share"></script>
+  <script src="app.js?v=31.43-lossless-fixed-share"></script>
 </body>
 </html>

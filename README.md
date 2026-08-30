@@ -1,4 +1,14 @@
-# ASAP Check v31.42 QR Template Cassette + Share Analysis
+# ASAP Check v31.43 QR Template Cassette + Lossless Capture + Fixed Share Layout
+
+## v31.43
+
+- Keeps the v31.42 QR-directed cassette rectification and C/T detection logic unchanged.
+- Camera capture is now transferred to the analysis pipeline as **lossless PNG** instead of JPEG 0.94. This avoids JPEG recompression from flattening very faint C/T contrast and makes the analyzed pixels match the captured frame as closely as the browser permits.
+- No brightness, white-balance, histogram equalization, or contrast enhancement is applied to the displayed corrected cassette. The center panel is a perspective-corrected crop of the original captured pixels.
+- **Share Analysis Image** now always occupies the same full-width second row in the action area. Before the first successful analysis it remains visible but disabled.
+- Camera layout is now: `Capture & Detect` + `Close` on the first row, then `Share Analysis Image` on the second row.
+- Result layout is now: `Open Camera` + `Choose Photo` on the first row, then `Share Analysis Image` on the second row.
+- If a previous analysis already exists when the camera is reopened, Share remains enabled and stays in the same position.
 
 ## v31.42
 

@@ -334,6 +334,12 @@
     if (captureBtn) captureBtn.classList.remove('hidden');
     if (closeCameraBtn) closeCameraBtn.classList.remove('hidden');
     if (galleryLabel) galleryLabel.classList.add('hidden');
+    if (shareAnalysisBtn) {
+      const hasAnalysis = !!(combinedCanvas && combinedCanvas.width && combinedCanvas.height);
+      shareAnalysisBtn.classList.remove('hidden');
+      shareAnalysisBtn.disabled = !hasAnalysis;
+      shareAnalysisBtn.setAttribute('aria-disabled', hasAnalysis ? 'false' : 'true');
+    }
   }
 
   function showDetectionStage(hasImage) {
@@ -345,7 +351,13 @@
     if (captureBtn) captureBtn.classList.add('hidden');
     if (closeCameraBtn) closeCameraBtn.classList.add('hidden');
     if (galleryLabel) galleryLabel.classList.remove('hidden');
-    if (shareAnalysisBtn) shareAnalysisBtn.classList.toggle('hidden', !hasImage);
+    if (shareAnalysisBtn) {
+      // Keep the Share button in a fixed layout slot before and after capture.
+      // It is disabled until an analysis canvas exists instead of being hidden.
+      shareAnalysisBtn.classList.remove('hidden');
+      shareAnalysisBtn.disabled = !hasImage;
+      shareAnalysisBtn.setAttribute('aria-disabled', hasImage ? 'false' : 'true');
+    }
   }
 
 
@@ -718,7 +730,9 @@
       if (cameraStatus) cameraStatus.textContent = 'Capture failed. Please try again.';
     };
     try {
-      img.src = shot.toDataURL('image/jpeg', 0.94);
+      // Preserve the exact camera frame. JPEG recompression can flatten very faint C/T contrast on iPhone.
+      // PNG is lossless, so the detector and the shared diagnostic image see the same pixels.
+      img.src = shot.toDataURL('image/png');
     } catch (ex) {
       console.error('Capture conversion failed:', ex);
       captureBusy = false;

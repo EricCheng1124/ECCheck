@@ -91,3 +91,12 @@
 /* v31.42: share the exact three-column analysis canvas. */
 .shareAnalysisBtn{grid-column:1/-1;background:#334155}
 .shareAnalysisBtn:disabled{opacity:.65;cursor:wait}
+
+
+/* v31.43: stable action layout.
+   Camera: Capture + Close on row 1, Share on row 2.
+   Result: Open Camera + Choose Photo on row 1, Share on row 2. */
+#startCameraBtn,#captureBtn{order:1}
+#galleryLabel,#closeCameraBtn{order:2}
+#shareAnalysisBtn{order:3;grid-column:1/-1}
+#shareAnalysisBtn:disabled{opacity:.52;cursor:not-allowed}

@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v31.42-qr-template-cassette-share-ct-marker';
+  const VERSION = 'v31.43-qr-template-cassette-lossless-share-layout';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
