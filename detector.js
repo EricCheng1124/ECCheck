@@ -1640,10 +1640,16 @@
     const cRed = refinePeakToRedLine(cQ.y, cRefineRange, 'faintT');
     const tRed = refinePeakToRedLine(tQ.y, tRefineRange, 'faintT');
 
-    // refine 後，把實際畫線/Debug 的 y 改成真正連續線段的位置。
-    // score 保留原 peak score，因為它代表波峰強度；y 則改成紅線中心。
-    if (cRed && cRed.ok) cQ.y = cRed.localY;
-    if (tRed && tRed.ok) tQ.y = tRed.localY;
+    // v31.44 IMPORTANT:
+    // cQ.y / tQ.y are the ACTUAL selected 1-D profile peak positions.
+    // Do NOT overwrite them with the red-continuity refinement row.
+    // The previous behaviour made the C/T marker visibly miss the red profile peak,
+    // even though refinement was only intended as a validation gate.
+    // cRed/tRed remain independent evidence used by cDetected/tDetected below.
+    // This guarantees the green C / purple T guide is drawn exactly at the peak
+    // that produced the peak score shown in the analysis image.
+    cQ.refinedLocalY = (cRed && cRed.ok) ? cRed.localY : cQ.y;
+    tQ.refinedLocalY = (tRed && tRed.ok) ? tRed.localY : tQ.y;
 
     const cDetected = !!(
       cQ &&
@@ -1737,7 +1743,7 @@
     );
 
     return {
-      source:'ct-combined-pink-dark-profile-v31-16-faint-t-red-line',
+      source:'ct-combined-profile-v31-44-peak-locked-red-validation',
       x0, x1, y0, y1, h,
       zone:{x:x0, y:y0, w:Math.max(1, x1-x0), h:Math.max(1, y1-y0), startRatio:ctStartRatio, endRatio:ctEndRatio, widthRatio:ctEndRatio-ctStartRatio, topThirdY:Math.round(topThirdY), topThirdPadding:topThirdPadding, yLimitedByTopThird:(ctY0Float > windowInnerTop + 0.5)},
       raw, profile:positive, baseline:bg, rawBaseline, rawMedian, rawMax, pinkMax, darkMax, combinedMax, selectedMode, lumBackground, lumMedian, mean:stat.mean, std:stat.std,

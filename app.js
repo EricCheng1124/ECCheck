@@ -335,10 +335,11 @@
     if (closeCameraBtn) closeCameraBtn.classList.remove('hidden');
     if (galleryLabel) galleryLabel.classList.add('hidden');
     if (shareAnalysisBtn) {
-      const hasAnalysis = !!(combinedCanvas && combinedCanvas.width && combinedCanvas.height);
-      shareAnalysisBtn.classList.remove('hidden');
-      shareAnalysisBtn.disabled = !hasAnalysis;
-      shareAnalysisBtn.setAttribute('aria-disabled', hasAnalysis ? 'false' : 'true');
+      // v31.44: while the camera is open / before a new capture finishes,
+      // do not show the share button. It appears only after analysis completes.
+      shareAnalysisBtn.classList.add('hidden');
+      shareAnalysisBtn.disabled = true;
+      shareAnalysisBtn.setAttribute('aria-disabled', 'true');
     }
   }
 
@@ -352,9 +353,8 @@
     if (closeCameraBtn) closeCameraBtn.classList.add('hidden');
     if (galleryLabel) galleryLabel.classList.remove('hidden');
     if (shareAnalysisBtn) {
-      // Keep the Share button in a fixed layout slot before and after capture.
-      // It is disabled until an analysis canvas exists instead of being hidden.
-      shareAnalysisBtn.classList.remove('hidden');
+      // v31.44: Share is visible only when a newly analysed image exists.
+      shareAnalysisBtn.classList.toggle('hidden', !hasImage);
       shareAnalysisBtn.disabled = !hasImage;
       shareAnalysisBtn.setAttribute('aria-disabled', hasImage ? 'false' : 'true');
     }

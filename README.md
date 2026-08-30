@@ -1,6 +1,6 @@
-# ASAP Check v31.43 QR Template Cassette + Lossless Capture + Fixed Share Layout
+# ASAP Check v31.44 QR Template Cassette + Lossless Capture + Fixed Share Layout
 
-## v31.43
+## v31.44
 
 - Keeps the v31.42 QR-directed cassette rectification and C/T detection logic unchanged.
 - Camera capture is now transferred to the analysis pipeline as **lossless PNG** instead of JPEG 0.94. This avoids JPEG recompression from flattening very faint C/T contrast and makes the analyzed pixels match the captured frame as closely as the browser permits.
@@ -151,3 +151,12 @@ Compact mobile reader UI based on detector v31.20.
 - Allows tolerant continuity recovery for a blurred/faint C while retaining score and position requirements.
 - Waits for a real video frame before first capture on iPhone/Safari and automatically retries readiness for up to 2.5 seconds.
 - Prevents double capture and reports a retry message instead of silently doing nothing.
+
+
+## v31.44 - Peak-locked C/T markers + capture-only Share
+
+- C/T marker Y positions are now locked to the actual selected 1-D profile peaks.
+- Red-line continuity refinement is retained only as validation evidence and can no longer move the visible C/T marker away from its profile peak.
+- The Share Analysis Image button is hidden whenever the camera is open or a new capture has not finished.
+- Share Analysis Image appears only after a photo has completed analysis.
+- Starting a retake immediately hides Share Analysis Image until the new analysis is available.
