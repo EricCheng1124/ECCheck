@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v31.46-qr-anchored-ct-bands';
+  const VERSION = 'v31.47-qr-anchored-ct-bands-lower';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -1407,7 +1407,7 @@
       return best;
     }
 
-    // v31.46：QR-anchored C/T geometry.
+    // v31.47：QR-anchored C/T geometry，依新一批實拍將 C/T 固定帶整體下移。
     // 這一代卡匣的 QR、試紙中心線與 C/T 線具有固定幾何關係。
     // 外框透視校正後，以 QR 尺寸 Q 當尺規，QR 中心線就是試紙中心線；
     // C/T 不再在整片 Window/slot 內自由找峰，避免把塑膠槽邊緣陰影誤判成 C/T。
@@ -1423,11 +1423,13 @@
     const x0 = clamp(Math.floor(stripCenterX - stripHalfWidth), 0, W-1);
     const x1 = clamp(Math.ceil(stripCenterX + stripHalfWidth), x0 + 1, W);
 
-    // 26 張新卡匣的幾何：C 約在 QR bottom + 0.72Q，T 約在 + 0.98Q。
-    // 只在預期位置附近 ±0.12Q 搜尋，超出此範圍的陰影峰沒有資格成為 C/T。
-    const cExpectedAbsY = qrBottomY + qSide * 0.72;
-    const tExpectedAbsY = qrBottomY + qSide * 0.98;
-    const bandHalf = Math.max(5, qSide * 0.12);
+    // v31.47：依 15:53~16:12 這批實拍校正，v31.46 的 C/T band 明顯太靠近 QR。
+    // 保持 QR 中線作為 X 硬條件，只把 Y 幾何整組下移；不靠放大搜尋區來補償。
+    // C 約在 QR bottom + 1.00Q，T 約在 QR bottom + 1.26Q。
+    // 搜尋帶略收窄至 ±0.10Q，降低槽上緣、塑膠邊緣陰影混入候選。
+    const cExpectedAbsY = qrBottomY + qSide * 1.00;
+    const tExpectedAbsY = qrBottomY + qSide * 1.26;
+    const bandHalf = Math.max(5, qSide * 0.10);
     const y0 = clamp(Math.floor(cExpectedAbsY - bandHalf), 0, H-1);
     const y1 = clamp(Math.ceil(tExpectedAbsY + bandHalf), y0 + 1, H);
     const h = Math.max(1, y1-y0);
@@ -1523,7 +1525,7 @@
       return Math.max(0, quality);
     }
 
-    // v31.46: C and T are selected independently in their QR-anchored bands.
+    // v31.47: C and T are selected independently in the lower, QR-anchored bands.
     // No global pair search: a large shadow elsewhere in the window can never steal C or T.
     function bestPeakInBand(label, range, expectedLocalY) {
       const rawPeak = maxInRange(positive, range.start, range.end);
@@ -1594,7 +1596,7 @@
     );
 
     return {
-      source:'ct-qr-anchored-bands-v31-46',
+      source:'ct-qr-anchored-bands-v31-47',
       x0, x1, y0, y1, h,
       zone:{x:x0, y:y0, w:Math.max(1, x1-x0), h:Math.max(1, y1-y0), startRatio:ctStartRatio, endRatio:ctEndRatio, widthRatio:ctEndRatio-ctStartRatio, topThirdY:Math.round(topThirdY), topThirdPadding:topThirdPadding, yLimitedByTopThird:false, coordinateSystem:'qr-anchored', qrSide:qSide, qrBottomY, stripCenterX, cExpectedAbsY, tExpectedAbsY, bandHalf},
       raw, profile:positive, baseline:bg, rawBaseline, rawMedian, rawMax, pinkMax, darkMax, combinedMax, selectedMode, lumBackground, lumMedian, mean:stat.mean, std:stat.std,

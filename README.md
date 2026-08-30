@@ -1,5 +1,16 @@
 # ASAP Check v31.44 QR Template Cassette + Lossless Capture + Fixed Share Layout
 
+## v31.47 - Lower QR Anchored C/T Bands
+
+- 依最新實拍結果，v31.46 的 C/T 固定搜尋帶太靠近 QR Code。
+- 保留「QR 中心線 = 試紙中心線」的硬幾何條件，X 方向不變。
+- C 預期位置由 `QR bottom + 0.72Q` 下移為 `QR bottom + 1.00Q`。
+- T 預期位置由 `QR bottom + 0.98Q` 下移為 `QR bottom + 1.26Q`。
+- C/T 搜尋半寬由 `±0.12Q` 收窄為 `±0.10Q`，避免把試紙槽上緣或塑膠陰影當成 C/T。
+- CT zone 的 debug 框會跟著新的固定位置下移，方便直接由分享圖核對。
+- Share Analysis Image 行為不變：只有完成本次分析後才顯示，重新拍照時隱藏。
+
+
 ## v31.44
 
 - Keeps the v31.42 QR-directed cassette rectification and C/T detection logic unchanged.
