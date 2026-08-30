@@ -87,3 +87,7 @@
   .testStrip{padding:7px 9px}.compactQrRow{padding:5px 0}
   .resultCompact .result{font-size:23px;min-height:40px;padding:7px 8px}.resultSub{height:22px;line-height:22px}
 }
+
+/* v31.42: share the exact three-column analysis canvas. */
+.shareAnalysisBtn{grid-column:1/-1;background:#334155}
+.shareAnalysisBtn:disabled{opacity:.65;cursor:wait}

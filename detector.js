@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v31.41-qr-template-cassette-fixed-ct';
+  const VERSION = 'v31.42-qr-template-cassette-share-ct-marker';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -1799,14 +1799,30 @@
       ctx.strokeStyle = color;
       ctx.fillStyle = color;
       ctx.lineWidth = Math.max(3, W/82);
-      // Keep the original C/T pixels unobstructed: draw guides only outside
-      // the physical test window.
+      // Keep the real C/T pixels readable. The long guide stays outside the
+      // physical window, while two short edge ticks show the exact sampled Y row.
       ctx.beginPath();
       ctx.moveTo(Math.max(2, win.x - W * 0.08), markerY);
       ctx.lineTo(Math.max(2, win.x - 2), markerY);
       ctx.moveTo(Math.min(W-2, win.x + win.w + 2), markerY);
       ctx.lineTo(axisX + waveW, markerY);
       ctx.stroke();
+
+      if (ct.zone) {
+        const zx0 = clamp(Math.round(ct.zone.x), 2, W - 3);
+        const zx1 = clamp(Math.round(ct.zone.x + ct.zone.w), zx0 + 1, W - 2);
+        const tick = Math.max(4, Math.round((zx1 - zx0) * 0.18));
+        ctx.save();
+        ctx.globalAlpha = 0.82;
+        ctx.lineWidth = Math.max(1.5, W/170);
+        ctx.setLineDash([3,2]);
+        ctx.beginPath();
+        ctx.moveTo(zx0, markerY); ctx.lineTo(Math.min(zx1, zx0 + tick), markerY);
+        ctx.moveTo(Math.max(zx0, zx1 - tick), markerY); ctx.lineTo(zx1, markerY);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.restore();
+      }
 
       // Marker point sits on the waveform axis, not over the real C/T line.
       ctx.beginPath();

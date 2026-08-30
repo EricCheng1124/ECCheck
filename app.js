@@ -17,6 +17,7 @@
   const closeCameraBtn = document.getElementById('closeCameraBtn');
   const cameraStatus = document.getElementById('cameraStatus');
   const galleryInput = document.getElementById('galleryInput');
+  const shareAnalysisBtn = document.getElementById('shareAnalysisBtn');
   const canvas = document.getElementById('canvas');
   const cropCanvas = document.getElementById('cropCanvas');
   const combinedCanvas = document.getElementById('combinedCanvas');
@@ -344,6 +345,85 @@
     if (captureBtn) captureBtn.classList.add('hidden');
     if (closeCameraBtn) closeCameraBtn.classList.add('hidden');
     if (galleryLabel) galleryLabel.classList.remove('hidden');
+    if (shareAnalysisBtn) shareAnalysisBtn.classList.toggle('hidden', !hasImage);
+  }
+
+
+  function canvasToPngBlob(sourceCanvas) {
+    return new Promise((resolve, reject) => {
+      if (!sourceCanvas || !sourceCanvas.width || !sourceCanvas.height) {
+        reject(new Error('No analysis image available'));
+        return;
+      }
+      sourceCanvas.toBlob(blob => {
+        if (blob) resolve(blob);
+        else reject(new Error('Unable to create analysis image'));
+      }, 'image/png');
+    });
+  }
+
+  function makeAnalysisFileName() {
+    const d = new Date();
+    const pad = n => String(n).padStart(2, '0');
+    return `ASAP_Check_Analysis_${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}.png`;
+  }
+
+  async function shareAnalysisImage() {
+    if (!combinedCanvas || !combinedCanvas.width || !combinedCanvas.height || combinedCanvas.classList.contains('hidden')) {
+      alert('Please analyze a photo first.');
+      return;
+    }
+
+    const oldText = shareAnalysisBtn ? shareAnalysisBtn.textContent : '';
+    if (shareAnalysisBtn) {
+      shareAnalysisBtn.disabled = true;
+      shareAnalysisBtn.textContent = 'Preparing...';
+    }
+
+    try {
+      const blob = await canvasToPngBlob(combinedCanvas);
+      const fileName = makeAnalysisFileName();
+      const file = new File([blob], fileName, { type: 'image/png' });
+      const shareData = {
+        title: 'ASAP Check Analysis',
+        text: `ASAP Check result: ${lastResultText || 'Unknown'}`,
+        files: [file]
+      };
+
+      let shared = false;
+      if (navigator.share) {
+        const canShareFile = !navigator.canShare || navigator.canShare({ files: [file] });
+        if (canShareFile) {
+          try {
+            await navigator.share(shareData);
+            shared = true;
+          } catch (err) {
+            if (err && err.name === 'AbortError') return;
+            console.warn('Native file share failed; using PNG fallback.', err);
+          }
+        }
+      }
+
+      if (!shared) {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = fileName;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1500);
+        alert('Sharing is not available in this browser. The analysis PNG has been saved instead.');
+      }
+    } catch (err) {
+      console.error(err);
+      alert('Unable to share the analysis image.');
+    } finally {
+      if (shareAnalysisBtn) {
+        shareAnalysisBtn.disabled = false;
+        shareAnalysisBtn.textContent = oldText || 'Share Analysis Image';
+      }
+    }
   }
 
   function decodeQrImageData(imageData) {
@@ -1164,6 +1244,7 @@ function renderCombinedDetectionView() {
   if (startCameraBtn) startCameraBtn.addEventListener('click', startCamera);
   if (captureBtn) captureBtn.addEventListener('click', captureFromCamera);
   if (closeCameraBtn) closeCameraBtn.addEventListener('click', stopCamera);
+  if (shareAnalysisBtn) shareAnalysisBtn.addEventListener('click', shareAnalysisImage);
   if (rescanQrBtn) rescanQrBtn.addEventListener('click', () => { clearQrData(); if (cameraStream) scheduleLiveQrScan(); });
   galleryInput.addEventListener('change', e => loadFile(e.target.files[0]));
   window.addEventListener('pagehide', () => stopCamera(true));

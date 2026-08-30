@@ -1,4 +1,23 @@
-# ASAP Check v31.39 QR White Cassette + Real Window Gate
+# ASAP Check v31.42 QR Template Cassette + Share Analysis
+
+## v31.42
+
+- Keeps the v31.41 QR-directed cassette rectification and fixed new-cassette C/T analysis geometry.
+- Clarifies the C/T debug overlay: the green `C` and purple `T` markers are the detected peak rows, not the printed C/T letters on the cassette.
+- Adds short dashed ticks at both edges of the cyan `CT zone` so the exact sampled C/T Y positions are visible without covering the real test lines.
+- Adds **Share Analysis Image** below the main controls. It shares the exact three-column analysis canvas (Original Image + corrected cassette/debug overlay + result metadata) as a PNG.
+- On iPhone/Safari and browsers that support Web Share with files, the button opens the native share sheet directly.
+- If file sharing is unavailable, the same PNG is saved as a fallback.
+- Suggested support workflow: run the test -> tap **Share Analysis Image** -> send that PNG for troubleshooting.
+
+## v31.41
+
+- Uses QR geometry to generate whole-cassette candidates instead of allowing a QR-sized region to become the cassette crop.
+- When QR orientation is trusted, the corrected cassette uses a fixed proportional result-slot ROI for this new cassette generation.
+- The cyan `CT zone` is the actual pixel region analyzed for C/T peaks.
+- The green `C` and purple `T` horizontal guides represent the detected peak Y coordinates.
+- The larger blue `Window/slot` rectangle is only the geometric result-slot region; it is intentionally larger than the cyan C/T measurement zone.
+- Keeps the original C/T pixels unobstructed so faint positive lines remain visible in the diagnostic image.
 
 ## v31.39
 
