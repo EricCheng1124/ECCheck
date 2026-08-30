@@ -170,3 +170,14 @@ Compact mobile reader UI based on detector v31.20.
 - C/T markers remain locked to the actual selected 1-D profile peaks.
 - The Window/slot rectangle is retained only as a visual/debug reference; it no longer determines the C/T profile position.
 - Share Analysis Image remains visible only after a completed Capture & Detect / photo analysis. Opening the camera for a new capture hides it until the new analysis finishes.
+
+
+## v31.46 - QR Anchored C/T Bands
+
+- QR code is now the primary geometric ruler for the new cassette.
+- QR center X, test strip center X, C line and T line are treated as one shared centerline.
+- C and T are searched only in narrow fixed bands below the QR code instead of anywhere inside the result window.
+- The analysis profile uses only the central strip area, excluding plastic slot edges.
+- Broad illumination / slot shadows are reduced with local background subtraction before dark-line scoring.
+- C and T are selected independently in their own QR-anchored bands. A large shadow elsewhere cannot steal a C/T label.
+- Share Analysis Image behavior remains: it appears only after a completed analysis and is hidden again when a new camera capture starts.

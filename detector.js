@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v31.45-cassette-fixed-ct-roi';
+  const VERSION = 'v31.46-qr-anchored-ct-bands';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -1407,34 +1407,51 @@
       return best;
     }
 
-    // v31.45：新卡匣的 C/T ROI 不再從淡色 Window/slot 內推算。
-    // 前幾版的 Window contour / fixed window 足以做視覺輔助，但它的寬度較大，
-    // 再取中央 40% 會把 profile 推到真正試紙的左側。
-    // 現在直接使用「透視校正後完整卡匣」的固定比例座標。
-    // QR 端已固定在上方，因此不同距離、旋轉、斜拍都會先歸一到同一座標系。
-    // 這批新卡匣實測：真正反應膜主要位於 cassette X=43~61%，Y=33~55%。
-    const cassetteCtX0 = 0.43;
-    const cassetteCtX1 = 0.61;
-    const cassetteCtY0 = 0.33;
-    const cassetteCtY1 = 0.55;
-    const ctStartRatio = cassetteCtX0;
-    const ctEndRatio = cassetteCtX1;
+    // v31.46：QR-anchored C/T geometry.
+    // 這一代卡匣的 QR、試紙中心線與 C/T 線具有固定幾何關係。
+    // 外框透視校正後，以 QR 尺寸 Q 當尺規，QR 中心線就是試紙中心線；
+    // C/T 不再在整片 Window/slot 內自由找峰，避免把塑膠槽邊緣陰影誤判成 C/T。
+    // buildQrCassetteTemplates() 使用 cassette length ~= 5.35Q，QR center ~= 0.115H，
+    // 因此在標準化卡匣座標中可反推出 Q 與 QR bottom。
+    const qSide = H / 5.35;
+    const qrCenterY = H * 0.115;
+    const qrBottomY = qrCenterY + qSide * 0.50;
+    const stripCenterX = W * 0.50;
 
-    const x0 = clamp(Math.floor(W * cassetteCtX0), 0, W-1);
-    const x1 = clamp(Math.ceil(W * cassetteCtX1), x0 + 1, W);
-    const y0 = clamp(Math.floor(H * cassetteCtY0), 0, H-1);
-    const y1 = clamp(Math.ceil(H * cassetteCtY1), y0 + 1, H);
+    // 只取 QR 同中線附近的中央試紙，主動避開結果槽左右塑膠邊緣。
+    const stripHalfWidth = Math.max(3, Math.min(W * 0.085, qSide * 0.14));
+    const x0 = clamp(Math.floor(stripCenterX - stripHalfWidth), 0, W-1);
+    const x1 = clamp(Math.ceil(stripCenterX + stripHalfWidth), x0 + 1, W);
+
+    // 26 張新卡匣的幾何：C 約在 QR bottom + 0.72Q，T 約在 + 0.98Q。
+    // 只在預期位置附近 ±0.12Q 搜尋，超出此範圍的陰影峰沒有資格成為 C/T。
+    const cExpectedAbsY = qrBottomY + qSide * 0.72;
+    const tExpectedAbsY = qrBottomY + qSide * 0.98;
+    const bandHalf = Math.max(5, qSide * 0.12);
+    const y0 = clamp(Math.floor(cExpectedAbsY - bandHalf), 0, H-1);
+    const y1 = clamp(Math.ceil(tExpectedAbsY + bandHalf), y0 + 1, H);
     const h = Math.max(1, y1-y0);
+
+    const cExpectedLocalY = cExpectedAbsY - y0;
+    const tExpectedLocalY = tExpectedAbsY - y0;
+    const cSearchRange = {
+      start: clamp(Math.floor(cExpectedLocalY - bandHalf), 0, h-1),
+      end: clamp(Math.ceil(cExpectedLocalY + bandHalf), 0, h-1)
+    };
+    const tSearchRange = {
+      start: clamp(Math.floor(tExpectedLocalY - bandHalf), 0, h-1),
+      end: clamp(Math.ceil(tExpectedLocalY + bandHalf), 0, h-1)
+    };
 
     // Debug compatibility fields retained for the existing Advanced Info panel.
     const topThirdY = H / 3;
     const topThirdPadding = 0;
     const windowInnerTop = win.y;
     const ctY0Float = y0;
+    const ctStartRatio = x0 / Math.max(1,W);
+    const ctEndRatio = x1 / Math.max(1,W);
 
-    // v31.11：CT 不只看紅/粉紅，也看暗線。
-    // 有些 C 線偏灰紫或很淡，RedScore 會接近 0；但線本身仍比周圍暗。
-    // 因此建立三個 profile：pink、dark、combined = max(pink, dark)。
+    // Profile still combines chroma and darkness, but geometry is now the primary gate.
     const pinkRaw = [];
     const lumRaw = [];
     for (let yy=y0; yy<y1; yy++) {
@@ -1453,10 +1470,9 @@
       lumRaw.push(n ? lumSum/n : 0);
     }
 
-    const pinkSmooth = smoothProfile(pinkRaw, Math.max(2, Math.round(h*0.012)));
-    const lumSmooth = smoothProfile(lumRaw, Math.max(2, Math.round(h*0.012)));
+    const pinkSmooth = smoothProfile(pinkRaw, Math.max(1, Math.round(h*0.018)));
+    const lumSmooth = smoothProfile(lumRaw, Math.max(1, Math.round(h*0.018)));
 
-    // v31.9：local/low-percentile baseline；v31.11：分別建立 pink 與 dark baseline。
     function percentile(arr, p) {
       if (!arr || !arr.length) return 0;
       const a = arr.slice().sort((x,y)=>x-y);
@@ -1469,15 +1485,16 @@
     const pinkBg = Math.max(0, Math.min(pinkBaseline, pinkMedian));
     const pinkPositive = pinkSmooth.map(v=>Math.max(0, v-pinkBg));
 
-    // 暗線：用高分位亮度當背景，線段越暗，分數越高。
-    // 用 0.72 分位而不是 max，可避免局部反光把暗線分數拉太高。
+    // Local-background subtraction suppresses broad lighting gradients.
+    // A true horizontal C/T line survives this high-pass operation; broad slot shadows do not.
     const lumBackground = percentile(lumSmooth, 0.72);
     const lumMedian = median(lumSmooth);
     const darkRaw = lumSmooth.map(v=>Math.max(0, lumBackground - v));
-    const darkSmooth = smoothProfile(darkRaw, Math.max(1, Math.round(h*0.006)));
+    const broadDark = smoothProfile(darkRaw, Math.max(3, Math.round(h*0.10)));
+    const darkHighPass = darkRaw.map((v,i)=>Math.max(0, v - broadDark[i] * 0.82));
+    const darkSmooth = smoothProfile(darkHighPass, Math.max(1, Math.round(h*0.012)));
 
-    // 讓暗線分數與 pink 分數同量級；避免純陰影梯度全面壓過粉紅峰。
-    const darkWeight = 0.88;
+    const darkWeight = 0.72;
     const positive = pinkPositive.map((v,i)=>Math.max(v, darkSmooth[i] * darkWeight));
 
     const raw = positive.slice();
@@ -1493,18 +1510,12 @@
     const bg = 0;
     const stat = meanStd(positive);
     const maxScore = Math.max(1, ...positive);
-    const threshold = Math.max(4.8, stat.mean + stat.std * 1.10, maxScore * 0.18);
-
-    const fullRange = {start:0, end:h-1};
-    const minSep = Math.max(10, Math.round(h * 0.13));
-    const candidateFloor = Math.max(3.8, threshold * 0.58);
+    const threshold = Math.max(4.2, stat.mean + stat.std * 1.00, maxScore * 0.16);
+    const candidateFloor = Math.max(3.2, threshold * 0.52);
+    const minSep = Math.max(6, Math.round(qSide * 0.16));
 
     function calcQuality(q) {
-      // v31.8：shoulder 不再直接 reject，而是扣分。
-      // 原因：淡線旁邊也可能有小平台，直接 reject 會漏掉真正 C/T。
       let quality = q.score;
-      // v31.10：Width 僅保留 Debug，不再扣分。
-      // 主要用 score / shoulder / drop 來決定峰值品質。
       quality *= Math.max(0.18, 1 - q.shoulderRatio * 0.55);
       quality *= Math.max(0.18, 1 - q.nearShoulderRatio * 0.38);
       quality *= Math.max(0.22, 1 - Math.max(0, q.shoulderMaxRatio - 0.55) * 0.55);
@@ -1512,242 +1523,80 @@
       return Math.max(0, quality);
     }
 
-    function findLocalPeaks(profile) {
-      const peaks = [];
-      const guard = Math.max(2, Math.round(h * 0.010));
-      for (let y=guard; y<profile.length-guard; y++) {
-        const v = profile[y];
-        if (v < candidateFloor) continue;
-        let isPeak = true;
-        for (let k=1; k<=guard; k++) {
-          if (profile[y-k] > v || profile[y+k] > v) { isPeak = false; break; }
-        }
-        if (!isPeak) continue;
-        // 避免同一個寬峰產生太多相鄰小峰。
-        if (peaks.length && y - peaks[peaks.length-1].y < Math.max(3, guard*2)) {
-          if (v > peaks[peaks.length-1].score) peaks[peaks.length-1] = {y, score:v};
-        } else {
-          peaks.push({y, score:v});
-        }
-      }
-      return peaks;
-    }
-
-    const rawPeaks = findLocalPeaks(positive);
-
-    // Perspective correction can turn a narrow line into a short plateau,
-    // which has no strict local maximum. Recover strong maxima from the
-    // non-overlapping expected C and T zones before peak qualification.
-    const expectedCRange = {start:Math.round(h*0.08), end:Math.round(h*0.48)};
-    const expectedTRange = {start:Math.round(h*0.52), end:Math.round(h*0.84)};
-    const expectedCandidates = [
-      Object.assign(maxInRange(positive, expectedCRange.start, expectedCRange.end), {synthetic:'expected-C'}),
-      Object.assign(maxInRange(positive, expectedTRange.start, expectedTRange.end), {synthetic:'expected-T'})
-    ];
-    for (const q of expectedCandidates) {
-      if (q.score < candidateFloor) continue;
-      if (rawPeaks.some(p=>Math.abs(p.y-q.y)<Math.max(3,Math.round(minSep*0.35)))) continue;
-      rawPeaks.push(q);
-    }
-    const allPeaks = rawPeaks.map(p => {
-      const q = qualifyPeak(positive, p, threshold, fullRange, h, 'P');
-      const quality = calcQuality(q);
-      // v31.12：動態峰只用 score / threshold 決定是否可選。
-      // quality、shoulder、width 只做排序輔助與 warning，不再直接 reject。
-      let reject = '';
-      if (q.score < threshold) reject = 'below-threshold';
-      return Object.assign({}, q, {
-        synthetic: p.synthetic || '',
-        quality,
-        detected: !reject,
-        reject: reject || 'PASS'
-      });
-    }).sort((a,b)=>b.score-a.score);
-
-    const selected = [];
-    for (const p of allPeaks) {
-      // v31.13：這裡只負責「挑候選 peak」，不要先用全域 threshold 殺掉 T。
-      // T 線是否成立，後面會用相對門檻 + 連續紅色再判斷。
-      if (selected.some(s=>Math.abs(s.y - p.y) < minSep)) continue;
-      selected.push(p);
-      if (selected.length >= 3) break;
-    }
-    selected.forEach(p => { p.selected = true; });
-    selected.sort((a,b)=>a.y-b.y);
-
-    let cQ = null;
-    let tQ = null;
-    const upperLimit = h * 0.58;
-
-    if (selected.length >= 2) {
-      // 取上下距離足夠的前兩個峰；上方 = C，下方 = T。
-      let bestPair = null;
-      let bestPairScore = -Infinity;
-      for (let i=0; i<selected.length; i++) {
-        for (let j=i+1; j<selected.length; j++) {
-          const dy = selected[j].y - selected[i].y;
-          if (dy < minSep) continue;
-          const pairScore = selected[i].score + selected[j].score + Math.min(1, dy / Math.max(1, h*0.28)) * threshold * 0.25;
-          if (pairScore > bestPairScore) { bestPairScore = pairScore; bestPair = [selected[i], selected[j]]; }
-        }
-      }
-      if (bestPair) { cQ = bestPair[0]; tQ = bestPair[1]; }
-    }
-
-    if (!cQ && selected.length === 1) {
-      if (selected[0].y <= upperLimit) cQ = selected[0];
-      else tQ = selected[0];
-    }
-
-    // 顯示用 fallback：即使沒有 detected，也列出 C/T 區域附近最強峰，方便 debug。
-    const cFallbackRange = {start:Math.round(h*0.08), end:Math.round(h*0.54)};
-    const tFallbackRange = {start:Math.round(h*0.43), end:Math.round(h*0.84)};
-    function fallbackPeak(label, range) {
-      const raw = maxInRange(positive, range.start, range.end);
-      const q = qualifyPeak(positive, raw, threshold, range, h, label);
+    // v31.46: C and T are selected independently in their QR-anchored bands.
+    // No global pair search: a large shadow elsewhere in the window can never steal C or T.
+    function bestPeakInBand(label, range, expectedLocalY) {
+      const rawPeak = maxInRange(positive, range.start, range.end);
+      const q = qualifyPeak(positive, rawPeak, threshold, range, h, label);
       q.quality = calcQuality(q);
-      q.selected = false;
+      q.selected = q.score >= candidateFloor;
       q.detected = false;
-      if (q.score < threshold) q.reject = 'below-threshold';
-      else q.reject = q.reject || 'not-selected';
+      q.expectedY = expectedLocalY;
+      q.expectedAbsY = y0 + expectedLocalY;
+      q.distanceFromExpected = Math.abs(q.y - expectedLocalY);
+      q.reject = q.selected ? 'candidate' : 'below-candidate-floor';
       return q;
     }
-    if (!cQ) cQ = fallbackPeak('C', cFallbackRange);
-    if (!tQ) tQ = fallbackPeak('T', tFallbackRange);
 
-    cQ.label = 'C';
-    tQ.label = 'T';
+    let cQ = bestPeakInBand('C', cSearchRange, cExpectedLocalY);
+    let tQ = bestPeakInBand('T', tSearchRange, tExpectedLocalY);
+    const cSelected = !!cQ.selected;
+    const tSelected = !!tQ.selected;
+    const selected = [cQ,tQ].filter(q=>q.selected);
+    const allPeaks = [cQ,tQ];
 
-    // v31.13：Peak 選出後，再用「分數門檻 + 連續紅色」做最後 detected。
-    // C 線：維持全域 threshold。
-    // T 線：改成相對 C 線門檻，避免淡 T 被全域 threshold 誤殺。
-    const cSelected = selected.includes(cQ);
-    const tSelected = selected.includes(tQ);
-    let cRefineRange = Object.assign({}, cFallbackRange);
-    let tRefineRange = Object.assign({}, tFallbackRange);
+    let cRefineRange = Object.assign({}, cSearchRange);
+    let tRefineRange = Object.assign({}, tSearchRange);
 
-    // Two selected peaks must remain two separate lines during refinement.
-    // The previous overlapping ranges could pull both C and T onto the same
-    // stronger row. Split their search areas at the midpoint of the raw peaks.
-    if (cSelected && tSelected && tQ.y > cQ.y) {
-      const splitY = Math.round((cQ.y + tQ.y) / 2);
-      const splitGuard = Math.max(1, Math.round(minSep * 0.12));
-      cRefineRange.end = Math.min(cRefineRange.end, splitY - splitGuard);
-      tRefineRange.start = Math.max(tRefineRange.start, splitY + splitGuard);
-    }
-
-    // C can also become faint/soft after an angled perspective warp. It still
-    // needs peak score and position gates, but uses the same tolerant line
-    // continuity recovery as a faint T.
+    // Never allow validation refinement to leave the physical QR-anchored band.
     const cRed = refinePeakToRedLine(cQ.y, cRefineRange, 'faintT');
     const tRed = refinePeakToRedLine(tQ.y, tRefineRange, 'faintT');
-
-    // v31.44 IMPORTANT:
-    // cQ.y / tQ.y are the ACTUAL selected 1-D profile peak positions.
-    // Do NOT overwrite them with the red-continuity refinement row.
-    // The previous behaviour made the C/T marker visibly miss the red profile peak,
-    // even though refinement was only intended as a validation gate.
-    // cRed/tRed remain independent evidence used by cDetected/tDetected below.
-    // This guarantees the green C / purple T guide is drawn exactly at the peak
-    // that produced the peak score shown in the analysis image.
     cQ.refinedLocalY = (cRed && cRed.ok) ? cRed.localY : cQ.y;
     tQ.refinedLocalY = (tRed && tRed.ok) ? tRed.localY : tQ.y;
 
-    const cDetected = !!(
-      cQ &&
-      cSelected &&
-      cQ.score >= threshold &&
-      cRed.ok
-    );
+    // Geometry distance gate. Peaks at the extreme edge of the narrow band are suspicious.
+    const maxExpectedError = bandHalf * 0.92;
+    const cGeometryOk = cQ.distanceFromExpected <= maxExpectedError;
+    const tGeometryOk = tQ.distanceFromExpected <= maxExpectedError;
 
-    const tThreshold = Math.min(
-      threshold * 0.65,
-      cQ ? cQ.score * 0.35 : threshold
-    );
-
+    const cDetected = !!(cSelected && cQ.score >= threshold && cRed.ok && cGeometryOk);
+    const tThreshold = Math.min(threshold * 0.65, cQ && cQ.score > 0 ? cQ.score * 0.36 : threshold);
     const tcRatio = cQ && cQ.score > 0 ? tQ.score / cQ.score : 0;
 
-    // v31.19：T 線加回 shape gate。
-    // 目的：保留淡 T 線，但排除大面積陰影/底色平台造成的假 T。
-    // 真 T 可以淡，但仍應該具備一定 sharpness / quality，且不能寬到像整片平台。
     const tCoreWidth = tQ ? (tQ.halfWidth || tQ.width || 9999) : 9999;
     const tCoreSharpness = tQ ? (tQ.halfSharpness || tQ.sharpness || 0) : 0;
+    const tShapeOk = !!(tQ &&
+      tCoreSharpness >= 0.50 &&
+      tCoreWidth <= Math.max(14, (tQ.maxWidth || 1) * 3.0) &&
+      ((tQ.quality || 0) >= 1.5 || tcRatio >= 0.45));
 
-    // v31.20：T shape gate 改看 half-width 核心寬度，不再看容易被背景緩坡放大的 full width。
-    // 這樣清楚陽性的 T 線不會因 full width=100+ 被誤殺；真正平台型假 T 仍會因 core 太寬/太鈍被踢掉。
-    const tWeakShapeOk = !!(
-      tQ &&
-      tCoreSharpness >= 0.85 &&
-      tCoreWidth <= Math.max(12, (tQ.maxWidth || 1) * 2.4) &&
-      ((tQ.quality || 0) >= 1.8 || tcRatio >= 0.55)
-    );
-
-    const tStrongShapeOk = !!(
-      tQ &&
-      tcRatio >= 0.45 &&
-      tCoreSharpness >= 0.55 &&
-      tCoreWidth <= Math.max(16, (tQ.maxWidth || 1) * 3.2)
-    );
-
-    const tShapeOk = tWeakShapeOk || tStrongShapeOk;
-    const refinedSeparationOk = !!(
-      cRed && tRed &&
+    const refinedSeparationOk = !!(cRed && tRed &&
       tRed.absY > cRed.absY &&
-      (tRed.absY - cRed.absY) >= Math.max(3, minSep * 0.45)
-    );
+      (tRed.absY - cRed.absY) >= Math.max(3, minSep * 0.55));
 
-    // 最下緣常是試紙/塑膠槽的水平邊界。即使有明暗峰，也不能當 T。
-    const edgeGuard = Math.max(4, Math.round(h * 0.08));
-    const tAwayFromBottomEdge = !!(tRed && tRed.absY <= y1 - edgeGuard);
-
-    const tDetected = !!(
-      tQ &&
-      tSelected &&
-      cDetected &&
-      tQ.score >= tThreshold &&
-      tRed.ok &&
-      refinedSeparationOk &&
-      tAwayFromBottomEdge &&
-      tShapeOk
-    );
+    const tDetected = !!(tSelected && cDetected && tQ.score >= tThreshold &&
+      tRed.ok && tGeometryOk && refinedSeparationOk && tShapeOk);
 
     cQ.detected = cDetected;
     tQ.detected = tDetected;
-
-    if (!cSelected) cQ.reject = 'not-selected';
-    else if (cQ.score < threshold) cQ.reject = 'below-threshold';
-    else if (!cRed.ok) cQ.reject = 'no-red-continuity';
-    else cQ.reject = 'PASS';
-
-    if (!tSelected) tQ.reject = 'not-selected';
-    else if (tQ.score < tThreshold) tQ.reject = 'below-relative-threshold';
-    else if (!tRed.ok) tQ.reject = 'no-red-continuity';
-    else if (!refinedSeparationOk) tQ.reject = 'ct-refined-to-same-line';
-    else if (!tAwayFromBottomEdge) tQ.reject = 'too-close-to-window-bottom-edge';
-    else if (!tShapeOk) tQ.reject = 'bad-t-shape-platform';
-    else tQ.reject = 'PASS';
-
-    // 防呆：單峰若在下半部，只能算 T-like，沒有 C，所以 Invalid。
-    if (selected.length === 1 && selected[0].y > upperLimit) {
-      cQ.detected = false;
-    }
+    cQ.reject = !cSelected ? 'below-candidate-floor' : !cGeometryOk ? 'outside-qr-c-band' : cQ.score < threshold ? 'below-threshold' : !cRed.ok ? 'no-red-continuity' : 'PASS';
+    tQ.reject = !tSelected ? 'below-candidate-floor' : !tGeometryOk ? 'outside-qr-t-band' : tQ.score < tThreshold ? 'below-relative-threshold' : !tRed.ok ? 'no-red-continuity' : !refinedSeparationOk ? 'ct-too-close' : !tShapeOk ? 'bad-t-shape' : 'PASS';
 
     let result = 'Invalid';
     if (cDetected && tDetected) result = 'Positive';
     else if (cDetected && !tDetected) result = 'Negative';
-    else result = 'Invalid';
 
     const cRange = {start:cRefineRange.start, end:cRefineRange.end};
     const tRange = {start:tRefineRange.start, end:tRefineRange.end};
 
-    const peakDebug = allPeaks.slice(0, 8).map(p =>
-      `y=${(y0+p.y).toFixed(0)}, score=${p.score.toFixed(1)}, q=${p.quality.toFixed(1)}, selected=${p.selected ? 'YES' : 'NO'}, w=${p.width}, shoulder=${p.shoulderRatio.toFixed(2)}, near=${p.nearShoulderRatio.toFixed(2)}, reject=${p.reject}, warning=${p.warning || '-'}`
+    const peakDebug = allPeaks.map(p =>
+      `${p.label} y=${(y0+p.y).toFixed(0)}, exp=${(p.expectedAbsY||0).toFixed(0)}, d=${(p.distanceFromExpected||0).toFixed(1)}, score=${p.score.toFixed(1)}, q=${(p.quality||0).toFixed(1)}, selected=${p.selected ? 'YES':'NO'}, reject=${p.reject}`
     );
 
     return {
-      source:'ct-cassette-fixed-roi-v31-45-peak-locked',
+      source:'ct-qr-anchored-bands-v31-46',
       x0, x1, y0, y1, h,
-      zone:{x:x0, y:y0, w:Math.max(1, x1-x0), h:Math.max(1, y1-y0), startRatio:ctStartRatio, endRatio:ctEndRatio, widthRatio:ctEndRatio-ctStartRatio, topThirdY:Math.round(topThirdY), topThirdPadding:topThirdPadding, yLimitedByTopThird:false, coordinateSystem:'cassette-fixed', cassetteX0:cassetteCtX0, cassetteX1:cassetteCtX1, cassetteY0:cassetteCtY0, cassetteY1:cassetteCtY1},
+      zone:{x:x0, y:y0, w:Math.max(1, x1-x0), h:Math.max(1, y1-y0), startRatio:ctStartRatio, endRatio:ctEndRatio, widthRatio:ctEndRatio-ctStartRatio, topThirdY:Math.round(topThirdY), topThirdPadding:topThirdPadding, yLimitedByTopThird:false, coordinateSystem:'qr-anchored', qrSide:qSide, qrBottomY, stripCenterX, cExpectedAbsY, tExpectedAbsY, bandHalf},
       raw, profile:positive, baseline:bg, rawBaseline, rawMedian, rawMax, pinkMax, darkMax, combinedMax, selectedMode, lumBackground, lumMedian, mean:stat.mean, std:stat.std,
       maxScore, threshold, tThreshold, tcRatio, candidateFloor, minSep,
       cRange, tRange,
