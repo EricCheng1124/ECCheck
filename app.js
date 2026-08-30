@@ -752,7 +752,7 @@ function renderCombinedDetectionView() {
 
   function resizeAndDrawImage(img) {
     // 保留更多原始像素：這批新卡匣遠拍時 QR/淡 C-T 線都偏小。
-    const maxW = 1280;
+    const maxW = 1600;
     const scale = Math.min(1, maxW / img.naturalWidth);
     canvas.width = Math.round(img.naturalWidth * scale);
     canvas.height = Math.round(img.naturalHeight * scale);

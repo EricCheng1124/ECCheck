@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v31.40-new-cassette-small-qr-fixed-slot';
+  const VERSION = 'v31.41-qr-template-cassette-fixed-ct';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -965,15 +965,16 @@
   }
 
   function fixedWindowForNewCassette(W, H, orientation) {
-    // 2026-08 新卡匣：QR 在物理上端，判讀槽固定落在卡匣中央偏上。
-    // 只有 QR 已成功提供方向時才允許拿這個比例框直接做 C/T 分析。
-    // ROI 故意比肉眼看到的槽略大，讓不同拍攝角度/透視校正後仍包住 C/T。
+    // v31.41：這一代卡匣的結果槽位置固定。外框先透視校正後，
+    // 直接以整支卡匣為座標系，不再讓淡色塑膠槽 contour 決定 C/T ROI。
+    // 實測 26 張陽性照：結果槽約落在 x=18~66%、y=23.5~60%。
+    // inverted 僅保留給沒有 QR 的舊流程；QR 模式會先把 QR 端校正到上方。
     const inverted = orientation === 'inverted';
-    const y0 = inverted ? 0.38 : 0.30;
-    const y1 = inverted ? 0.70 : 0.62;
-    const x0 = 0.27, x1 = 0.73;
+    const x0 = 0.18, x1 = 0.66;
+    const y0 = inverted ? 0.40 : 0.235;
+    const y1 = inverted ? 0.765 : 0.60;
     const b = makeRatioBox(W, H, x0, y0, x1, y1);
-    return {x:b.x, y:b.y, w:b.w, h:b.h, cx:b.cx, cy:b.cy, source:'qr-fixed-window-new-cassette'};
+    return {x:b.x, y:b.y, w:b.w, h:b.h, cx:b.cx, cy:b.cy, source:'qr-fixed-window-new-cassette-v3141'};
   }
 
   function makeFixedInternalByDirection(cropCanvas, W, H, directionAnalysis, allowQrFixedWindow) {
@@ -1009,11 +1010,11 @@
       contourWin.y + contourWin.h > H * 0.78 ||
       contourWin.x < W * 0.08 || contourWin.x + contourWin.w > W * 0.92
     )) contourWin = null;
-    let win = rw || contourWin;
+    // v31.41：QR 模式下固定幾何 ROI 優先。
+    // 舊版會被塑膠反光/槽邊 contour 拉成過窄或偏移的 Window，造成 C/T 根本沒進分析區。
+    // 有 QR 時，外框已經做過透視校正，因此固定比例比再猜槽輪廓穩定。
+    let win = allowQrFixedWindow ? fixedWindowForNewCassette(W, H, name) : (rw || contourWin);
     if (win) win = makeWindowSafe(win, W, H);
-    // 新卡匣槽邊很淡時 contour 可能消失。QR 已鎖定方向與外框時，
-    // 使用卡匣固定比例 ROI 作最後 fallback，避免直接 Invalid。
-    if (!win && allowQrFixedWindow) win = fixedWindowForNewCassette(W, H, name);
     const sample = fixedSampleFromBox(sampleBox, W, H, 'sample-third-score-confirmed', directionAnalysis.chosenScore);
 
     const wf = {
@@ -2342,6 +2343,77 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
 }
 
 
+  // v31.41：用 QR 尺寸直接產生 4 個「整支卡匣」幾何候選。
+  // 這是為了解決白色卡匣放在白紙上時，外框 contour 很容易只抓到 QR 或結果槽。
+  // QR 寬約為卡匣寬 64~67%，卡匣長約為 QR 邊長 5.2~5.5 倍。
+  function buildQrCassetteTemplates(qrPoints, imgArea) {
+    if (!Array.isArray(qrPoints) || qrPoints.length < 4) return [];
+    const q = qrPoints.slice(0,4).map(p=>({x:Number(p.x),y:Number(p.y)}));
+    if (q.some(p=>!Number.isFinite(p.x)||!Number.isFinite(p.y))) return [];
+    const center={x:q.reduce((a,p)=>a+p.x,0)/4,y:q.reduce((a,p)=>a+p.y,0)/4};
+
+    // jsQR / BarcodeDetector 通常回傳相鄰四角。兩組平均邊向量可降低透視誤差。
+    let ux=((q[1].x-q[0].x)+(q[2].x-q[3].x))*0.5;
+    let uy=((q[1].y-q[0].y)+(q[2].y-q[3].y))*0.5;
+    let vx=((q[3].x-q[0].x)+(q[2].x-q[1].x))*0.5;
+    let vy=((q[3].y-q[0].y)+(q[2].y-q[1].y))*0.5;
+    const un=Math.hypot(ux,uy), vn=Math.hypot(vx,vy);
+    if (un < 4 || vn < 4) return [];
+    const qSide=(un+vn)*0.5;
+    ux/=un; uy/=un; vx/=vn; vy/=vn;
+
+    const dirs=[
+      {x:ux,y:uy,name:'qr-dir-u+'}, {x:-ux,y:-uy,name:'qr-dir-u-'},
+      {x:vx,y:vy,name:'qr-dir-v+'}, {x:-vx,y:-vy,name:'qr-dir-v-'}
+    ];
+    const L=qSide*5.35;
+    const CW=qSide*1.55;
+    const qrCenterFromTop=L*0.115;
+    const out=[];
+    for (const d of dirs) {
+      // perp 的正負只影響左右，不影響物理 top/bottom。
+      const px=d.y, py=-d.x;
+      const topC={x:center.x-d.x*qrCenterFromTop,y:center.y-d.y*qrCenterFromTop};
+      const botC={x:topC.x+d.x*L,y:topC.y+d.y*L};
+      const pts=[
+        {x:topC.x-px*CW/2,y:topC.y-py*CW/2},
+        {x:topC.x+px*CW/2,y:topC.y+py*CW/2},
+        {x:botC.x+px*CW/2,y:botC.y+py*CW/2},
+        {x:botC.x-px*CW/2,y:botC.y-py*CW/2}
+      ];
+      out.push({
+        method:d.name,
+        rect:{center:{x:(topC.x+botC.x)/2,y:(topC.y+botC.y)/2},size:{width:CW,height:L},angle:Math.atan2(d.y,d.x)*180/Math.PI},
+        pts,
+        ratio:L/Math.max(1,CW), fill:0.72,
+        rectArea:CW*L, area:CW*L*0.72,
+        areaRatio:(CW*L)/Math.max(1,imgArea),
+        score:CW*L,
+        qrTemplate:true
+      });
+    }
+    return out;
+  }
+
+  function qrSizeGate(cand, qrPoints) {
+    if (!Array.isArray(qrPoints) || qrPoints.length < 4) return {pass:true, reason:'qr-size-unavailable'};
+    const q=qrPoints.slice(0,4);
+    const ds=[];
+    for(let i=0;i<4;i++) for(let j=i+1;j<4;j++) ds.push(dist(q[i],q[j]));
+    ds.sort((a,b)=>a-b);
+    const qSide=(ds[0]+ds[1]+ds[2]+ds[3])/4;
+    const rw=cand.rect && cand.rect.size ? cand.rect.size.width : 0;
+    const rh=cand.rect && cand.rect.size ? cand.rect.size.height : 0;
+    const shortSide=Math.min(rw,rh), longSide=Math.max(rw,rh);
+    if (!qSide || !shortSide || !longSide) return {pass:false,reason:'qr-size-invalid'};
+    const longQ=longSide/qSide, shortQ=shortSide/qSide;
+    // 真卡匣約 long=5.35Q / short=1.55Q。放寬透視與 contour 誤差，
+    // 但明確排除「只框 QR」及「QR + 一小段塑膠」的候選。
+    const pass=longQ>=3.55 && longQ<=7.4 && shortQ>=1.08 && shortQ<=2.65;
+    return {pass,reason:pass?'PASS':`bad-qr-scale L=${longQ.toFixed(2)}Q W=${shortQ.toFixed(2)}Q`,qSide,longQ,shortQ};
+  }
+
+
 
 
   function detectOuterFrame(canvas, cropCanvas, options) {
@@ -2351,15 +2423,22 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
     const rawCands=collectOuterCandidates(src, options);
     const qrCenter=options.qrCenter || null;
     const qrPoints=Array.isArray(options.qrPoints) ? options.qrPoints : [];
+    // 不依賴白色外框一定能被 contour 找到：QR 本身也建立整卡匣候選。
+    const qrTemplates=buildQrCassetteTemplates(qrPoints,imgArea);
+    const allCands=rawCands.concat(qrTemplates);
     const qrRejected=[];
     const enclosingCands=[];
-    for (const c of rawCands) {
+    for (const c of allCands) {
       c.qrEnclosure=qrEnclosureMetrics(c,qrCenter,qrPoints);
-      if (c.qrEnclosure.pass) enclosingCands.push(c);
-      else qrRejected.push(c);
+      c.qrScale=qrSizeGate(c,qrPoints);
+      if (c.qrEnclosure.pass && c.qrScale.pass) enclosingCands.push(c);
+      else {
+        if (c.qrEnclosure.pass && !c.qrScale.pass) c.qrEnclosure.reason=c.qrScale.reason;
+        qrRejected.push(c);
+      }
     }
     const scored=[];
-    for(const c of enclosingCands.slice(0,10)){
+    for(const c of enclosingCands.slice(0,18)){
       const fs=candidateFeatureScore(canvas,c,qrCenter);
       const geo=outerGeometryScore(c,imgArea,src.cols,src.rows);
       const hasRedWindow = !!fs.hasRedWindow;
@@ -2371,11 +2450,21 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
       c.outerDetail=geo;
       // geo.score 已經包含 smallOuterPenalty / innerWindowPenalty，這裡不能再扣第二次。
       const smallOuterTotalPenalty = (geo.smallOuterPenalty || 0) + (geo.innerWindowPenalty || 0);
+      const ct = fs.f && fs.f.ctAnalysis ? fs.f.ctAnalysis : null;
+      const cLineBonus = ct && ct.cPeak && ct.cPeak.detected ? 10500 : 0;
+      const tLineBonus = ct && ct.tPeak && ct.tPeak.detected ? 3000 : 0;
+      const templateBonus = c.qrTemplate ? 1800 : 0;
       c.totalScore =
         geo.score +
-        fs.score -
+        fs.score +
+        cLineBonus +
+        tLineBonus +
+        templateBonus -
         noRealSamplePenalty -
         noTrustedFeaturePenalty;
+      c.cLineBonus=cLineBonus;
+      c.tLineBonus=tLineBonus;
+      c.templateBonus=templateBonus;
       c.smallOuterTotalPenalty = smallOuterTotalPenalty;
       c.featureScore=fs.score;
       c.featureDetail=fs.f;
@@ -2417,7 +2506,7 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
       // 新卡匣照片有不少是遠拍；只要 QR 被完整包在白色卡匣外框內，
       // 面積門檻可由舊版 4.5% 降到 2.0%，且不強制一定在畫面中央。
       const qrAnchoredBest = !!(best.qrEnclosure && best.qrEnclosure.pass);
-      const minFinalArea = qrAnchoredBest ? 0.020 : 0.045;
+      const minFinalArea = qrAnchoredBest ? 0.006 : 0.045;
       const bestOuterGeometryOk =
         bestAreaRatio >= minFinalArea &&
         best.ratio >= options.ratioMin * 0.82 &&
@@ -2435,7 +2524,7 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
       const forceOkByFinalGate = !!(bestOuterGeometryOk && bestHasTrustedFeature);
       const forceOkByStrongCandidate = !!(
         best.totalScore > 18000 &&
-        bestAreaRatio >= (qrAnchoredBest ? 0.020 : 0.045) &&
+        bestAreaRatio >= (qrAnchoredBest ? 0.006 : 0.045) &&
         best.appearanceDetail &&
         best.appearanceDetail.trustedBrightCard &&
         (bestHasTrustedRedWindow || bestHasRealSample)
@@ -2444,7 +2533,7 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
         !bestHasTrustedFeature &&
         bestOuterGeometryOk &&
         best.outerScore >= 9000 &&
-        bestAreaRatio >= (qrAnchoredBest ? 0.028 : 0.075) &&
+        bestAreaRatio >= (qrAnchoredBest ? 0.008 : 0.075) &&
         best.ratio >= 2.5 &&
         best.ratio <= 5.2 &&
         best.appearanceDetail &&
@@ -2468,7 +2557,9 @@ dbg += 'White Mask: generated<br>';
 dbg += 'Edge: generated<br>';
 dbg += 'Bright Foreground: included as candidate source<br>';
 dbg += 'Raw Candidates: ' + rawCands.length + '<br>';
-dbg += 'QR-enclosing white candidates: ' + enclosingCands.length + '<br>';
+dbg += 'QR template candidates: ' + qrTemplates.length + '<br>';
+dbg += 'All Candidates: ' + allCands.length + '<br>';
+dbg += 'QR-enclosing cassette candidates: ' + enclosingCands.length + '<br>';
 dbg += 'QR rejected candidates: ' + qrRejected.length + '<br>';
 if (qrRejected.length) dbg += 'QR rejection detail: ' + qrRejected.slice(0,8).map(c=>`${c.method}:${c.qrEnclosure.reason},clear=${c.qrEnclosure.minClearance.toFixed(1)}`).join(' | ') + '<br>';
 dbg += 'Scored Candidates: ' + scored.length + '<br>';
@@ -2489,7 +2580,7 @@ scored.forEach((c,i)=>
     dbg +=
     `#${i+1}<br>
     Method=${c.method}<br>
-    Candidate Score=${Math.round(c.totalScore)}<br>
+    Candidate Score=${Math.round(c.totalScore)} / QRTemplate=${c.qrTemplate ? 'YES':'NO'} / CBonus=${Math.round(c.cLineBonus||0)} / TBonus=${Math.round(c.tLineBonus||0)}<br>
     Outer Score=${Math.round(c.outerScore||0)}<br>
     Feature Score=${Math.round(c.featureScore||0)}<br>
     No Real S Penalty=${Math.round(c.noRealSamplePenalty||0)}<br>
