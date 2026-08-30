@@ -1,3 +1,15 @@
+# ASAP Check v31.48
+
+## v31.48 UI / Camera / Speed update
+
+- Keeps the v31.47 QR-anchored C/T recognition parameters unchanged.
+- Enlarges the metadata text on the right side of the shared analysis image.
+- GPS Region now prefers city/province + country and omits district/locality (for example: `臺北市, 中華民國`, not `大安區, 臺北市, 中華民國`).
+- Requests rear-camera continuous autofocus when the browser exposes `focusMode: continuous`; unsupported browsers fall back automatically.
+- Faster camera capture: the captured canvas is analysed directly, avoiding lossless PNG encode + Image decode before detection.
+- Faster analysis: the unused full-frame debug preprocessing pass is skipped in the compact UI. The actual detector and v31.47 C/T logic are unchanged.
+- Share Analysis Image behavior remains: shown only after a completed analysis and hidden again when a new camera session starts.
+
 # ASAP Check v31.44 QR Template Cassette + Lossless Capture + Fixed Share Layout
 
 ## v31.47 - Lower QR Anchored C/T Bands

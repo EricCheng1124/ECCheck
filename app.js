@@ -628,6 +628,25 @@
     loop();
   }
 
+  async function enableContinuousFocus() {
+    if (!cameraStream) return false;
+    const track = cameraStream.getVideoTracks && cameraStream.getVideoTracks()[0];
+    if (!track || typeof track.applyConstraints !== 'function') return false;
+    try {
+      const caps = typeof track.getCapabilities === 'function' ? track.getCapabilities() : {};
+      const modes = caps && Array.isArray(caps.focusMode) ? caps.focusMode : [];
+      if (modes.includes('continuous')) {
+        await track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] });
+        return true;
+      }
+      // Some browsers accept the constraint even when getCapabilities() does not expose it.
+      await track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] });
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
   async function startCamera() {
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       if (cameraStatus) cameraStatus.textContent = 'Live camera requires HTTPS and a supported browser.';
@@ -652,7 +671,10 @@
       });
       cameraVideo.srcObject = cameraStream;
       await cameraVideo.play();
-      if (cameraStatus) cameraStatus.textContent = qrLocked ? 'QR already locked. You can capture the test.' : 'Scanning QR code...';
+      const focusOn = await enableContinuousFocus();
+      if (cameraStatus) cameraStatus.textContent = qrLocked
+        ? (focusOn ? 'QR locked · Continuous focus on · Ready to capture.' : 'QR already locked. You can capture the test.')
+        : (focusOn ? 'Continuous focus on · Scanning QR code...' : 'Scanning QR code...');
       scheduleLiveQrScan();
     } catch (ex) {
       console.error('Camera open failed:', ex);
@@ -716,29 +738,13 @@
       } catch (_) {}
     }
 
-    const img = new Image();
-    img.onload = function () {
-      captureBusy = false;
-      if (captureBtn) captureBtn.disabled = false;
-      lastImage = img;
-      stopCamera(true);
-      analyze();
-    };
-    img.onerror = function () {
-      captureBusy = false;
-      if (captureBtn) captureBtn.disabled = false;
-      if (cameraStatus) cameraStatus.textContent = 'Capture failed. Please try again.';
-    };
-    try {
-      // Preserve the exact camera frame. JPEG recompression can flatten very faint C/T contrast on iPhone.
-      // PNG is lossless, so the detector and the shared diagnostic image see the same pixels.
-      img.src = shot.toDataURL('image/png');
-    } catch (ex) {
-      console.error('Capture conversion failed:', ex);
-      captureBusy = false;
-      if (captureBtn) captureBtn.disabled = false;
-      if (cameraStatus) cameraStatus.textContent = 'Capture failed. Please try again.';
-    }
+    // Fast path: analyse the captured canvas directly.
+    // This stays lossless but avoids PNG encoding + Image decoding before detection.
+    captureBusy = false;
+    if (captureBtn) captureBtn.disabled = false;
+    lastImage = shot;
+    stopCamera(true);
+    analyze();
   }
 
   function getRegionText() {
@@ -767,8 +773,8 @@ function drawMetadataPanel(ctx, x, y, width, height, baseW) {
   ].filter(r => r[1]);
   const pad = Math.max(8, Math.round(baseW * 0.04));
   // Larger metadata for the phone-sized three-column result view.
-  const labelSize = Math.max(13, Math.round(baseW / 16));
-  const valueSize = Math.max(17, Math.round(baseW / 12));
+  const labelSize = Math.max(15, Math.round(baseW / 14));
+  const valueSize = Math.max(20, Math.round(baseW / 10.5));
   let cy = y + pad;
   ctx.save();
   ctx.textBaseline = 'top';
@@ -798,7 +804,7 @@ function drawMetadataPanel(ctx, x, y, width, height, baseW) {
 function renderCombinedDetectionView() {
   if (!combinedCanvas || !cropCanvas || !canvas || !cropCanvas.width || !cropCanvas.height) return;
   const W = cropCanvas.width, H = cropCanvas.height;
-  const sideW = Math.max(150, Math.round(W * 0.92));
+  const sideW = Math.max(170, Math.round(W * 1.04));
   const totalW = W + sideW * 2;
   combinedCanvas.width = totalW;
   combinedCanvas.height = H;
@@ -845,12 +851,15 @@ function renderCombinedDetectionView() {
   }
 
   function resizeAndDrawImage(img) {
-    // 保留更多原始像素：這批新卡匣遠拍時 QR/淡 C-T 線都偏小。
+    // Preserve enough pixels for faint C/T lines, but accept Image, Canvas or Video-like sources.
+    const srcW = img.naturalWidth || img.videoWidth || img.width || 0;
+    const srcH = img.naturalHeight || img.videoHeight || img.height || 0;
+    if (!srcW || !srcH) throw new Error('Image source has no dimensions');
     const maxW = 1600;
-    const scale = Math.min(1, maxW / img.naturalWidth);
-    canvas.width = Math.round(img.naturalWidth * scale);
-    canvas.height = Math.round(img.naturalHeight * scale);
-    const ctx = canvas.getContext('2d');
+    const scale = Math.min(1, maxW / srcW);
+    canvas.width = Math.max(1, Math.round(srcW * scale));
+    canvas.height = Math.max(1, Math.round(srcH * scale));
+    const ctx = canvas.getContext('2d', { alpha: false });
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
   }
@@ -1128,7 +1137,8 @@ function renderCombinedDetectionView() {
       return;
     }
     try {
-      renderDebugViews();
+      // Fast path: the compact UI has no debug image canvases, so do not run a second
+      // full-frame OpenCV preprocessing pass before the actual detector.
       const r = window.AsapOuterDetector.detectOuterFrame(canvas, cropCanvas, getOptions());
       setResult(r);
     }
@@ -1200,9 +1210,10 @@ function renderCombinedDetectionView() {
       const data = await response.json();
       if (token !== gpsLookupToken) return;
 
+      // Keep GPS display at city/province level; do not show district (e.g. 大安區).
+      // BigDataCloud's principalSubdivision is 臺北市 for Taipei, while locality may be 大安區.
       const parts = [
-        data.locality || data.city || '',
-        data.principalSubdivision || '',
+        data.principalSubdivision || data.city || '',
         data.countryName || data.countryCode || ''
       ].map(v => String(v || '').trim()).filter(Boolean);
       const unique = parts.filter((v, i, list) => list.findIndex(x => x.toLowerCase() === v.toLowerCase()) === i);
