@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="theme-color" content="#f4f6fb" />
   <title>ASAP Check</title>
-  <link rel="stylesheet" href="style.css?v=31.48-focus-fast-ui" />
+  <link rel="stylesheet" href="style.css?v=31.49-multicard" />
 </head>
 <body>
   <div class="app compactApp">
@@ -49,6 +49,7 @@
       <section class="resultCompact hidden" aria-label="Detection result">
         <div id="result" class="result neutral">Ready</div>
         <div id="resultSub" class="resultSub">Scan QR and capture the cassette</div>
+        <div id="multiResultList" class="multiResultList hidden"></div>
       </section>
 
       <!-- Compact controls; no extra source card. -->
@@ -110,7 +111,7 @@
 
   <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
   <script async src="https://docs.opencv.org/4.9.0/opencv.js" onload="window.__opencvLoaded && window.__opencvLoaded()"></script>
-  <script src="detector.js?v=31.48-focus-fast-ui"></script>
-  <script src="app.js?v=31.48-focus-fast-ui"></script>
+  <script src="detector.js?v=31.49-multicard"></script>
+  <script src="app.js?v=31.49-multicard"></script>
 </body>
 </html>

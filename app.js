@@ -45,6 +45,8 @@
   const compactQrFields = document.getElementById('compactQrFields');
   const compactValidity = document.getElementById('compactValidity');
   const resultSub = document.getElementById('resultSub');
+  const multiResultList = document.getElementById('multiResultList');
+  let lastMultiResults = [];
   const detectionPanel = document.getElementById('detectionPanel');
   const stagePlaceholder = document.getElementById('stagePlaceholder');
   const galleryLabel = document.getElementById('galleryLabel');
@@ -586,6 +588,160 @@
     }
   }
 
+
+  function cloneCanvas(source) {
+    const c = document.createElement('canvas');
+    c.width = source.width; c.height = source.height;
+    c.getContext('2d', { alpha:false }).drawImage(source, 0, 0);
+    return c;
+  }
+
+  function qrBox(geometry) {
+    const pts = geometry && Array.isArray(geometry.points) ? geometry.points : [];
+    if (pts.length) {
+      const xs = pts.map(p=>p.x), ys = pts.map(p=>p.y);
+      return { x:Math.min(...xs), y:Math.min(...ys), w:Math.max(...xs)-Math.min(...xs), h:Math.max(...ys)-Math.min(...ys) };
+    }
+    const c = geometry && geometry.center ? geometry.center : {x:0,y:0};
+    return {x:c.x-30,y:c.y-30,w:60,h:60};
+  }
+
+  function isSameQr(a,b) {
+    if (!a || !b || !a.center || !b.center) return false;
+    const aa=qrBox(a), bb=qrBox(b);
+    const d=Math.hypot(a.center.x-b.center.x,a.center.y-b.center.y);
+    return d < Math.max(24, Math.min(Math.max(aa.w,aa.h),Math.max(bb.w,bb.h))*0.75);
+  }
+
+  async function detectAllQrCodesFromCanvas() {
+    const found=[];
+    const pushUnique=(raw,geometry)=>{
+      if (!geometry || !geometry.center) return;
+      if (found.some(x=>isSameQr(x.geometry,geometry))) return;
+      found.push({raw:String(raw||''),geometry});
+    };
+
+    if (typeof window.BarcodeDetector === 'function') {
+      try {
+        const detector = nativeQrDetector || new window.BarcodeDetector({formats:['qr_code']});
+        nativeQrDetector = detector;
+        const codes = await detector.detect(canvas);
+        (codes||[]).forEach(code=>pushUnique(code.rawValue, qrGeometryFromNative(code)));
+      } catch (_) {}
+    }
+
+    if (typeof window.jsQR === 'function' && found.length < 4) {
+      const work=cloneCanvas(canvas);
+      const wctx=work.getContext('2d');
+      // Mask any QR already returned by BarcodeDetector, then repeatedly decode the remainder.
+      const mask=(geometry)=>{
+        const b=qrBox(geometry);
+        const m=Math.max(b.w,b.h)*0.45 + 10;
+        wctx.save(); wctx.fillStyle='#ffffff';
+        wctx.fillRect(Math.max(0,b.x-m),Math.max(0,b.y-m),Math.min(work.width,b.w+m*2),Math.min(work.height,b.h+m*2));
+        wctx.restore();
+      };
+      found.forEach(x=>mask(x.geometry));
+      for (let i=found.length;i<4;i++) {
+        const code=decodeQrCanvas(work);
+        if (!code || !code.data) break;
+        const geometry=qrGeometryFromJsQr(code);
+        if (!geometry) break;
+        pushUnique(code.data,geometry);
+        mask(geometry);
+      }
+    }
+    return found.slice(0,4);
+  }
+
+  function sortCardsSpatially(items) {
+    if (!items || items.length < 2) return items || [];
+    const pts=items.map(x=>({x:x.result.rect.cx,y:x.result.rect.cy}));
+    const mx=pts.reduce((s,p)=>s+p.x,0)/pts.length, my=pts.reduce((s,p)=>s+p.y,0)/pts.length;
+    let sxx=0,syy=0,sxy=0;
+    pts.forEach(p=>{const x=p.x-mx,y=p.y-my;sxx+=x*x;syy+=y*y;sxy+=x*y;});
+    const theta=0.5*Math.atan2(2*sxy,sxx-syy);
+    let vx=Math.cos(theta),vy=Math.sin(theta);
+    if (Math.abs(vx)>=Math.abs(vy)) { if(vx<0){vx=-vx;vy=-vy;} }
+    else { if(vy<0){vx=-vx;vy=-vy;} }
+    return items.slice().sort((a,b)=>((a.result.rect.cx-mx)*vx+(a.result.rect.cy-my)*vy)-((b.result.rect.cx-mx)*vx+(b.result.rect.cy-my)*vy));
+  }
+
+  function drawMultiAnnotations(items) {
+    const ctx=canvas.getContext('2d');
+    const base=Math.max(2,canvas.width/420);
+    items.forEach((item,index)=>{
+      const r=item.result;
+      const pts=Array.isArray(r.outerPoints)?r.outerPoints:[];
+      ctx.save();
+      ctx.lineWidth=base*2;
+      ctx.strokeStyle = item.text==='Positive' ? '#dc2626' : (item.text==='Negative' ? '#16a34a' : '#f59e0b');
+      if (pts.length>=4) {
+        ctx.beginPath(); ctx.moveTo(pts[0].x,pts[0].y); pts.slice(1).forEach(p=>ctx.lineTo(p.x,p.y)); ctx.closePath(); ctx.stroke();
+      } else {
+        const rr=r.rect; ctx.strokeRect(rr.cx-rr.w/2,rr.cy-rr.h/2,rr.w,rr.h);
+      }
+      const cx=r.rect.cx, cy=r.rect.cy;
+      const rad=Math.max(18,canvas.width/38);
+      ctx.fillStyle='#0f172a'; ctx.beginPath(); ctx.arc(cx,cy,rad,0,Math.PI*2); ctx.fill();
+      ctx.strokeStyle='#fff'; ctx.lineWidth=Math.max(2,base); ctx.stroke();
+      ctx.fillStyle='#fff'; ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.font=`900 ${Math.round(rad*1.15)}px "Segoe UI",sans-serif`; ctx.fillText(String(index+1),cx,cy+1);
+      ctx.restore();
+    });
+  }
+
+  function renderMultiResultList(items) {
+    if (!multiResultList) return;
+    multiResultList.replaceChildren();
+    if (!items || items.length < 2) { multiResultList.classList.add('hidden'); return; }
+    items.forEach((item,index)=>{
+      const row=document.createElement('div'); row.className='multiResultRow';
+      const badge=document.createElement('span'); badge.className='multiCardBadge'; badge.textContent=String(index+1);
+      const name=document.createElement('strong'); name.textContent=`Card ${index+1}`;
+      const val=document.createElement('span'); val.className=`multiValue ${String(item.text||'Invalid').toLowerCase()}`; val.textContent=item.text||'Invalid';
+      row.append(badge,name,val); multiResultList.appendChild(row);
+    });
+    multiResultList.classList.remove('hidden');
+  }
+
+  function renderMultiCombinedView(items) {
+    if (!combinedCanvas || !canvas || !canvas.width || !canvas.height) return;
+    const W=canvas.width, rowH=Math.max(54,Math.round(W*0.055));
+    const headerH=Math.max(62,Math.round(W*0.065));
+    const H=canvas.height+headerH+rowH*items.length;
+    combinedCanvas.width=W; combinedCanvas.height=H;
+    const ctx=combinedCanvas.getContext('2d');
+    ctx.fillStyle='#0f172a'; ctx.fillRect(0,0,W,H); ctx.drawImage(canvas,0,0);
+    const pos=items.filter(x=>x.text==='Positive').length, inv=items.filter(x=>x.text==='Invalid').length;
+    const summary=pos?`${items.length} Tests Detected · ${pos} Positive`:(inv?`${items.length} Tests Detected · ${inv} Invalid`:`${items.length} Tests Detected · All Negative`);
+    ctx.fillStyle='#f8fafc'; ctx.font=`900 ${Math.max(22,Math.round(W*0.03))}px "Segoe UI",sans-serif`; ctx.textBaseline='middle'; ctx.fillText(summary,Math.round(W*0.035),canvas.height+headerH/2);
+    items.forEach((item,i)=>{
+      const y=canvas.height+headerH+i*rowH;
+      ctx.strokeStyle='#334155'; ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke();
+      const rad=rowH*0.28,cx=Math.round(W*0.055),cy=y+rowH/2;
+      ctx.fillStyle='#334155';ctx.beginPath();ctx.arc(cx,cy,rad,0,Math.PI*2);ctx.fill();ctx.fillStyle='#fff';ctx.textAlign='center';ctx.font=`900 ${Math.round(rad*1.1)}px "Segoe UI"`;ctx.fillText(String(i+1),cx,cy+1);
+      ctx.textAlign='left';ctx.font=`800 ${Math.max(18,Math.round(W*0.024))}px "Segoe UI"`;ctx.fillStyle='#e2e8f0';ctx.fillText(`Card ${i+1}`,Math.round(W*0.1),cy);
+      ctx.textAlign='right';ctx.font=`900 ${Math.max(20,Math.round(W*0.027))}px "Segoe UI"`;ctx.fillStyle=item.text==='Positive'?'#fca5a5':(item.text==='Negative'?'#86efac':'#fcd34d');ctx.fillText(item.text,Math.round(W*0.96),cy);
+    });
+    ctx.textAlign='left';
+  }
+
+  function setMultiResults(items) {
+    lastMultiResults=items;
+    const pos=items.filter(x=>x.text==='Positive').length, inv=items.filter(x=>x.text==='Invalid').length;
+    lastResultText = pos ? 'Positive' : (inv ? 'Invalid' : 'Negative');
+    resultEl.className='result ' + (pos?'positive':(inv?'invalid':'negative'));
+    resultEl.textContent = pos ? `${items.length} Tests · ${pos} Positive` : (inv ? `${items.length} Tests · ${inv} Invalid` : `${items.length} Tests · All Negative`);
+    if (resultSub) resultSub.textContent='Results are numbered on the image';
+    renderMultiResultList(items);
+    detailEl.innerHTML=items.map((x,i)=>`<b>Card ${i+1}: ${x.text}</b><br>Method: ${x.result.reason}<br>Center: x=${x.result.rect.cx.toFixed(0)}, y=${x.result.rect.cy.toFixed(0)}`).join('<hr>');
+    if (debugText) debugText.innerHTML=items.map((x,i)=>`<b>Card ${i+1}</b><br>${x.result.debug||''}`).join('<hr><hr>');
+    drawMultiAnnotations(items);
+    renderMultiCombinedView(items);
+    showDetectionStage(true);
+    publishNtfyResult(`${items.length} tests: ${items.map((x,i)=>`${i+1}=${x.text}`).join(', ')}`);
+  }
+
   function stopQrLoop() {
     if (qrScanTimer) {
       clearTimeout(qrScanTimer);
@@ -1112,53 +1268,69 @@ function renderCombinedDetectionView() {
     publishNtfyResult(lastResultText);
   }
 
-  function analyze() {
+  async function analyze() {
     if (!lastImage) { clearRoiOnlyView(); return; }
     resizeAndDrawImage(lastImage);
-    // Always locate the QR again on the captured still image. Live-preview
-    // coordinates are not reused because the phone may move before capture.
-    lastQrGeometry = null;
-    const qrFoundOnCapture = scanQrFromCanvas(false, true);
-    if (!qrFoundOnCapture || !lastQrGeometry || !lastQrGeometry.center) {
-      lastResultText = 'Invalid';
-      resultEl.className = 'result invalid';
-      resultEl.textContent = 'Invalid';
-      if (resultSub) resultSub.textContent = 'QR not detected';
-      detailEl.innerHTML = 'Failure reason: QR not detected on captured image.';
-      if (debugText) debugText.innerHTML = 'Orientation gate: FAIL<br>Reason: QR not detected';
-      showDetectionStage(false);
-      return;
+    lastMultiResults=[];
+    renderMultiResultList([]);
+    lastQrGeometry=null;
+
+    const qrCodes=await detectAllQrCodesFromCanvas();
+    if (!qrCodes.length) {
+      lastResultText='Invalid';
+      resultEl.className='result invalid'; resultEl.textContent='Invalid';
+      if (resultSub) resultSub.textContent='QR not detected';
+      detailEl.innerHTML='Failure reason: QR not detected on captured image.';
+      if (debugText) debugText.innerHTML='Orientation gate: FAIL<br>Reason: QR not detected';
+      showDetectionStage(false); return;
     }
+
+    // First QR continues to populate the shared test-information panel.
+    if (qrCodes[0].raw) updateQrDisplay(parseQrData(qrCodes[0].raw),true);
+    lastQrGeometry=qrCodes[0].geometry;
+
     if (!cvReady) {
-      resultEl.className = 'result neutral';
-      lastResultText = 'Invalid';
-      resultEl.textContent = '';
-      detailEl.textContent = '';
-      return;
+      resultEl.className='result neutral'; lastResultText='Invalid'; resultEl.textContent=''; detailEl.textContent=''; return;
     }
+
     try {
-      // Fast path: the compact UI has no debug image canvases, so do not run a second
-      // full-frame OpenCV preprocessing pass before the actual detector.
-      const r = window.AsapOuterDetector.detectOuterFrame(canvas, cropCanvas, getOptions());
-      setResult(r);
-    }
-    catch (ex) {
-      console.error(ex);
-      resultEl.className = 'result invalid';
-      lastResultText = 'Invalid';
-      resultEl.textContent = 'Invalid';
-      detailEl.innerHTML =
-        '<b>Exception</b><br>' +
-        (ex && ex.message ? ex.message : String(ex));
-      clearRoiOnlyView();
-      if (combinedCanvas) { const cctx = combinedCanvas.getContext('2d'); cctx.clearRect(0,0,combinedCanvas.width,combinedCanvas.height); }
-      showDetectionStage(false);
-      updateResultSubtitle();
-      if (debugText) {
-        debugText.innerHTML =
-          '<b>Exception</b><br>' +
-          (ex && ex.stack ? ex.stack : (ex && ex.message ? ex.message : String(ex)));
+      const original=cloneCanvas(canvas);
+      const detected=[];
+      for (const q of qrCodes) {
+        const work=cloneCanvas(original);
+        const tmpCrop=document.createElement('canvas');
+        const opts=Object.assign({},DEFAULT_OPTIONS,{qrRequired:true,qrCenter:q.geometry.center,qrPoints:Array.isArray(q.geometry.points)?q.geometry.points:[]});
+        const r=window.AsapOuterDetector.detectOuterFrame(work,tmpCrop,opts);
+        const debugSaysPass=!!(r&&r.debug&&r.debug.indexOf('Final Gate: outer=PASS / trustedFeature=PASS')>=0);
+        const ok=!!(r&&(r.ok||debugSaysPass));
+        if (!r || !r.rect) continue;
+        const copy=document.createElement('canvas'); copy.width=tmpCrop.width||1; copy.height=tmpCrop.height||1;
+        if (tmpCrop.width&&tmpCrop.height) copy.getContext('2d').drawImage(tmpCrop,0,0);
+        detected.push({qr:q,result:r,crop:copy,text:ok?getCtResultText(r):'Invalid'});
       }
+
+      if (!detected.length) throw new Error('No cassette candidate matched detected QR code(s).');
+      const sorted=sortCardsSpatially(detected);
+      // Restore clean original before drawing numbered annotations.
+      canvas.width=original.width; canvas.height=original.height; canvas.getContext('2d',{alpha:false}).drawImage(original,0,0);
+
+      if (sorted.length===1) {
+        const one=sorted[0]; lastQrGeometry=one.qr.geometry;
+        cropCanvas.width=one.crop.width; cropCanvas.height=one.crop.height; cropCanvas.getContext('2d').drawImage(one.crop,0,0);
+        // Re-run on the visible canvas so the legacy single-card image keeps its green frame.
+        const r=window.AsapOuterDetector.detectOuterFrame(canvas,cropCanvas,Object.assign({},DEFAULT_OPTIONS,{qrRequired:true,qrCenter:one.qr.geometry.center,qrPoints:one.qr.geometry.points||[]}));
+        setResult(r);
+      } else {
+        setMultiResults(sorted);
+      }
+    } catch (ex) {
+      console.error(ex);
+      resultEl.className='result invalid'; lastResultText='Invalid'; resultEl.textContent='Invalid';
+      detailEl.innerHTML='<b>Exception</b><br>'+(ex&&ex.message?ex.message:String(ex));
+      clearRoiOnlyView();
+      if (combinedCanvas) {const cctx=combinedCanvas.getContext('2d');cctx.clearRect(0,0,combinedCanvas.width,combinedCanvas.height);}
+      showDetectionStage(false); updateResultSubtitle();
+      if (debugText) debugText.innerHTML='<b>Exception</b><br>'+(ex&&ex.stack?ex.stack:(ex&&ex.message?ex.message:String(ex)));
     }
   }
 

@@ -100,3 +100,16 @@
 #galleryLabel,#closeCameraBtn{order:2}
 #shareAnalysisBtn{order:3;grid-column:1/-1}
 #shareAnalysisBtn:disabled{opacity:.52;cursor:not-allowed}
+
+
+/* ===== v31.49 Multi-card results ===== */
+.multiResultList{border-top:1px solid #e2e8f0;background:#fff}
+.multiResultList.hidden{display:none!important}
+.multiResultRow{display:grid;grid-template-columns:34px 1fr auto;align-items:center;gap:9px;padding:9px 12px;border-bottom:1px solid #f1f5f9}
+.multiResultRow:last-child{border-bottom:0}
+.multiCardBadge{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:50%;background:#334155;color:#fff;font-weight:900;font-size:14px}
+.multiResultRow strong{font-size:14px;color:#334155}
+.multiValue{font-size:15px;font-weight:950;padding:4px 9px;border-radius:999px}
+.multiValue.positive{background:#fee2e2;color:#b91c1c}
+.multiValue.negative{background:#dcfce7;color:#15803d}
+.multiValue.invalid{background:#fef3c7;color:#b45309}

@@ -2562,6 +2562,7 @@ result={
     centerOk:bestCenterOk,
     partialMessage,
     outerOnlyOk,
+    outerPoints: Array.isArray(best.pts) ? best.pts.map(p => ({x:Number(p.x), y:Number(p.y)})) : [],
     debug:dbg
 };
 
