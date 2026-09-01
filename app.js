@@ -621,6 +621,7 @@
       found.push({raw:String(raw||''),geometry});
     };
 
+    // 1) Native BarcodeDetector can return multiple QR codes at once when supported.
     if (typeof window.BarcodeDetector === 'function') {
       try {
         const detector = nativeQrDetector || new window.BarcodeDetector({formats:['qr_code']});
@@ -631,12 +632,51 @@
     }
 
     if (typeof window.jsQR === 'function' && found.length < 4) {
+      const W=canvas.width, H=canvas.height;
+      const ctx=canvas.getContext('2d',{willReadFrequently:true});
+
+      // 2) IMPORTANT for adjacent cassettes: scan overlapping tiles independently.
+      // jsQR returns only one code per call. If two QR codes are side-by-side, masking the
+      // first one can accidentally erase part of the second. Tile scanning avoids that.
+      const regions=[];
+      const addGrid=(cols,rows,overlap=0.16)=>{
+        const cellW=W/cols, cellH=H/rows;
+        for(let ry=0;ry<rows;ry++) for(let rx=0;rx<cols;rx++) {
+          const padX=cellW*overlap, padY=cellH*overlap;
+          const x=Math.max(0,rx*cellW-padX), y=Math.max(0,ry*cellH-padY);
+          const x2=Math.min(W,(rx+1)*cellW+padX), y2=Math.min(H,(ry+1)*cellH+padY);
+          regions.push({x,y,w:x2-x,h:y2-y});
+        }
+      };
+      // Portrait/landscape rows plus dense grids cover 2~4 cards placed side-by-side or stacked.
+      addGrid(2,1,0.22); addGrid(3,1,0.20); addGrid(4,1,0.16);
+      addGrid(1,2,0.22); addGrid(1,3,0.20); addGrid(1,4,0.16);
+      addGrid(2,2,0.18); addGrid(3,2,0.14); addGrid(2,3,0.14);
+
+      for (const a of regions) {
+        if (found.length>=4) break;
+        const x=Math.round(a.x), y=Math.round(a.y);
+        const w=Math.max(1,Math.min(W-x,Math.round(a.w))), h=Math.max(1,Math.min(H-y,Math.round(a.h)));
+        if (w<40 || h<40) continue;
+        const imageData=ctx.getImageData(x,y,w,h);
+        const variants=[imageData, enhanceQrImageData(imageData,false), enhanceQrImageData(imageData,true)];
+        for (const v of variants) {
+          const code=decodeQrImageData(v);
+          if (code && code.data) {
+            code.__offsetX=x; code.__offsetY=y;
+            pushUnique(code.data,qrGeometryFromJsQr(code));
+            break;
+          }
+        }
+      }
+
+      // 3) Repeated full-image decode as a fallback. Mask ONLY the QR itself with a tiny margin.
+      // Do not use the old 45% expansion because adjacent QR codes can be only a few pixels apart.
       const work=cloneCanvas(canvas);
       const wctx=work.getContext('2d');
-      // Mask any QR already returned by BarcodeDetector, then repeatedly decode the remainder.
       const mask=(geometry)=>{
         const b=qrBox(geometry);
-        const m=Math.max(b.w,b.h)*0.45 + 10;
+        const m=Math.max(3,Math.max(b.w,b.h)*0.08);
         wctx.save(); wctx.fillStyle='#ffffff';
         wctx.fillRect(Math.max(0,b.x-m),Math.max(0,b.y-m),Math.min(work.width,b.w+m*2),Math.min(work.height,b.h+m*2));
         wctx.restore();
@@ -647,8 +687,11 @@
         if (!code || !code.data) break;
         const geometry=qrGeometryFromJsQr(code);
         if (!geometry) break;
+        const before=found.length;
         pushUnique(code.data,geometry);
         mask(geometry);
+        // Even if duplicate, continue because masking lets the next QR surface.
+        if (found.length===before && i===3) break;
       }
     }
     return found.slice(0,4);

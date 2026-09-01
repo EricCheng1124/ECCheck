@@ -1,3 +1,14 @@
+# ASAP Check v31.50 — Multi-Card QR Fix
+
+Build: **v31.50 / 2026-09-01**
+
+Changes from v31.49:
+- Fixed adjacent multi-card QR detection.
+- Added overlapping tile scans (2x1, 3x1, 4x1, vertical grids and 2D grids).
+- Reduced fallback QR mask margin from 45% to 8% to avoid covering the QR on a neighboring cassette.
+- Added a permanently visible version badge in the header: `v31.50 · Multi-Card`.
+- Cache-busting query strings updated consistently to `31.50-multicard`.
+
 # ASAP Check v31.48
 
 ## v31.48 UI / Camera / Speed update

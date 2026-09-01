@@ -113,3 +113,6 @@
 .multiValue.positive{background:#fee2e2;color:#b91c1c}
 .multiValue.negative{background:#dcfce7;color:#15803d}
 .multiValue.invalid{background:#fef3c7;color:#b45309}
+
+/* ===== v31.50 explicit build/version ===== */
+.headerRight{display:flex;align-items:center;gap:8px}.versionBadge{font-size:11px;font-weight:900;letter-spacing:.2px;color:#475569;background:#e2e8f0;border:1px solid #cbd5e1;border-radius:999px;padding:4px 8px;white-space:nowrap}@media(max-width:380px){.versionBadge{font-size:10px;padding:3px 6px}}
