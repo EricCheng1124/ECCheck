@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v31.47-qr-anchored-ct-bands-lower';
+  const VERSION = 'v31.51-negative-guard-fast-multicard';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -1327,7 +1327,10 @@
       const strictOk = (maxRun >= minRun || ratio >= minRatio) && (redRatio >= 0.035 || redAvg >= 2.2 || contrastAvg >= 1.2);
       // v31.16：T 線常非常淡，已經有 peak score + 相對門檻保護時，
       // 連續紅色允許用較弱的水平線證據通過，避免淡陽性被判陰性。
-      const faintOk = faintMode && (maxRun >= minRun || ratio >= minRatio) && (redRatio >= 0.010 || redAvg >= 0.55 || contrastAvg >= 0.18 || darkAvg >= 2.8);
+      // v31.51: 陰性保護。T 線不能只靠灰黑陰影通過；至少要有可量測的粉紅/紅色證據。
+      // 仍保留淡陽性，但移除 darkAvg 單獨放行，避免陰性卡的槽邊/髒背景被當成 T。
+      const faintColorEvidence = redRatio >= 0.012 || redAvg >= 0.70 || contrastAvg >= 0.28;
+      const faintOk = faintMode && (maxRun >= minRun || ratio >= minRatio) && faintColorEvidence;
       const ok = strictOk || faintOk;
 
       return {
@@ -1562,7 +1565,8 @@
     const tGeometryOk = tQ.distanceFromExpected <= maxExpectedError;
 
     const cDetected = !!(cSelected && cQ.score >= threshold && cRed.ok && cGeometryOk);
-    const tThreshold = Math.min(threshold * 0.65, cQ && cQ.score > 0 ? cQ.score * 0.36 : threshold);
+    // v31.51: T 門檻小幅提高，降低陰性卡把背景陰影當成淡 T 的機率。
+    const tThreshold = Math.min(threshold * 0.72, cQ && cQ.score > 0 ? cQ.score * 0.40 : threshold);
     const tcRatio = cQ && cQ.score > 0 ? tQ.score / cQ.score : 0;
 
     const tCoreWidth = tQ ? (tQ.halfWidth || tQ.width || 9999) : 9999;
@@ -1570,7 +1574,7 @@
     const tShapeOk = !!(tQ &&
       tCoreSharpness >= 0.50 &&
       tCoreWidth <= Math.max(14, (tQ.maxWidth || 1) * 3.0) &&
-      ((tQ.quality || 0) >= 1.5 || tcRatio >= 0.45));
+      ((tQ.quality || 0) >= 1.8 || tcRatio >= 0.48));
 
     const refinedSeparationOk = !!(cRed && tRed &&
       tRed.absY > cRed.absY &&

@@ -613,6 +613,70 @@
     return d < Math.max(24, Math.min(Math.max(aa.w,aa.h),Math.max(bb.w,bb.h))*0.75);
   }
 
+  function qrSideEstimate(geometry) {
+    const pts = geometry && Array.isArray(geometry.points) ? geometry.points : [];
+    if (pts.length >= 4) {
+      const ds=[];
+      for (let i=0;i<4;i++) {
+        const a=pts[i], b=pts[(i+1)%4];
+        ds.push(Math.hypot(a.x-b.x,a.y-b.y));
+      }
+      ds.sort((a,b)=>a-b);
+      return Math.max(18,(ds[1]+ds[2])*0.5);
+    }
+    const b=qrBox(geometry);
+    return Math.max(18,Math.max(b.w,b.h));
+  }
+
+  function decodeQrRegionFast(ctx, region, maxSide=820) {
+    const W=canvas.width,H=canvas.height;
+    const x=Math.max(0,Math.round(region.x)), y=Math.max(0,Math.round(region.y));
+    const w=Math.max(1,Math.min(W-x,Math.round(region.w))), h=Math.max(1,Math.min(H-y,Math.round(region.h)));
+    if (w<40 || h<40) return null;
+    const scale=Math.min(1,maxSide/Math.max(w,h));
+    const tw=Math.max(40,Math.round(w*scale)), th=Math.max(40,Math.round(h*scale));
+    const tmp=document.createElement('canvas'); tmp.width=tw; tmp.height=th;
+    const tctx=tmp.getContext('2d',{willReadFrequently:true});
+    tctx.drawImage(canvas,x,y,w,h,0,0,tw,th);
+    const imageData=tctx.getImageData(0,0,tw,th);
+    const variants=[imageData, enhanceQrImageData(imageData,false)];
+    for (const v of variants) {
+      const code=decodeQrImageData(v);
+      if (code && code.data && code.location) {
+        const inv=1/scale;
+        const keys=['topLeftCorner','topRightCorner','bottomRightCorner','bottomLeftCorner'];
+        const points=keys.map(k=>code.location[k]).filter(Boolean).map(p=>({x:x+p.x*inv,y:y+p.y*inv}));
+        if (!points.length) return null;
+        return {raw:code.data, geometry:{points,center:{x:points.reduce((a,p)=>a+p.x,0)/points.length,y:points.reduce((a,p)=>a+p.y,0)/points.length}}};
+      }
+    }
+    return null;
+  }
+
+  function makeLocalDetectionCanvas(original, q) {
+    const side=qrSideEstimate(q.geometry);
+    const c=q.geometry.center;
+    // QR 位於卡匣靠近一端；以 QR 為中心抓約 11Q 正方形，足以涵蓋整支卡匣，
+    // 但多卡照片時不必每張卡都重跑整張 3K/4K 影像。
+    const half=Math.max(260,side*5.6);
+    const x=Math.max(0,Math.floor(c.x-half)), y=Math.max(0,Math.floor(c.y-half));
+    const x2=Math.min(original.width,Math.ceil(c.x+half)), y2=Math.min(original.height,Math.ceil(c.y+half));
+    const local=document.createElement('canvas'); local.width=Math.max(1,x2-x); local.height=Math.max(1,y2-y);
+    local.getContext('2d',{alpha:false}).drawImage(original,x,y,local.width,local.height,0,0,local.width,local.height);
+    const geometry={
+      center:{x:c.x-x,y:c.y-y},
+      points:(q.geometry.points||[]).map(p=>({x:p.x-x,y:p.y-y}))
+    };
+    return {canvas:local, geometry, offsetX:x, offsetY:y};
+  }
+
+  function translateDetectionResult(r, ox, oy) {
+    if (!r) return r;
+    if (r.rect) { r.rect.cx += ox; r.rect.cy += oy; }
+    if (Array.isArray(r.outerPoints)) r.outerPoints=r.outerPoints.map(p=>({x:p.x+ox,y:p.y+oy}));
+    return r;
+  }
+
   async function detectAllQrCodesFromCanvas() {
     const found=[];
     const pushUnique=(raw,geometry)=>{
@@ -635,9 +699,8 @@
       const W=canvas.width, H=canvas.height;
       const ctx=canvas.getContext('2d',{willReadFrequently:true});
 
-      // 2) IMPORTANT for adjacent cassettes: scan overlapping tiles independently.
-      // jsQR returns only one code per call. If two QR codes are side-by-side, masking the
-      // first one can accidentally erase part of the second. Tile scanning avoids that.
+      // v31.51: 先用少量、縮圖後的區塊找 QR。舊版最多會跑 30+ tiles × 3 variants，
+      // 多卡照片主要時間都耗在 jsQR；這裡改為 8~14 個自適應區塊 × 2 variants。
       const regions=[];
       const addGrid=(cols,rows,overlap=0.16)=>{
         const cellW=W/cols, cellH=H/rows;
@@ -648,50 +711,43 @@
           regions.push({x,y,w:x2-x,h:y2-y});
         }
       };
-      // Portrait/landscape rows plus dense grids cover 2~4 cards placed side-by-side or stacked.
-      addGrid(2,1,0.22); addGrid(3,1,0.20); addGrid(4,1,0.16);
-      addGrid(1,2,0.22); addGrid(1,3,0.20); addGrid(1,4,0.16);
-      addGrid(2,2,0.18); addGrid(3,2,0.14); addGrid(2,3,0.14);
+      regions.push({x:0,y:0,w:W,h:H});
+      addGrid(2,1,0.20); addGrid(1,2,0.20); addGrid(2,2,0.16);
+      if (W >= H*1.15) addGrid(4,1,0.12);
+      else if (H >= W*1.15) addGrid(1,4,0.12);
 
       for (const a of regions) {
         if (found.length>=4) break;
-        const x=Math.round(a.x), y=Math.round(a.y);
-        const w=Math.max(1,Math.min(W-x,Math.round(a.w))), h=Math.max(1,Math.min(H-y,Math.round(a.h)));
-        if (w<40 || h<40) continue;
-        const imageData=ctx.getImageData(x,y,w,h);
-        const variants=[imageData, enhanceQrImageData(imageData,false), enhanceQrImageData(imageData,true)];
-        for (const v of variants) {
-          const code=decodeQrImageData(v);
-          if (code && code.data) {
-            code.__offsetX=x; code.__offsetY=y;
-            pushUnique(code.data,qrGeometryFromJsQr(code));
-            break;
-          }
-        }
+        const hit=decodeQrRegionFast(ctx,a,820);
+        if (hit) pushUnique(hit.raw,hit.geometry);
       }
 
-      // 3) Repeated full-image decode as a fallback. Mask ONLY the QR itself with a tiny margin.
-      // Do not use the old 45% expansion because adjacent QR codes can be only a few pixels apart.
-      const work=cloneCanvas(canvas);
-      const wctx=work.getContext('2d');
-      const mask=(geometry)=>{
-        const b=qrBox(geometry);
-        const m=Math.max(3,Math.max(b.w,b.h)*0.08);
-        wctx.save(); wctx.fillStyle='#ffffff';
-        wctx.fillRect(Math.max(0,b.x-m),Math.max(0,b.y-m),Math.min(work.width,b.w+m*2),Math.min(work.height,b.h+m*2));
-        wctx.restore();
-      };
-      found.forEach(x=>mask(x.geometry));
-      for (let i=found.length;i<4;i++) {
-        const code=decodeQrCanvas(work);
-        if (!code || !code.data) break;
-        const geometry=qrGeometryFromJsQr(code);
-        if (!geometry) break;
-        const before=found.length;
-        pushUnique(code.data,geometry);
-        mask(geometry);
-        // Even if duplicate, continue because masking lets the next QR surface.
-        if (found.length===before && i===3) break;
+      // 找到 1~3 張後，以小遮罩再掃整張縮圖，補相鄰 QR；最多只追加 4 次。
+      // 這比舊版 decodeQrCanvas 的 9 crops × 3 variants × 多次重跑快很多。
+      if (found.length < 4) {
+        const work=cloneCanvas(canvas);
+        const wctx=work.getContext('2d');
+        const mask=(geometry)=>{
+          const b=qrBox(geometry), m=Math.max(3,Math.max(b.w,b.h)*0.10);
+          wctx.save(); wctx.fillStyle='#ffffff';
+          wctx.fillRect(Math.max(0,b.x-m),Math.max(0,b.y-m),Math.min(work.width,b.w+m*2),Math.min(work.height,b.h+m*2));
+          wctx.restore();
+        };
+        found.forEach(x=>mask(x.geometry));
+        for (let i=found.length;i<4;i++) {
+          const scale=Math.min(1,1000/Math.max(work.width,work.height));
+          const tmp=document.createElement('canvas'); tmp.width=Math.max(80,Math.round(work.width*scale)); tmp.height=Math.max(80,Math.round(work.height*scale));
+          const tctx=tmp.getContext('2d',{willReadFrequently:true}); tctx.drawImage(work,0,0,tmp.width,tmp.height);
+          const imageData=tctx.getImageData(0,0,tmp.width,tmp.height);
+          let code=decodeQrImageData(imageData) || decodeQrImageData(enhanceQrImageData(imageData,false));
+          if (!code || !code.data || !code.location) break;
+          const inv=1/scale, keys=['topLeftCorner','topRightCorner','bottomRightCorner','bottomLeftCorner'];
+          const points=keys.map(k=>code.location[k]).filter(Boolean).map(p=>({x:p.x*inv,y:p.y*inv}));
+          if (!points.length) break;
+          const geometry={points,center:{x:points.reduce((a,p)=>a+p.x,0)/points.length,y:points.reduce((a,p)=>a+p.y,0)/points.length}};
+          const before=found.length; pushUnique(code.data,geometry); mask(geometry);
+          if (found.length===before) break;
+        }
       }
     }
     return found.slice(0,4);
@@ -1340,10 +1396,11 @@ function renderCombinedDetectionView() {
       const original=cloneCanvas(canvas);
       const detected=[];
       for (const q of qrCodes) {
-        const work=cloneCanvas(original);
+        const local=makeLocalDetectionCanvas(original,q);
         const tmpCrop=document.createElement('canvas');
-        const opts=Object.assign({},DEFAULT_OPTIONS,{qrRequired:true,qrCenter:q.geometry.center,qrPoints:Array.isArray(q.geometry.points)?q.geometry.points:[]});
-        const r=window.AsapOuterDetector.detectOuterFrame(work,tmpCrop,opts);
+        const opts=Object.assign({},DEFAULT_OPTIONS,{qrRequired:true,qrCenter:local.geometry.center,qrPoints:Array.isArray(local.geometry.points)?local.geometry.points:[]});
+        let r=window.AsapOuterDetector.detectOuterFrame(local.canvas,tmpCrop,opts);
+        r=translateDetectionResult(r,local.offsetX,local.offsetY);
         const debugSaysPass=!!(r&&r.debug&&r.debug.indexOf('Final Gate: outer=PASS / trustedFeature=PASS')>=0);
         const ok=!!(r&&(r.ok||debugSaysPass));
         if (!r || !r.rect) continue;
