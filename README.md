@@ -1,6 +1,6 @@
-# ASAP Check v31.52 — Negative Guard + Faster Multi-Card
+# ASAP Check v31.53 — Negative Guard + Faster Multi-Card
 
-Build: **v31.52 / 2026-09-02**
+Build: **v31.53 / 2026-09-02**
 
 Changes:
 - Tightened T-line validation so gray/dark slot shadows cannot pass without measurable pink/red evidence.

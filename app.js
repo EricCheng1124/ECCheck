@@ -911,6 +911,10 @@
 
     captureBusy = false;
     if (captureBtn) captureBtn.disabled = false;
+
+    // v31.53：每次開啟相機都視為「新的一次拍攝」。
+    // 清除上一張照片的 QR lock / geometry / metadata，避免第二次拍照沿用舊 QR 而像只能拍一次。
+    clearQrData();
     stopCamera();
     showCameraStage();
     if (cameraStatus) cameraStatus.textContent = 'Opening rear camera...';

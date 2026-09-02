@@ -1421,31 +1421,30 @@
     const qrBottomY = qrCenterY + qSide * 0.50;
     const stripCenterX = W * 0.50;
 
-    // 只取 QR 同中線附近的中央試紙，主動避開結果槽左右塑膠邊緣。
-    const stripHalfWidth = Math.max(3, Math.min(W * 0.085, qSide * 0.14));
+    // v31.53：先放寬「試紙搜尋區」，再在其中找真正的 C/T 線。
+    // QR 只決定卡匣方向與試紙中心軸，不再用很窄的固定小框硬套 C/T。
+    // X 仍限制在 QR 同中線，避免把 C/T 字樣與塑膠外框納入 profile。
+    const stripHalfWidth = Math.max(4, Math.min(W * 0.14, qSide * 0.23));
     const x0 = clamp(Math.floor(stripCenterX - stripHalfWidth), 0, W-1);
     const x1 = clamp(Math.ceil(stripCenterX + stripHalfWidth), x0 + 1, W);
 
-    // v31.47：依 15:53~16:12 這批實拍校正，v31.46 的 C/T band 明顯太靠近 QR。
-    // 保持 QR 中線作為 X 硬條件，只把 Y 幾何整組下移；不靠放大搜尋區來補償。
-    // C 約在 QR bottom + 1.00Q，T 約在 QR bottom + 1.26Q。
-    // 搜尋帶略收窄至 ±0.10Q，降低槽上緣、塑膠邊緣陰影混入候選。
-    // v31.52：陰性實拍校正。舊值整體太靠近 QR，會把槽上緣/空白區當成 C/T 區。
-    // 依 2026-09-02 三張陰性照片，C/T 固定帶整體往 S 方向下移約 0.28Q。
-    const cExpectedAbsY = qrBottomY + qSide * 1.28;
-    const tExpectedAbsY = qrBottomY + qSide * 1.54;
-    const bandHalf = Math.max(5, qSide * 0.10);
-    const y0 = clamp(Math.floor(cExpectedAbsY - bandHalf), 0, H-1);
-    const y1 = clamp(Math.ceil(tExpectedAbsY + bandHalf), y0 + 1, H);
+    // 大搜尋區：QR bottom 往 S 方向約 0.72Q ~ 1.72Q。
+    // C 先在較大的 0.76Q ~ 1.34Q 範圍找；找到 C 後，T 再依固定 C→T 間距搜尋。
+    // 這可同時容忍拍攝距離/透視誤差，又不讓 T 自由跑去抓槽邊陰影。
+    const cExpectedAbsY = qrBottomY + qSide * 1.02;
+    let tExpectedAbsY = qrBottomY + qSide * 1.28;
+    const bandHalf = Math.max(6, qSide * 0.14);
+    const y0 = clamp(Math.floor(qrBottomY + qSide * 0.72), 0, H-1);
+    const y1 = clamp(Math.ceil(qrBottomY + qSide * 1.72), y0 + 1, H);
     const h = Math.max(1, y1-y0);
 
     const cExpectedLocalY = cExpectedAbsY - y0;
-    const tExpectedLocalY = tExpectedAbsY - y0;
+    let tExpectedLocalY = tExpectedAbsY - y0;
     const cSearchRange = {
-      start: clamp(Math.floor(cExpectedLocalY - bandHalf), 0, h-1),
-      end: clamp(Math.ceil(cExpectedLocalY + bandHalf), 0, h-1)
+      start: clamp(Math.floor((qrBottomY + qSide * 0.76) - y0), 0, h-1),
+      end: clamp(Math.ceil((qrBottomY + qSide * 1.34) - y0), 0, h-1)
     };
-    const tSearchRange = {
+    let tSearchRange = {
       start: clamp(Math.floor(tExpectedLocalY - bandHalf), 0, h-1),
       end: clamp(Math.ceil(tExpectedLocalY + bandHalf), 0, h-1)
     };
@@ -1546,6 +1545,17 @@
     }
 
     let cQ = bestPeakInBand('C', cSearchRange, cExpectedLocalY);
+
+    // v31.53 C-first：T 的位置跟著實際找到的 C，而不是跟著固定 QR Y 值。
+    // C→T 約 0.26Q；搜尋容許 ±0.15Q。陰性時即使沒有 T，也不會跑到遠處陰影找假峰。
+    const cAnchorLocalY = cQ && cQ.selected ? cQ.y : cExpectedLocalY;
+    tExpectedLocalY = cAnchorLocalY + qSide * 0.26;
+    tExpectedAbsY = y0 + tExpectedLocalY;
+    const tBandHalf = Math.max(6, qSide * 0.15);
+    tSearchRange = {
+      start: clamp(Math.floor(tExpectedLocalY - tBandHalf), 0, h-1),
+      end: clamp(Math.ceil(tExpectedLocalY + tBandHalf), 0, h-1)
+    };
     let tQ = bestPeakInBand('T', tSearchRange, tExpectedLocalY);
     const cSelected = !!cQ.selected;
     const tSelected = !!tQ.selected;
