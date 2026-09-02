@@ -1432,21 +1432,21 @@
     const x0 = clamp(Math.floor(stripCenterX - stripHalfWidth), 0, W-1);
     const x1 = clamp(Math.ceil(stripCenterX + stripHalfWidth), x0 + 1, W);
 
-    // v31.56：固定在「每一張自己的 QR」下方，並比 v31.55 再遠離 QR。
+    // v31.57：保留每張 QR 固定座標，但 CT 整體往 QR 方向上移 0.27Q。
     // 不允許 Window、C peak 或其他卡片去改變 CT zone 的位置。
     // 搜尋帶刻意縮小，槽口上下邊與塑膠陰影不再有資格成為 C/T peak。
-    const cExpectedAbsY = qrBottomY + qSide * 1.48;
-    let tExpectedAbsY = qrBottomY + qSide * 1.78;
+    const cExpectedAbsY = qrBottomY + qSide * 1.21;
+    let tExpectedAbsY = qrBottomY + qSide * 1.51;
     const bandHalf = Math.max(5, qSide * 0.085);
-    const y0 = clamp(Math.floor(qrBottomY + qSide * 1.24), 0, H-1);
-    const y1 = clamp(Math.ceil(qrBottomY + qSide * 2.00), y0 + 1, H);
+    const y0 = clamp(Math.floor(qrBottomY + qSide * 0.97), 0, H-1);
+    const y1 = clamp(Math.ceil(qrBottomY + qSide * 1.73), y0 + 1, H);
     const h = Math.max(1, y1-y0);
 
     const cExpectedLocalY = cExpectedAbsY - y0;
     let tExpectedLocalY = tExpectedAbsY - y0;
     const cSearchRange = {
-      start: clamp(Math.floor((qrBottomY + qSide * 1.36) - y0), 0, h-1),
-      end: clamp(Math.ceil((qrBottomY + qSide * 1.60) - y0), 0, h-1)
+      start: clamp(Math.floor((qrBottomY + qSide * 1.09) - y0), 0, h-1),
+      end: clamp(Math.ceil((qrBottomY + qSide * 1.33) - y0), 0, h-1)
     };
     let tSearchRange = {
       start: clamp(Math.floor(tExpectedLocalY - bandHalf), 0, h-1),
