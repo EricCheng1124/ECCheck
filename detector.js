@@ -1612,7 +1612,7 @@
     );
 
     return {
-      source:'ct-qr-anchored-bands-v31-47',
+      source:'ct-qr-anchored-bands-v31-54',
       x0, x1, y0, y1, h,
       zone:{x:x0, y:y0, w:Math.max(1, x1-x0), h:Math.max(1, y1-y0), startRatio:ctStartRatio, endRatio:ctEndRatio, widthRatio:ctEndRatio-ctStartRatio, topThirdY:Math.round(topThirdY), topThirdPadding:topThirdPadding, yLimitedByTopThird:false, coordinateSystem:'qr-anchored', qrSide:qSide, qrBottomY, stripCenterX, cExpectedAbsY, tExpectedAbsY, bandHalf},
       raw, profile:positive, baseline:bg, rawBaseline, rawMedian, rawMax, pinkMax, darkMax, combinedMax, selectedMode, lumBackground, lumMedian, mean:stat.mean, std:stat.std,
@@ -2253,9 +2253,12 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
     const qSide=(un+vn)*0.5;
     ux/=un; uy/=un; vx/=vn; vy/=vn;
 
+    // v31.54：不要再猜 4 個方向。jsQR 的 corner 順序是
+    // TL, TR, BR, BL，因此 TL→BL（v+）就是 QR 圖樣的「下方」。
+    // 本卡匣的 QR 印刷方向固定，卡匣本體永遠位於 QR 的下方；
+    // 直接使用 v+ 可避免背景/螢幕被誤選成卡匣延伸方向。
     const dirs=[
-      {x:ux,y:uy,name:'qr-dir-u+'}, {x:-ux,y:-uy,name:'qr-dir-u-'},
-      {x:vx,y:vy,name:'qr-dir-v+'}, {x:-vx,y:-vy,name:'qr-dir-v-'}
+      {x:vx,y:vy,name:'qr-dir-body-v+'}
     ];
     const L=qSide*5.35;
     const CW=qSide*1.55;
