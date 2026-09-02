@@ -1221,7 +1221,7 @@
     };
   }
 
-  function analyzeCTLines(cropCanvas, win) {
+  function analyzeCTLines(cropCanvas, win, qrNorm) {
     if (!cropCanvas || !win) return null;
     const W = cropCanvas.width;
     const H = cropCanvas.height;
@@ -1416,10 +1416,14 @@
     // C/T 不再在整片 Window/slot 內自由找峰，避免把塑膠槽邊緣陰影誤判成 C/T。
     // buildQrCassetteTemplates() 使用 cassette length ~= 5.35Q，QR center ~= 0.115H，
     // 因此在標準化卡匣座標中可反推出 Q 與 QR bottom。
-    const qSide = H / 5.35;
-    const qrCenterY = H * 0.115;
+    // v31.56: QR 實際座標鎖定。不要再由外框 H 反推 QR 位置，
+    // 因為多卡/遠拍時每張外框長度略有差異，會讓 CT zone 看起來忽遠忽近。
+    // qrNorm 是該張 QR 經同一個卡匣透視座標換算後的位置與尺寸。
+    const hasQrNorm = !!(qrNorm && Number.isFinite(qrNorm.cx) && Number.isFinite(qrNorm.cy) && Number.isFinite(qrNorm.side) && qrNorm.side > 3);
+    const qSide = hasQrNorm ? qrNorm.side : (H / 5.35);
+    const qrCenterY = hasQrNorm ? qrNorm.cy : (H * 0.115);
     const qrBottomY = qrCenterY + qSide * 0.50;
-    const stripCenterX = W * 0.50;
+    const stripCenterX = hasQrNorm ? qrNorm.cx : (W * 0.50);
 
     // v31.55：CT ROI 改為「窄、短、往下移」。
     // 實拍顯示舊版 ROI 太靠近 QR、太寬且太長，容易把試紙槽斜面/側壁陰影當成 C/T。
@@ -1428,21 +1432,21 @@
     const x0 = clamp(Math.floor(stripCenterX - stripHalfWidth), 0, W-1);
     const x1 = clamp(Math.ceil(stripCenterX + stripHalfWidth), x0 + 1, W);
 
-    // Compact CT ROI：QR bottom 往 S 方向約 1.08Q ~ 1.86Q。
-    // C 的實拍中心約 1.32Q；T 約在 C 下方 0.33Q。
+    // v31.56：固定在「每一張自己的 QR」下方，並比 v31.55 再遠離 QR。
+    // 不允許 Window、C peak 或其他卡片去改變 CT zone 的位置。
     // 搜尋帶刻意縮小，槽口上下邊與塑膠陰影不再有資格成為 C/T peak。
-    const cExpectedAbsY = qrBottomY + qSide * 1.32;
-    let tExpectedAbsY = qrBottomY + qSide * 1.65;
-    const bandHalf = Math.max(5, qSide * 0.10);
-    const y0 = clamp(Math.floor(qrBottomY + qSide * 1.08), 0, H-1);
-    const y1 = clamp(Math.ceil(qrBottomY + qSide * 1.86), y0 + 1, H);
+    const cExpectedAbsY = qrBottomY + qSide * 1.48;
+    let tExpectedAbsY = qrBottomY + qSide * 1.78;
+    const bandHalf = Math.max(5, qSide * 0.085);
+    const y0 = clamp(Math.floor(qrBottomY + qSide * 1.24), 0, H-1);
+    const y1 = clamp(Math.ceil(qrBottomY + qSide * 2.00), y0 + 1, H);
     const h = Math.max(1, y1-y0);
 
     const cExpectedLocalY = cExpectedAbsY - y0;
     let tExpectedLocalY = tExpectedAbsY - y0;
     const cSearchRange = {
-      start: clamp(Math.floor((qrBottomY + qSide * 1.18) - y0), 0, h-1),
-      end: clamp(Math.ceil((qrBottomY + qSide * 1.46) - y0), 0, h-1)
+      start: clamp(Math.floor((qrBottomY + qSide * 1.36) - y0), 0, h-1),
+      end: clamp(Math.ceil((qrBottomY + qSide * 1.60) - y0), 0, h-1)
     };
     let tSearchRange = {
       start: clamp(Math.floor(tExpectedLocalY - bandHalf), 0, h-1),
@@ -1787,7 +1791,7 @@
     if (f.window && f.ctAnalysis) drawCTWaveform(ctx, W, H, f.window, f.ctAnalysis);
   }
 
-  function findInternalFeaturesOnCrop(cropCanvas, draw, forceQrTop) {
+  function findInternalFeaturesOnCrop(cropCanvas, draw, forceQrTop, qrNorm) {
     const src = cv.imread(cropCanvas);
     const W = src.cols;
     const H = src.rows;
@@ -1817,7 +1821,7 @@
     const normalScore = directionAnalysis.bottomScore;
     const invertedScore = directionAnalysis.topScore;
 
-    const ctAnalysis = analyzeCTLines(cropCanvas, win);
+    const ctAnalysis = analyzeCTLines(cropCanvas, win, qrNorm);
 
     const out = {
       window: win,
@@ -1851,17 +1855,17 @@
     return out;
   }
 
-  function detectInternalFeatures(cropCanvas, forceQrTop) {
-    let f = findInternalFeaturesOnCrop(cropCanvas,false,forceQrTop);
+  function detectInternalFeatures(cropCanvas, forceQrTop, qrNorm) {
+    let f = findInternalFeaturesOnCrop(cropCanvas,false,forceQrTop,qrNorm);
     let orientationCorrected = false;
 
     if (!forceQrTop && f.needsRotation180) {
       rotateCanvas180(cropCanvas);
       orientationCorrected = true;
-      f = findInternalFeaturesOnCrop(cropCanvas,false,false);
+      f = findInternalFeaturesOnCrop(cropCanvas,false,false,qrNorm);
     }
 
-    const finalF = findInternalFeaturesOnCrop(cropCanvas,true,forceQrTop);
+    const finalF = findInternalFeaturesOnCrop(cropCanvas,true,forceQrTop,qrNorm);
     finalF.orientationCorrected = orientationCorrected;
     finalF.orientation = forceQrTop ? 'qr-top-window-below' : (finalF.chosenTemplate === 'normal' ? 'window-above-sample' : 'sample-above-window');
     finalF.orientationSource = forceQrTop ? 'qr-position' : 'sample-zone';
@@ -2386,9 +2390,33 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
     if(best){
       let features=null;
       const qrOrientation = orientPointsWithQr(best.pts, options.qrCenter || null);
+
+      // v31.56: 把「這一張卡自己的 QR」換算到標準化卡匣座標。
+      // 只依 QR 與最終外框的幾何關係計算，不使用 Window/slot 或 C/T peak 回推位置。
+      let qrNorm = null;
+      try {
+        const qp = Array.isArray(options.qrPoints) ? options.qrPoints : [];
+        const qc = options.qrCenter || null;
+        const cp = qrOrientation.points; // TL,TR,BR,BL
+        if (qc && qp.length >= 4 && cp && cp.length === 4) {
+          const topMid={x:(cp[0].x+cp[1].x)/2,y:(cp[0].y+cp[1].y)/2};
+          const botMid={x:(cp[3].x+cp[2].x)/2,y:(cp[3].y+cp[2].y)/2};
+          const leftMid={x:(cp[0].x+cp[3].x)/2,y:(cp[0].y+cp[3].y)/2};
+          const rightMid={x:(cp[1].x+cp[2].x)/2,y:(cp[1].y+cp[2].y)/2};
+          const lx=botMid.x-topMid.x, ly=botMid.y-topMid.y, ll=Math.max(1,Math.hypot(lx,ly));
+          const wx=rightMid.x-leftMid.x, wy=rightMid.y-leftMid.y, wl=Math.max(1,Math.hypot(wx,wy));
+          const along=((qc.x-topMid.x)*lx+(qc.y-topMid.y)*ly)/(ll*ll);
+          const across=((qc.x-leftMid.x)*wx+(qc.y-leftMid.y)*wy)/(wl*wl);
+          const outW=cropCanvas.width||Math.max(1,wl), outH=cropCanvas.height||Math.max(1,ll);
+          const qLens=[]; for(let i=0;i<4;i++){const a=qp[i],b=qp[(i+1)%4];qLens.push(Math.hypot(a.x-b.x,a.y-b.y));}
+          const qSrc=qLens.reduce((a,b)=>a+b,0)/Math.max(1,qLens.length);
+          const sideByW=qSrc/wl*outW, sideByH=qSrc/ll*outH;
+          qrNorm={cx:across*outW,cy:along*outH,side:(sideByW+sideByH)*0.5};
+        }
+      } catch(_) { qrNorm=null; }
       try{
         warpCropToCanvas(canvas,cropCanvas,qrOrientation.points,qrOrientation.applied);
-        features=detectInternalFeatures(cropCanvas,qrOrientation.applied);
+        features=detectInternalFeatures(cropCanvas,qrOrientation.applied,qrNorm);
         if (features) features.qrOrientation = qrOrientation;
       } catch(e){ console.error(e); }
 
