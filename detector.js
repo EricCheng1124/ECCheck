@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v31.55-compact-ct-roi-fixed-bands';
+  const VERSION = 'v31.58-ct-up-012q';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -1432,11 +1432,11 @@
     const x0 = clamp(Math.floor(stripCenterX - stripHalfWidth), 0, W-1);
     const x1 = clamp(Math.ceil(stripCenterX + stripHalfWidth), x0 + 1, W);
 
-    // v31.57：保留每張 QR 固定座標，但 CT 整體往 QR 方向上移 0.27Q。
+    // v31.58：保留每張 QR 固定座標；相較 v31.57，CT 再往 QR 方向上移 0.12Q。
     // 不允許 Window、C peak 或其他卡片去改變 CT zone 的位置。
     // 搜尋帶刻意縮小，槽口上下邊與塑膠陰影不再有資格成為 C/T peak。
-    const cExpectedAbsY = qrBottomY + qSide * 1.21;
-    let tExpectedAbsY = qrBottomY + qSide * 1.51;
+    const cExpectedAbsY = qrBottomY + qSide * 1.09;
+    let tExpectedAbsY = qrBottomY + qSide * 1.39;
     const bandHalf = Math.max(5, qSide * 0.085);
     const y0 = clamp(Math.floor(qrBottomY + qSide * 0.97), 0, H-1);
     const y1 = clamp(Math.ceil(qrBottomY + qSide * 1.73), y0 + 1, H);
