@@ -1,16 +1,14 @@
-# ASAP Check v31.59 — CT Up 0.12Q + Per-QR Fixed CT Geometry
+# ASAP Check v31.60 — CT Up 0.20Q + Per-QR Fixed CT Geometry
 
-- Based directly on v31.58.
-- Each card's CT zone remains anchored to that card's own normalized QR center and QR size.
-- Compared with v31.58, the entire CT ROI is moved another 0.12Q toward the QR code.
-- CT ROI width and height are unchanged.
-- C/T spacing is unchanged.
-- Multi-card Per-QR geometry and QR reset behavior are unchanged.
+This build keeps the v31.59 Per-QR fixed CT geometry and moves the complete CT analysis region 0.20Q toward the QR code.
+
+## v31.60 geometry
+- CT ROI top: QR bottom + 0.65Q
+- CT ROI bottom: QR bottom + 1.41Q
+- C expected position: QR bottom + 0.77Q
+- T expected position: QR bottom + 1.07Q
+- C search band: QR bottom + 0.77Q to +1.01Q
+- Width/height and QR-based scale logic otherwise unchanged.
+- Each detected card uses its own QR center and QR size.
 - Window/slot, shadows, peaks, and neighboring cards cannot move the CT zone.
-
-## v31.59 geometry
-- C expected position: QR bottom + 0.97Q
-- T expected position: QR bottom + 1.27Q
-- CT ROI: QR bottom + 0.85Q to +1.61Q
-- C search band: QR bottom + 0.97Q to +1.21Q
-- UI, detector VERSION, and cache-busting query strings updated to v31.59.
+- UI, detector VERSION, stylesheet/script cache-busting strings updated to v31.60.
