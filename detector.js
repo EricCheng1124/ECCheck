@@ -974,7 +974,7 @@
     const y0 = inverted ? 0.40 : 0.235;
     const y1 = inverted ? 0.765 : 0.60;
     const b = makeRatioBox(W, H, x0, y0, x1, y1);
-    return {x:b.x, y:b.y, w:b.w, h:b.h, cx:b.cx, cy:b.cy, source:'qr-fixed-window-new-cassette-v3141'};
+    return {x:b.x, y:b.y, w:b.w, h:b.h, cx:b.cx, cy:b.cy, source:'qr-fixed-window-new-cassette-v3152'};
   }
 
   function makeFixedInternalByDirection(cropCanvas, W, H, directionAnalysis, allowQrFixedWindow) {
@@ -1430,8 +1430,10 @@
     // 保持 QR 中線作為 X 硬條件，只把 Y 幾何整組下移；不靠放大搜尋區來補償。
     // C 約在 QR bottom + 1.00Q，T 約在 QR bottom + 1.26Q。
     // 搜尋帶略收窄至 ±0.10Q，降低槽上緣、塑膠邊緣陰影混入候選。
-    const cExpectedAbsY = qrBottomY + qSide * 1.00;
-    const tExpectedAbsY = qrBottomY + qSide * 1.26;
+    // v31.52：陰性實拍校正。舊值整體太靠近 QR，會把槽上緣/空白區當成 C/T 區。
+    // 依 2026-09-02 三張陰性照片，C/T 固定帶整體往 S 方向下移約 0.28Q。
+    const cExpectedAbsY = qrBottomY + qSide * 1.28;
+    const tExpectedAbsY = qrBottomY + qSide * 1.54;
     const bandHalf = Math.max(5, qSide * 0.10);
     const y0 = clamp(Math.floor(cExpectedAbsY - bandHalf), 0, H-1);
     const y1 = clamp(Math.ceil(tExpectedAbsY + bandHalf), y0 + 1, H);
@@ -2332,7 +2334,9 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
       const ct = fs.f && fs.f.ctAnalysis ? fs.f.ctAnalysis : null;
       const cLineBonus = ct && ct.cPeak && ct.cPeak.detected ? 10500 : 0;
       const tLineBonus = ct && ct.tPeak && ct.tPeak.detected ? 3000 : 0;
-      const templateBonus = c.qrTemplate ? 1800 : 0;
+      // v31.52：有 QR 時優先採用 QR 建出的整卡匣模板。
+      // 避免桌面/螢幕邊界形成的長方形 contour 把 QR 包住後，誤當成卡匣。
+      const templateBonus = c.qrTemplate ? 7200 : 0;
       c.totalScore =
         geo.score +
         fs.score +

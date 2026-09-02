@@ -699,7 +699,7 @@
       const W=canvas.width, H=canvas.height;
       const ctx=canvas.getContext('2d',{willReadFrequently:true});
 
-      // v31.51: 先用少量、縮圖後的區塊找 QR。舊版最多會跑 30+ tiles × 3 variants，
+      // v31.52: 先用少量、縮圖後的區塊找 QR。舊版最多會跑 30+ tiles × 3 variants，
       // 多卡照片主要時間都耗在 jsQR；這裡改為 8~14 個自適應區塊 × 2 variants。
       const regions=[];
       const addGrid=(cols,rows,overlap=0.16)=>{
