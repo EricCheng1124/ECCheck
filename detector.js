@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v31.71-base70-multicard';
+  const VERSION = 'v31.72-base70-multicard-fwhm-observe';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -1416,7 +1416,7 @@
     const CASSETTE_L_MM = 70.0;
     const STRIP_TOP_MM = 30.0;
     const STRIP_H_MM = 10.0;
-    const T_MIN_GAP_MM = 0.8;
+    const T_MIN_GAP_MM = 5.0;
     const T_MAX_GAP_MM = 6.0;
     const T_RELATIVE_C_RATIO = 0.10; // T 線強度至少需達 C 線的 10%
     const pxPerMm = H / CASSETTE_L_MM;
@@ -1567,9 +1567,9 @@
     const cAnchorY = cCont ? cCont.localY : cExpectedLocalY;
 
     // v31.68：機構條件 hard-lock。
-    // T 線只允許出現在「實際 C 線下方 0.8 ~ 6.0 mm」。
-    // 超過 6 mm 的槽邊、陰影、反光 peak 一律不能成為 T；
-    // 小於 0.8 mm 則視為 C 本身厚度/下緣，不可重複當 T。
+    // v31.72：依卡匣固定物理位置，T 線只允許出現在「實際 C 線下方 5.0 ~ 6.0 mm」。
+    // 先用固定位置排除大部分槽邊、陰影與非 T 區域。
+    // FWHM 本版先只量測/顯示，不參與 Positive / Negative 最終判定。
     const tMinGapPx = Math.max(1, T_MIN_GAP_MM * pxPerMm);
     const tMaxGapPx = Math.max(tMinGapPx + 1, T_MAX_GAP_MM * pxPerMm);
     const dynTStart = clamp(Math.ceil(cAnchorY + tMinGapPx), 0, h-1);
@@ -1597,7 +1597,7 @@
       return sum / n;
     }
 
-    // 在 C 下方 0.8~6 mm 的合法區域逐列掃描。
+    // 在 C 下方 5.0~6.0 mm 的合法區域逐列掃描。
     // 主要排名依 bandStrength；水平/粉紅證據只做小幅加分，不再當第一道硬門檻。
     function bestRelativeTInRange(range) {
       if (!range || range.start > range.end) return null;
@@ -1626,6 +1626,56 @@
     }
 
     const tCont = tRangeValid ? bestRelativeTInRange(dynTRange) : null;
+
+    // v31.72：量測 T candidate 的半高全寬 FWHM（觀察模式）。
+    // 使用 candidate 周圍約 1.2~2.0 mm 的肩部作局部 baseline，
+    // 再於 baseline + 50% 峰高的位置求左右交點。
+    // 本版 FWHM 只寫入 debug / Advanced Info，不參與 Positive / Negative 判定。
+    function measureFwhm(localY) {
+      if (!Number.isFinite(localY) || !positive.length) {
+        return {valid:false, widthPx:0, widthMm:0, peak:0, baseline:0, halfLevel:0, left:localY||0, right:localY||0};
+      }
+      const c = clamp(Math.round(localY), 0, h-1);
+      const shoulderNear = Math.max(1, Math.round(1.2 * pxPerMm));
+      const shoulderFar = Math.max(shoulderNear + 1, Math.round(2.0 * pxPerMm));
+      const shoulderVals = [];
+      for (let d=shoulderNear; d<=shoulderFar; d++) {
+        if (c-d >= 0) shoulderVals.push(Math.max(0, positive[c-d] || 0));
+        if (c+d < h) shoulderVals.push(Math.max(0, positive[c+d] || 0));
+      }
+      const localBaseline = shoulderVals.length ? median(shoulderVals) : 0;
+      const peak = Math.max(0, positive[c] || 0);
+      const amplitude = Math.max(0, peak - localBaseline);
+      if (amplitude <= 0.05) {
+        return {valid:false, widthPx:0, widthMm:0, peak, baseline:localBaseline, halfLevel:localBaseline, left:c, right:c};
+      }
+      const halfLevel = localBaseline + amplitude * 0.5;
+
+      let li = c;
+      while (li > 0 && (positive[li] || 0) > halfLevel) li--;
+      let ri = c;
+      while (ri < h-1 && (positive[ri] || 0) > halfLevel) ri++;
+
+      function crossing(i0, i1) {
+        const v0 = positive[i0] || 0, v1 = positive[i1] || 0;
+        const dv = v1 - v0;
+        if (Math.abs(dv) < 1e-9) return (i0+i1)*0.5;
+        return i0 + (halfLevel-v0)/dv * (i1-i0);
+      }
+
+      let left = li;
+      if (li < c && li+1 < h) left = crossing(li, li+1);
+      let right = ri;
+      if (ri > c && ri-1 >= 0) right = crossing(ri-1, ri);
+      const widthPx = Math.max(0, right-left);
+      const widthMm = widthPx / Math.max(0.0001, pxPerMm);
+      return {
+        valid:Number.isFinite(widthMm) && widthMm > 0,
+        widthPx, widthMm, peak, baseline:localBaseline, halfLevel, left, right, amplitude
+      };
+    }
+
+    const tFwhm = tCont ? measureFwhm(tCont.localY) : measureFwhm(NaN);
 
     // Debug 預期 T 位置放在允許區間中央，不參與最終判定。
     tExpectedLocalY = clamp(cAnchorY + ((T_MIN_GAP_MM + T_MAX_GAP_MM) * 0.5) * pxPerMm, 0, h-1);
@@ -1681,7 +1731,7 @@
     cQ.detected = cDetected;
     tQ.detected = tDetected;
     cQ.reject = !cCont ? 'no-horizontal-line' : !cGeometryOk ? 'outside-middle10-c-band' : !cCont.ok ? 'no-red-continuity' : !cColorOk ? 'weak-color' : 'PASS';
-    tQ.reject = !tCont ? 'no-t-candidate' : !tGeometryOk ? 'outside-middle10-t-band' : !refinedSeparationOk ? 't-gap-outside-0.8-6mm' : !tRelativeOk ? 'below-10pct-of-c' : !tWeakHorizontalEvidence ? 'no-horizontal-evidence' : 'PASS';
+    tQ.reject = !tCont ? 'no-t-candidate' : !tGeometryOk ? 'outside-middle10-t-band' : !refinedSeparationOk ? 't-gap-outside-5-6mm' : !tRelativeOk ? 'below-10pct-of-c' : !tWeakHorizontalEvidence ? 'no-horizontal-evidence' : 'PASS';
 
     let result = 'Invalid';
     if (cDetected && tDetected) result = 'Positive';
@@ -1695,11 +1745,13 @@
     );
 
     return {
-      source:'ct-outer-middle10-v31-70-relative-t-primary',
+      source:'ct-outer-middle10-v31-72-gap5-6-fwhm-observe',
       x0, x1, y0, y1, h,
       zone:{x:x0, y:y0, w:Math.max(1, x1-x0), h:Math.max(1, y1-y0), startRatio:ctStartRatio, endRatio:ctEndRatio, widthRatio:ctEndRatio-ctStartRatio, topThirdY:Math.round(topThirdY), topThirdPadding:topThirdPadding, yLimitedByTopThird:false, coordinateSystem:'cassette-30-10-30', qrSide:qSide, stripCenterX, cExpectedAbsY, tExpectedAbsY, bandHalf, locatorY0, locatorY1, pxPerMm, cassetteMm:CASSETTE_L_MM, stripTopMm:STRIP_TOP_MM, stripHeightMm:STRIP_H_MM, tMinGapMm:T_MIN_GAP_MM, tMaxGapMm:T_MAX_GAP_MM, tRelativeCRatio:T_RELATIVE_C_RATIO, ctGapMm, cLocatorAbsY:null, cLocatorHasColor:false},
       raw, profile:positive, baseline:bg, rawBaseline, rawMedian, rawMax, pinkMax, darkMax, combinedMax, selectedMode, lumBackground, lumMedian, mean:stat.mean, std:stat.std,
-      maxScore, threshold, tThreshold, tcRatio, cStrength, tStrength, tRelativeThreshold, tRelativeRatio:T_RELATIVE_C_RATIO, tWeakHorizontalEvidence, candidateFloor, minSep,
+      maxScore, threshold, tThreshold, tcRatio, cStrength, tStrength, tRelativeThreshold, tRelativeRatio:T_RELATIVE_C_RATIO, tWeakHorizontalEvidence,
+      tFwhmMm:tFwhm.widthMm, tFwhmPx:tFwhm.widthPx, tFwhmValid:tFwhm.valid, tFwhmPeak:tFwhm.peak, tFwhmBaseline:tFwhm.baseline, tFwhmHalfLevel:tFwhm.halfLevel,
+      candidateFloor, minSep,
       cRange, tRange,
       cPeak:{y:cQ.y, absY:y0+cQ.y, score:cQ.score, detected:cDetected, selected:cSelected, redContinuity:cRed, width:cQ.width, left:y0+cQ.left, right:y0+cQ.right, drop:cQ.drop, sharpness:cQ.sharpness, shoulderRatio:cQ.shoulderRatio, shoulderMaxRatio:cQ.shoulderMaxRatio, nearShoulderRatio:cQ.nearShoulderRatio, quality:cQ.quality || 0, reject:cQ.reject, warning:cQ.warning || '-', maxWidth:cQ.maxWidth},
       tPeak:{y:tQ.y, absY:y0+tQ.y, score:tQ.score, detected:tDetected, selected:tSelected, redContinuity:tRed, width:tQ.width, left:y0+tQ.left, right:y0+tQ.right, drop:tQ.drop, sharpness:tQ.sharpness, shoulderRatio:tQ.shoulderRatio, shoulderMaxRatio:tQ.shoulderMaxRatio, nearShoulderRatio:tQ.nearShoulderRatio, quality:tQ.quality || 0, reject:tQ.reject, warning:tQ.warning || '-', maxWidth:tQ.maxWidth},
@@ -2790,6 +2842,8 @@ scored.forEach((c,i)=>
       dbg += `C Width=${ct.cPeak.width} / HalfWidth=${ct.cPeak.halfWidth || ct.cPeak.width} / MaxWidth=${ct.cPeak.maxWidth} / Drop=${ct.cPeak.drop.toFixed(1)} / Sharpness=${ct.cPeak.sharpness.toFixed(2)} / Quality=${(ct.cPeak.quality || 0).toFixed(1)} / Shoulder=${ct.cPeak.shoulderRatio.toFixed(2)} / NearShoulder=${ct.cPeak.nearShoulderRatio.toFixed(2)} / Reject=${ct.cPeak.reject}<br>`;
       dbg += `T Score=${ct.tPeak.score.toFixed(1)} / T Y=${ct.tPeak.absY.toFixed(0)} / T Detected=${ct.tPeak.detected ? 'YES' : 'NO'} / T Selected=${ct.tPeak.selected ? 'YES' : 'NO'} / T Range=${ct.tRange.start}-${ct.tRange.end}<br>`;
       dbg += `T Relative Threshold=${ct.tThreshold.toFixed(1)} / T/C Ratio=${ct.tcRatio.toFixed(2)}<br>`;
+      dbg += `T FWHM=${Number.isFinite(ct.tFwhmMm) ? ct.tFwhmMm.toFixed(3) : '-'} mm / ${Number.isFinite(ct.tFwhmPx) ? ct.tFwhmPx.toFixed(2) : '-'} px / Observe Only=${ct.tFwhmValid ? 'VALID' : 'NO PEAK'}<br>`;
+      dbg += `T FWHM Baseline=${Number.isFinite(ct.tFwhmBaseline) ? ct.tFwhmBaseline.toFixed(2) : '-'} / Peak=${Number.isFinite(ct.tFwhmPeak) ? ct.tFwhmPeak.toFixed(2) : '-'} / Half=${Number.isFinite(ct.tFwhmHalfLevel) ? ct.tFwhmHalfLevel.toFixed(2) : '-'}<br>`;
       dbg += `T Red Continuity=${ct.tPeak.redContinuity.ok ? 'YES' : 'NO'} / Run=${ct.tPeak.redContinuity.run}/${ct.tPeak.redContinuity.minRun} / Ratio=${ct.tPeak.redContinuity.ratio.toFixed(2)}<br>`;
       dbg += `T Width=${ct.tPeak.width} / HalfWidth=${ct.tPeak.halfWidth || ct.tPeak.width} / MaxWidth=${ct.tPeak.maxWidth} / Drop=${ct.tPeak.drop.toFixed(1)} / Sharpness=${ct.tPeak.sharpness.toFixed(2)} / Quality=${(ct.tPeak.quality || 0).toFixed(1)} / Shoulder=${ct.tPeak.shoulderRatio.toFixed(2)} / NearShoulder=${ct.tPeak.nearShoulderRatio.toFixed(2)} / Reject=${ct.tPeak.reject}<br>`;
       if (ct.rejectedPeaks && ct.rejectedPeaks.length) dbg += `Rejected Peaks=${ct.rejectedPeaks.join(', ')}<br>`;

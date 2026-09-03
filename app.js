@@ -1368,7 +1368,9 @@ function renderCombinedDetectionView() {
       html += `C Score: ${ct.cPeak.score.toFixed(1)} / detected=${ct.cPeak.detected ? 'YES' : 'NO'}<br>`;
       html += `T Score: ${ct.tPeak.score.toFixed(1)} / detected=${ct.tPeak.detected ? 'YES' : 'NO'}<br>`;
       if (ct.tThreshold !== undefined) html += `C Strength: ${(ct.cStrength||0).toFixed(2)} / T Strength: ${(ct.tStrength||0).toFixed(2)}<br>` +
-        `T Threshold (10% C): ${(ct.tThreshold||0).toFixed(2)} / T/C: ${((ct.tcRatio||0)*100).toFixed(1)}%<br>`;
+        `T Threshold (10% C): ${(ct.tThreshold||0).toFixed(2)} / T/C: ${((ct.tcRatio||0)*100).toFixed(1)}%<br>` +
+        `T Gap: ${(ct.zone && Number.isFinite(ct.zone.ctGapMm) ? ct.zone.ctGapMm : 0).toFixed(2)} mm / Allowed: 5.0–6.0 mm<br>` +
+        `T FWHM (observe only): ${Number.isFinite(ct.tFwhmMm) ? ct.tFwhmMm.toFixed(3) : '-'} mm / ${Number.isFinite(ct.tFwhmPx) ? ct.tFwhmPx.toFixed(2) : '-'} px<br>`;
       if (ct.cPeak.redContinuity) html += `C Red Continuity: ${ct.cPeak.redContinuity.ok ? 'YES' : 'NO'} / ratio=${ct.cPeak.redContinuity.ratio.toFixed(2)}<br>`;
       if (ct.tPeak.redContinuity) html += `T Red Continuity: ${ct.tPeak.redContinuity.ok ? 'YES' : 'NO'} / ratio=${ct.tPeak.redContinuity.ratio.toFixed(2)}<br>`;
       html += `Threshold: ${ct.threshold.toFixed(1)} / Peak Count: ${ct.peakCount}<br>`;
