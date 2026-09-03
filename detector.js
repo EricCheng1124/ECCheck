@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v31.77-card-isolated-net-pink';
+  const VERSION = 'v31.79-absolute-frame-freeze';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -2581,7 +2581,9 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
     // 最終綠框優先使用影像中真正的卡匣外緣 contour；只有完全找不到可信外框時，
     // 才使用 QR 幾何 template 當 fallback。這樣 70mm 的長度不會放大 QR 尺寸誤差。
     const qrTemplates=buildQrCassetteTemplates(qrPoints,imgArea);
-    const qrDirectMode=false;
+    // v31.79: when Capture started from a Live QR lock, Card 1 must not move at all.
+    // Use the QR-derived 70x20 mm physical template directly and bypass contour competition / edge snap.
+    const qrDirectMode=!!options.absoluteFreezeOuter;
     let rawQualified=[];
     for (const c of rawCands) {
       const enc=qrEnclosureMetrics(c,qrCenter,qrPoints);
@@ -2592,7 +2594,9 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
       // 70x20mm => 3.50:1；放寬給透視與圓角。
       if (enc.pass && gate.pass && ar>=2.70 && ar<=4.60) rawQualified.push(c);
     }
-    const allCands=rawQualified.length ? rawQualified : (rawCands.length ? rawCands : qrTemplates.slice());
+    const allCands=qrDirectMode && qrTemplates.length
+      ? qrTemplates.slice()
+      : (rawQualified.length ? rawQualified : (rawCands.length ? rawCands : qrTemplates.slice()));
     const qrRejected=[];
     const enclosingCands=[];
     for (const c of allCands) {
@@ -2659,7 +2663,7 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
 
     // v31.66：候選選定後，把四邊吸附到原圖真正卡匣邊緣。
     // 這只修正外框/透視，不會用 QR 尺寸硬算 70 mm。
-    if (best && !best.qrTemplate) {
+    if (best && !best.qrTemplate && !qrDirectMode) {
       const snap=refineOuterByImageEdges(canvas,best.pts,qrCenter);
       if (snap && snap.applied) {
         best.edgeSnap=snap;
@@ -2788,7 +2792,7 @@ dbg += 'Scored Candidates: ' + scored.length + '<br>';
 dbg += 'Final Gate: outer=' + (bestOuterGeometryOk ? 'PASS' : 'FAIL') + ' / trustedFeature=' + (bestHasTrustedFeature ? 'PASS' : 'FAIL') + ' / redWindow=' + (bestHasTrustedRedWindow ? 'YES' : 'NO') + ' / realSample=' + (bestHasRealSample ? 'YES' : 'NO') + '<br>';
 dbg += 'UI Status: ' + (bestHasRealSample ? 'FULL PASS - S Well confirmed' : (outerOnlyOk ? 'OUTER ONLY' : (partialMessage ? 'PARTIAL' : (bestOk ? 'PASS' : 'FAIL')))) + '<br>';
 dbg += 'Detection Mode: window=' + ((features && features.windowSource) ? features.windowSource : '-') + ' / sample=' + ((features && features.sampleSource) ? features.sampleSource : '-') + ' / orientation=' + ((features && features.orientation) ? features.orientation : '-') + '<br>';
-dbg += 'Outer Anchor: ' + (best && best.qrTemplate ? 'QR template fallback' : 'Contour + image edge snap') + '<br>';
+dbg += 'Outer Anchor: ' + (qrDirectMode ? 'ABSOLUTE QR FRAME FREEZE' : (best && best.qrTemplate ? 'QR template fallback' : 'Contour + image edge snap')) + '<br>';
 if (best && best.edgeSnap) dbg += 'Edge Snap: APPLIED / L ' + best.edgeSnap.oldL.toFixed(1) + '→' + best.edgeSnap.newL.toFixed(1) + ' / W ' + best.edgeSnap.oldW.toFixed(1) + '→' + best.edgeSnap.newW.toFixed(1) + '<br>';
 else dbg += 'Edge Snap: not applied<br>';
 dbg += 'Final Reason: ' + (bestOk ? (outerOnlyOk ? 'outer-only-ok, Window/S Well not confirmed yet' : (partialMessage ? 'outer+red-window-ok, S Well not confirmed yet' : 'outer+real-feature-ok')) : failReason) + '<br>';

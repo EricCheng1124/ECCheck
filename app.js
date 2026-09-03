@@ -876,7 +876,7 @@
       found.push({raw:String(raw||''),geometry:cloneQrGeometry(geometry)});
     };
 
-    // v31.78 ABSOLUTE FREEZE:
+    // v31.79 FRAME+QR ABSOLUTE FREEZE:
     // Card 1 is the exact QR geometry locked in Live Preview when Capture was pressed.
     // Never re-decode, re-center, or replace Card 1 from the captured frame.
     // Captured-frame QR detection may ONLY append Card 2..N.
@@ -1200,7 +1200,7 @@
   async function captureFromCamera() {
     if (captureBusy || !cameraVideo || !cameraStream) return;
     captureBusy = true;
-    // v31.78 ABSOLUTE FREEZE: clone the live lock synchronously on the click event, before ANY await.
+    // v31.79 FRAME+QR ABSOLUTE FREEZE: clone the live lock synchronously on the click event, before ANY await.
     const clickLockedSnapshot = (qrLocked && lockedQrSnapshot && lockedQrSnapshot.geometry) ? {
       raw: String(lockedQrSnapshot.raw || (lastQr && lastQr.raw) || ''),
       geometry: cloneQrGeometry(lockedQrSnapshot.geometry),
@@ -1671,9 +1671,11 @@ function renderCombinedDetectionView() {
       showDetectionStage(false); return;
     }
 
-    // First QR continues to populate the shared test-information panel.
-    if (qrCodes[0].raw) updateQrDisplay(parseQrData(qrCodes[0].raw),true);
-    lastQrGeometry=cloneQrGeometry(qrCodes[0].geometry);
+    // v31.79: the live-locked QR is authoritative for Card 1.
+    // Never let a post-capture QR reorder/replace the geometry that the user actually locked.
+    const authoritativeQr = lockedSeed || qrCodes[0];
+    if (authoritativeQr && authoritativeQr.raw) updateQrDisplay(parseQrData(authoritativeQr.raw),true);
+    if (authoritativeQr && authoritativeQr.geometry) lastQrGeometry=cloneQrGeometry(authoritativeQr.geometry);
 
     if (!cvReady) {
       resultEl.className='result neutral'; lastResultText='Invalid'; resultEl.textContent=''; detailEl.textContent=''; return;
@@ -1685,7 +1687,15 @@ function renderCombinedDetectionView() {
       for (const q of qrCodes) {
         const local=makeLocalDetectionCanvas(original,q,qrCodes);
         const tmpCrop=document.createElement('canvas');
-        const opts=Object.assign({},DEFAULT_OPTIONS,{qrRequired:true,qrCenter:local.geometry.center,qrPoints:Array.isArray(local.geometry.points)?local.geometry.points:[]});
+        const isFrozenCard1 = !!(lockedSeed && lockedSeed.geometry && isSameQr(q.geometry, lockedSeed.geometry));
+        const opts=Object.assign({},DEFAULT_OPTIONS,{
+          qrRequired:true,
+          qrCenter:local.geometry.center,
+          qrPoints:Array.isArray(local.geometry.points)?local.geometry.points:[],
+          // v31.79: Card 1 outer frame is also frozen to the QR physical template.
+          // No contour/edge-snap is allowed to move it after Capture.
+          absoluteFreezeOuter:isFrozenCard1
+        });
         let r=window.AsapOuterDetector.detectOuterFrame(local.canvas,tmpCrop,opts);
         r=translateDetectionResult(r,local.offsetX,local.offsetY);
         const debugSaysPass=!!(r&&r.debug&&r.debug.indexOf('Final Gate: outer=PASS / trustedFeature=PASS')>=0);
@@ -1702,10 +1712,17 @@ function renderCombinedDetectionView() {
       canvas.width=original.width; canvas.height=original.height; canvas.getContext('2d',{alpha:false}).drawImage(original,0,0);
 
       if (sorted.length===1) {
-        const one=sorted[0]; lastQrGeometry=one.qr.geometry;
+        const one=sorted[0];
+        const isFrozenCard1 = !!(lockedSeed && lockedSeed.geometry && isSameQr(one.qr.geometry, lockedSeed.geometry));
+        if (!lockedSeed) lastQrGeometry=one.qr.geometry;
         cropCanvas.width=one.crop.width; cropCanvas.height=one.crop.height; cropCanvas.getContext('2d').drawImage(one.crop,0,0);
-        // Re-run on the visible canvas so the legacy single-card image keeps its green frame.
-        const r=window.AsapOuterDetector.detectOuterFrame(canvas,cropCanvas,Object.assign({},DEFAULT_OPTIONS,{qrRequired:true,qrCenter:one.qr.geometry.center,qrPoints:one.qr.geometry.points||[]}));
+        // Re-run on the visible canvas. When Card 1 came from Live Lock, keep BOTH QR and outer frame frozen.
+        const r=window.AsapOuterDetector.detectOuterFrame(canvas,cropCanvas,Object.assign({},DEFAULT_OPTIONS,{
+          qrRequired:true,
+          qrCenter:one.qr.geometry.center,
+          qrPoints:one.qr.geometry.points||[],
+          absoluteFreezeOuter:isFrozenCard1
+        }));
         setResult(r);
       } else {
         setMultiResults(sorted);
