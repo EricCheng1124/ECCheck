@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v31.65-outer30-middle10';
+  const VERSION = 'v31.66-edge-snap-ct-decoupled';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -2308,6 +2308,98 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
 
 
 
+
+
+  // v31.66：在 contour 候選選定後，再用原圖真正的亮/暗邊界把四邊「吸附」到卡匣外緣。
+  // QR 仍只負責方向；這個步驟不使用 QR 尺寸推算卡匣長度。
+  function refineOuterByImageEdges(canvas, pts, qrCenter) {
+    try {
+      if (!canvas || !Array.isArray(pts) || pts.length !== 4) return null;
+      const oriented = orientPointsWithQr(pts, qrCenter || null);
+      const p = oriented.points; // TL,TR,BR,BL；QR 端應在 top
+      if (!p || p.length !== 4) return null;
+
+      const ctx = canvas.getContext('2d', {willReadFrequently:true});
+      const W = canvas.width, H = canvas.height;
+      const im = ctx.getImageData(0,0,W,H).data;
+
+      const topMid={x:(p[0].x+p[1].x)/2,y:(p[0].y+p[1].y)/2};
+      const botMid={x:(p[3].x+p[2].x)/2,y:(p[3].y+p[2].y)/2};
+      const leftMid={x:(p[0].x+p[3].x)/2,y:(p[0].y+p[3].y)/2};
+      const rightMid={x:(p[1].x+p[2].x)/2,y:(p[1].y+p[2].y)/2};
+      const cx=(topMid.x+botMid.x)/2, cy=(topMid.y+botMid.y)/2;
+
+      let vx=botMid.x-topMid.x, vy=botMid.y-topMid.y;
+      let ux=rightMid.x-leftMid.x, uy=rightMid.y-leftMid.y;
+      const L=Math.max(1,Math.hypot(vx,vy)), CW=Math.max(1,Math.hypot(ux,uy));
+      vx/=L; vy/=L; ux/=CW; uy/=CW;
+      const halfL=L/2, halfW=CW/2;
+
+      function rgbAt(x,y){
+        const xx=Math.max(0,Math.min(W-1,Math.round(x))), yy=Math.max(0,Math.min(H-1,Math.round(y)));
+        const i=(yy*W+xx)*4;
+        return [im[i],im[i+1],im[i+2]];
+      }
+      function sideScore(axis, pos, tangentHalf, insideSign){
+        // 比較邊界內外約 2~4px 的 RGB 差；同時偏好「卡匣內側較亮」。
+        const normal = axis==='v' ? {x:vx,y:vy} : {x:ux,y:uy};
+        const tangent = axis==='v' ? {x:ux,y:uy} : {x:vx,y:vy};
+        const base={x:cx+normal.x*pos,y:cy+normal.y*pos};
+        const d=Math.max(2,Math.min(5,Math.round(Math.min(CW,L)*0.018)));
+        let diff=0, bright=0, n=0;
+        for(let k=-12;k<=12;k++){
+          const t=(k/12)*tangentHalf;
+          const bx=base.x+tangent.x*t, by=base.y+tangent.y*t;
+          const a=rgbAt(bx-normal.x*d, by-normal.y*d);
+          const b=rgbAt(bx+normal.x*d, by+normal.y*d);
+          const dr=a[0]-b[0], dg=a[1]-b[1], db=a[2]-b[2];
+          diff += Math.sqrt(dr*dr+dg*dg+db*db);
+          const la=.299*a[0]+.587*a[1]+.114*a[2];
+          const lb=.299*b[0]+.587*b[1]+.114*b[2];
+          // insideSign<0 => negative side is inside; >0 => positive side is inside
+          bright += insideSign<0 ? (la-lb) : (lb-la);
+          n++;
+        }
+        return n ? diff/n + Math.max(-8,Math.min(20,bright/n))*0.45 : 0;
+      }
+      function search(axis, expected, span, tangentHalf, insideSign){
+        let best={pos:expected,score:-1e9};
+        const step=Math.max(1,Math.min(3,Math.round(Math.min(CW,L)/180)));
+        for(let s=expected-span;s<=expected+span;s+=step){
+          const sc=sideScore(axis,s,tangentHalf,insideSign);
+          const proximity=Math.abs(s-expected)/Math.max(1,span);
+          const total=sc - proximity*5.0;
+          if(total>best.score) best={pos:s,score:total,raw:sc};
+        }
+        return best;
+      }
+
+      const top=search('v',-halfL,Math.max(8,L*0.13),CW*0.30,+1);   // inside 朝 +v
+      const bottom=search('v',halfL,Math.max(8,L*0.16),CW*0.30,-1); // inside 朝 -v
+      const left=search('u',-halfW,Math.max(5,CW*0.22),L*0.30,+1);  // inside 朝 +u
+      const right=search('u',halfW,Math.max(5,CW*0.22),L*0.30,-1); // inside 朝 -u
+
+      const newL=bottom.pos-top.pos, newW=right.pos-left.pos;
+      const ratio=newL/Math.max(1,newW);
+      if(newL < L*0.72 || newL > L*1.24 || newW < CW*0.68 || newW > CW*1.30 || ratio < 2.70 || ratio > 4.60) return null;
+
+      const c2={x:cx+vx*((top.pos+bottom.pos)/2)+ux*((left.pos+right.pos)/2),
+                y:cy+vy*((top.pos+bottom.pos)/2)+uy*((left.pos+right.pos)/2)};
+      const hL=newL/2, hW=newW/2;
+      const np=[
+        {x:c2.x-vx*hL-ux*hW,y:c2.y-vy*hL-uy*hW},
+        {x:c2.x-vx*hL+ux*hW,y:c2.y-vy*hL+uy*hW},
+        {x:c2.x+vx*hL+ux*hW,y:c2.y+vy*hL+uy*hW},
+        {x:c2.x+vx*hL-ux*hW,y:c2.y+vy*hL-uy*hW}
+      ];
+      // QR 必須仍被包含；否則不要接受 snap。
+      const fake={pts:np};
+      const enc=qrEnclosureMetrics(fake, qrCenter || null, []);
+      if(qrCenter && !enc.pass) return null;
+      return {pts:np, ratio, oldL:L,oldW:CW,newL,newW,top,bottom,left,right,applied:true};
+    } catch(e) { console.warn('edge snap failed',e); return null; }
+  }
+
   function detectOuterFrame(canvas, cropCanvas, options) {
     if (typeof cv === 'undefined' || !cv.Mat) return {version:VERSION,ok:false,reason:'opencv-not-ready'};
     options = Object.assign({ minAreaRatio:0.01, ratioMin:1.20, ratioMax:10.0 }, options||{});
@@ -2394,6 +2486,19 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
     }
     scored.sort((a,b)=>b.totalScore-a.totalScore);
     const best=scored[0];
+
+    // v31.66：候選選定後，把四邊吸附到原圖真正卡匣邊緣。
+    // 這只修正外框/透視，不會用 QR 尺寸硬算 70 mm。
+    if (best && !best.qrTemplate) {
+      const snap=refineOuterByImageEdges(canvas,best.pts,qrCenter);
+      if (snap && snap.applied) {
+        best.edgeSnap=snap;
+        best.pts=snap.pts;
+        best.ratio=snap.ratio;
+        best.rectArea=snap.newL*snap.newW;
+        best.rect={center:{x:(snap.pts[0].x+snap.pts[2].x)/2,y:(snap.pts[0].y+snap.pts[2].y)/2},size:{width:snap.newW,height:snap.newL},angle:Math.atan2(snap.pts[3].y-snap.pts[0].y,snap.pts[3].x-snap.pts[0].x)*180/Math.PI};
+      }
+    }
 
     ctx.save(); ctx.lineWidth=Math.max(3,canvas.width/250);
     // v31.0：Original Image 只畫最後選到的大外框，避免候選框造成誤會。
@@ -2513,7 +2618,9 @@ dbg += 'Scored Candidates: ' + scored.length + '<br>';
 dbg += 'Final Gate: outer=' + (bestOuterGeometryOk ? 'PASS' : 'FAIL') + ' / trustedFeature=' + (bestHasTrustedFeature ? 'PASS' : 'FAIL') + ' / redWindow=' + (bestHasTrustedRedWindow ? 'YES' : 'NO') + ' / realSample=' + (bestHasRealSample ? 'YES' : 'NO') + '<br>';
 dbg += 'UI Status: ' + (bestHasRealSample ? 'FULL PASS - S Well confirmed' : (outerOnlyOk ? 'OUTER ONLY' : (partialMessage ? 'PARTIAL' : (bestOk ? 'PASS' : 'FAIL')))) + '<br>';
 dbg += 'Detection Mode: window=' + ((features && features.windowSource) ? features.windowSource : '-') + ' / sample=' + ((features && features.sampleSource) ? features.sampleSource : '-') + ' / orientation=' + ((features && features.orientation) ? features.orientation : '-') + '<br>';
-dbg += 'Outer Anchor: ' + (best && best.qrTemplate ? 'QR DIRECT (v31.62)' : 'Contour fallback') + '<br>';
+dbg += 'Outer Anchor: ' + (best && best.qrTemplate ? 'QR template fallback' : 'Contour + image edge snap') + '<br>';
+if (best && best.edgeSnap) dbg += 'Edge Snap: APPLIED / L ' + best.edgeSnap.oldL.toFixed(1) + '→' + best.edgeSnap.newL.toFixed(1) + ' / W ' + best.edgeSnap.oldW.toFixed(1) + '→' + best.edgeSnap.newW.toFixed(1) + '<br>';
+else dbg += 'Edge Snap: not applied<br>';
 dbg += 'Final Reason: ' + (bestOk ? (outerOnlyOk ? 'outer-only-ok, Window/S Well not confirmed yet' : (partialMessage ? 'outer+red-window-ok, S Well not confirmed yet' : 'outer+real-feature-ok')) : failReason) + '<br>';
 dbg += 'Final Force: finalGate=' + (forceOkByFinalGate ? 'YES' : 'NO') + ' / strongCandidate=' + (forceOkByStrongCandidate ? 'YES' : 'NO') + ' / outerOnly=' + (outerOnlyOk ? 'YES' : 'NO') + '<br>';
 dbg += 'Best Gate Detail: areaRatio=' + (bestAreaRatio*100).toFixed(2) + '% / ratio=' + best.ratio.toFixed(2) + ' / outerScore=' + Math.round(best.outerScore||0) + ' / appearance=' + (bestAppearanceOk ? 'PASS':'FAIL') + ' / center=' + (bestCenterOk ? 'PASS':'FAIL') + '<br><hr>';

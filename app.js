@@ -1334,7 +1334,11 @@ function renderCombinedDetectionView() {
       r.debug &&
       r.debug.indexOf('Final Gate: outer=PASS / trustedFeature=PASS') >= 0;
 
-    const uiOk = !!(r.ok || debugSaysPass);
+    const ct = r && r.features && r.features.ctAnalysis ? r.features.ctAnalysis : null;
+    const cLineUsable = !!(ct && ct.cPeak && ct.cPeak.detected);
+    // v31.66：外框 quality gate 只作定位/debug，不再覆蓋 C/T 的醫材判讀結果。
+    // 只要 QR/ROI 已完成且 C 線通過，就直接依 C/T 判 Positive/Negative；只有 C 不成立才 Invalid。
+    const uiOk = !!(r.ok || debugSaysPass || cLineUsable);
 
     if (uiOk) {
       const ctText = getCtResultText(r);
