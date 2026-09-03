@@ -59,6 +59,10 @@
   let nativeQrDetector = null;
   let nativeQrBusy = false;
   let lastQrGeometry = null;
+  // v31.72: keep the live-locked QR geometry and its coordinate space.
+  // The captured frame reuses this geometry instead of replacing it with a second QR detection.
+  let lockedQrSnapshot = null;
+  let capturedLockedQr = null;
   let captureBusy = false;
   let lastResultText = 'Ready';
   const NTFY_TOPIC = 'ASAPRapidReader';
@@ -77,7 +81,7 @@
     ratioMin: 1.20,
     ratioMax: 10.0
   };
-  const MAX_QR_CODES = 10; // v31.71 multi-card: up to 10 QR/cassettes per photo
+  const MAX_QR_CODES = 10; // v31.72 multi-card + true live QR lock: up to 10 QR/cassettes per photo
 
   function unlock() {
     if ((passInput.value || '').trim() === ACCESS_CODE) {
@@ -541,7 +545,12 @@
     try {
       if (!nativeQrDetector) nativeQrDetector = new window.BarcodeDetector({ formats: ['qr_code'] });
       const codes = await nativeQrDetector.detect(cameraVideo);
-      if (codes && codes[0] && codes[0].rawValue) acceptQrCode(codes[0].rawValue, true, qrGeometryFromNative(codes[0]));
+      if (codes && codes[0] && codes[0].rawValue) {
+        acceptQrCode(codes[0].rawValue, true, qrGeometryFromNative(codes[0]), {
+          width: cameraVideo.videoWidth || cameraVideo.clientWidth || 1,
+          height: cameraVideo.videoHeight || cameraVideo.clientHeight || 1
+        });
+      }
     } catch (_) {
       // Safari versions without BarcodeDetector continue with the jsQR fallback.
     } finally {
@@ -549,11 +558,34 @@
     }
   }
 
-  function acceptQrCode(raw, lockIt, geometry) {
+  function cloneQrGeometry(geometry) {
+    if (!geometry || !geometry.center) return null;
+    return {
+      center: { x: Number(geometry.center.x), y: Number(geometry.center.y) },
+      points: Array.isArray(geometry.points) ? geometry.points.map(p => ({ x: Number(p.x), y: Number(p.y) })) : []
+    };
+  }
+
+  function scaleQrGeometry(geometry, sx, sy) {
+    const g = cloneQrGeometry(geometry);
+    if (!g) return null;
+    g.center.x *= sx; g.center.y *= sy;
+    g.points = g.points.map(p => ({ x: p.x * sx, y: p.y * sy }));
+    return g;
+  }
+
+  function acceptQrCode(raw, lockIt, geometry, geometrySpace) {
     if (!raw) return false;
     updateQrDisplay(parseQrData(raw), true);
-    if (geometry && geometry.center) lastQrGeometry = geometry;
-    if (lockIt) qrLocked = true;
+    if (geometry && geometry.center) lastQrGeometry = cloneQrGeometry(geometry);
+    if (lockIt) {
+      qrLocked = true;
+      if (geometry && geometry.center) {
+        const w = geometrySpace && Number(geometrySpace.width) > 0 ? Number(geometrySpace.width) : 0;
+        const h = geometrySpace && Number(geometrySpace.height) > 0 ? Number(geometrySpace.height) : 0;
+        lockedQrSnapshot = { raw: String(raw), geometry: cloneQrGeometry(geometry), width: w, height: h };
+      }
+    }
     if (cameraStatus) cameraStatus.textContent = qrLocked ? 'QR detected and locked. You can capture the test now.' : 'QR detected';
     return true;
   }
@@ -561,6 +593,8 @@
   function clearQrData() {
     qrLocked = false;
     lastQrGeometry = null;
+    lockedQrSnapshot = null;
+    capturedLockedQr = null;
     updateQrDisplay(emptyQr(), false);
     if (cameraStatus && cameraStream) cameraStatus.textContent = 'Scanning QR code...';
   }
@@ -678,13 +712,17 @@
     return r;
   }
 
-  async function detectAllQrCodesFromCanvas() {
+  async function detectAllQrCodesFromCanvas(seedQr) {
     const found=[];
     const pushUnique=(raw,geometry)=>{
       if (!geometry || !geometry.center) return;
       if (found.some(x=>isSameQr(x.geometry,geometry))) return;
-      found.push({raw:String(raw||''),geometry});
+      found.push({raw:String(raw||''),geometry:cloneQrGeometry(geometry)});
     };
+
+    // v31.72: the QR locked during live preview is authoritative for Card 1.
+    // Photo-time scanning may ADD QR codes, but it must not replace/move the locked one.
+    if (seedQr && seedQr.geometry && seedQr.geometry.center) pushUnique(seedQr.raw || '', seedQr.geometry);
 
     // 1) Native BarcodeDetector can return multiple QR codes at once when supported.
     if (typeof window.BarcodeDetector === 'function') {
@@ -716,7 +754,7 @@
       addGrid(2,1,0.20); addGrid(1,2,0.20); addGrid(2,2,0.16);
       if (W >= H*1.15) addGrid(4,1,0.12);
       else if (H >= W*1.15) addGrid(1,4,0.12);
-      // v31.71: multi-card photos may contain 2x2, 3x2 or 3x3 layouts.
+      // v31.72: multi-card photos may contain 2x2, 3x2 or 3x3 layouts.
       // Add a denser grid so each QR stays large enough for jsQR after down-scaling.
       addGrid(3,2,0.14);
       addGrid(2,3,0.14);
@@ -877,7 +915,7 @@
             const qctx = qrScanCanvas.getContext('2d', { willReadFrequently: true });
             qctx.drawImage(cameraVideo, 0, 0, qrScanCanvas.width, qrScanCanvas.height);
             const code = decodeQrCanvas(qrScanCanvas);
-            if (code && code.data) acceptQrCode(code.data, true, qrGeometryFromJsQr(code));
+            if (code && code.data) acceptQrCode(code.data, true, qrGeometryFromJsQr(code), { width: qrScanCanvas.width, height: qrScanCanvas.height });
           }
         } catch (ex) {
           console.error('Live QR scan failed:', ex);
@@ -993,13 +1031,26 @@
     shot.height = vh;
     shot.getContext('2d').drawImage(cameraVideo, 0, 0, vw, vh);
 
+    // v31.72 TRUE LIVE LOCK:
+    // Preserve the already locked QR and convert its coordinates to the full-resolution shot.
+    // analyze() will seed multi-QR detection with this QR and only search for additional cards.
+    capturedLockedQr = null;
+    if (qrLocked && lockedQrSnapshot && lockedQrSnapshot.geometry) {
+      const sw = lockedQrSnapshot.width || vw;
+      const sh = lockedQrSnapshot.height || vh;
+      const sx = vw / Math.max(1, sw);
+      const sy = vh / Math.max(1, sh);
+      const g = scaleQrGeometry(lockedQrSnapshot.geometry, sx, sy);
+      if (g) capturedLockedQr = { raw: lockedQrSnapshot.raw || (lastQr && lastQr.raw) || '', geometry: g };
+    }
+
     // Last chance QR scan from the full-resolution captured frame.
     if (!qrLocked && typeof window.jsQR === 'function') {
       try {
         const sctx = shot.getContext('2d', { willReadFrequently: true });
         const imageData = sctx.getImageData(0, 0, shot.width, shot.height);
         const code = decodeQrImageData(imageData);
-        if (code && code.data) acceptQrCode(code.data, true);
+        if (code && code.data) acceptQrCode(code.data, true, qrGeometryFromJsQr(code), { width: shot.width, height: shot.height });
       } catch (_) {}
     }
 
@@ -1387,9 +1438,11 @@ function renderCombinedDetectionView() {
     resizeAndDrawImage(lastImage);
     lastMultiResults=[];
     renderMultiResultList([]);
-    lastQrGeometry=null;
+    const lockedSeed = capturedLockedQr && capturedLockedQr.geometry ? capturedLockedQr : null;
+    // Do not clear the locked QR before analysis. It is the anchor for Card 1.
+    if (lockedSeed) lastQrGeometry = cloneQrGeometry(lockedSeed.geometry);
 
-    const qrCodes=await detectAllQrCodesFromCanvas();
+    const qrCodes=await detectAllQrCodesFromCanvas(lockedSeed);
     if (!qrCodes.length) {
       lastResultText='Invalid';
       resultEl.className='result invalid'; resultEl.textContent='Invalid';
@@ -1401,7 +1454,7 @@ function renderCombinedDetectionView() {
 
     // First QR continues to populate the shared test-information panel.
     if (qrCodes[0].raw) updateQrDisplay(parseQrData(qrCodes[0].raw),true);
-    lastQrGeometry=qrCodes[0].geometry;
+    lastQrGeometry=cloneQrGeometry(qrCodes[0].geometry);
 
     if (!cvReady) {
       resultEl.className='result neutral'; lastResultText='Invalid'; resultEl.textContent=''; detailEl.textContent=''; return;

@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v31.71-multicard-relative-t-primary';
+  const VERSION = 'v31.72-multicard-live-lock';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
