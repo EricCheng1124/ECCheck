@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v31.61-extended-y-strip-lock-cfirst';
+  const VERSION = 'v31.62-qr-direct-cassette-geometry';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -2369,9 +2369,13 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
     const rawCands=collectOuterCandidates(src, options);
     const qrCenter=options.qrCenter || null;
     const qrPoints=Array.isArray(options.qrPoints) ? options.qrPoints : [];
-    // 不依賴白色外框一定能被 contour 找到：QR 本身也建立整卡匣候選。
+    // v31.62：QR 直接定義整支卡匣。
+    // 只要 QR 四角完整可用，就不再讓白色外框 contour 參與最終外框競選，
+    // 避免卡匣上緣/下緣因桌面顏色、反光或陰影被吃掉後，整個綠框上下漂移。
+    // contour 僅保留在 QR 幾何不可用時作 fallback。
     const qrTemplates=buildQrCassetteTemplates(qrPoints,imgArea);
-    const allCands=rawCands.concat(qrTemplates);
+    const qrDirectMode=qrTemplates.length>0;
+    const allCands=qrDirectMode ? qrTemplates.slice() : rawCands.slice();
     const qrRejected=[];
     const enclosingCands=[];
     for (const c of allCands) {
@@ -2399,9 +2403,9 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
       const ct = fs.f && fs.f.ctAnalysis ? fs.f.ctAnalysis : null;
       const cLineBonus = ct && ct.cPeak && ct.cPeak.detected ? 10500 : 0;
       const tLineBonus = ct && ct.tPeak && ct.tPeak.detected ? 3000 : 0;
-      // v31.52：有 QR 時優先採用 QR 建出的整卡匣模板。
-      // 避免桌面/螢幕邊界形成的長方形 contour 把 QR 包住後，誤當成卡匣。
-      const templateBonus = c.qrTemplate ? 7200 : 0;
+      // v31.62：QR direct mode 時候選本身就是 QR 幾何模板。
+      // bonus 仍保留供 debug；真正的穩定性來自上方已完全排除 contour 競選。
+      const templateBonus = c.qrTemplate ? 12000 : 0;
       c.totalScore =
         geo.score +
         fs.score +
@@ -2439,14 +2443,27 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
       let features=null;
       const qrOrientation = orientPointsWithQr(best.pts, options.qrCenter || null);
 
-      // v31.56: 把「這一張卡自己的 QR」換算到標準化卡匣座標。
-      // 只依 QR 與最終外框的幾何關係計算，不使用 Window/slot 或 C/T peak 回推位置。
+      // v31.62：先完成透視校正，再建立 QR local coordinate。
+      // 若最終外框來自 QR template，標準化後 QR 的位置/尺寸直接由已知幾何常數決定，
+      // 不再由外框 contour 長度反推，因此外框邊緣即使在原圖上不清楚也不會讓 CT ROI 漂移。
       let qrNorm = null;
-      try {
+      try{
+        warpCropToCanvas(canvas,cropCanvas,qrOrientation.points,qrOrientation.applied);
         const qp = Array.isArray(options.qrPoints) ? options.qrPoints : [];
         const qc = options.qrCenter || null;
         const cp = qrOrientation.points; // TL,TR,BR,BL
-        if (qc && qp.length >= 4 && cp && cp.length === 4) {
+        const outW=cropCanvas.width, outH=cropCanvas.height;
+
+        if (best.qrTemplate && qp.length >= 4) {
+          const sideByW=outW/1.55;
+          const sideByH=outH/5.35;
+          qrNorm={
+            cx:outW*0.50,
+            cy:outH*0.115,
+            side:(sideByW+sideByH)*0.5,
+            source:'qr-direct-template-v3162'
+          };
+        } else if (qc && qp.length >= 4 && cp && cp.length === 4) {
           const topMid={x:(cp[0].x+cp[1].x)/2,y:(cp[0].y+cp[1].y)/2};
           const botMid={x:(cp[3].x+cp[2].x)/2,y:(cp[3].y+cp[2].y)/2};
           const leftMid={x:(cp[0].x+cp[3].x)/2,y:(cp[0].y+cp[3].y)/2};
@@ -2455,15 +2472,11 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
           const wx=rightMid.x-leftMid.x, wy=rightMid.y-leftMid.y, wl=Math.max(1,Math.hypot(wx,wy));
           const along=((qc.x-topMid.x)*lx+(qc.y-topMid.y)*ly)/(ll*ll);
           const across=((qc.x-leftMid.x)*wx+(qc.y-leftMid.y)*wy)/(wl*wl);
-          const outW=cropCanvas.width||Math.max(1,wl), outH=cropCanvas.height||Math.max(1,ll);
           const qLens=[]; for(let i=0;i<4;i++){const a=qp[i],b=qp[(i+1)%4];qLens.push(Math.hypot(a.x-b.x,a.y-b.y));}
           const qSrc=qLens.reduce((a,b)=>a+b,0)/Math.max(1,qLens.length);
           const sideByW=qSrc/wl*outW, sideByH=qSrc/ll*outH;
-          qrNorm={cx:across*outW,cy:along*outH,side:(sideByW+sideByH)*0.5};
+          qrNorm={cx:across*outW,cy:along*outH,side:(sideByW+sideByH)*0.5,source:'qr-measured-fallback'};
         }
-      } catch(_) { qrNorm=null; }
-      try{
-        warpCropToCanvas(canvas,cropCanvas,qrOrientation.points,qrOrientation.applied);
         features=detectInternalFeatures(cropCanvas,qrOrientation.applied,qrNorm);
         if (features) features.qrOrientation = qrOrientation;
       } catch(e){ console.error(e); }
@@ -2538,6 +2551,7 @@ dbg += 'Scored Candidates: ' + scored.length + '<br>';
 dbg += 'Final Gate: outer=' + (bestOuterGeometryOk ? 'PASS' : 'FAIL') + ' / trustedFeature=' + (bestHasTrustedFeature ? 'PASS' : 'FAIL') + ' / redWindow=' + (bestHasTrustedRedWindow ? 'YES' : 'NO') + ' / realSample=' + (bestHasRealSample ? 'YES' : 'NO') + '<br>';
 dbg += 'UI Status: ' + (bestHasRealSample ? 'FULL PASS - S Well confirmed' : (outerOnlyOk ? 'OUTER ONLY' : (partialMessage ? 'PARTIAL' : (bestOk ? 'PASS' : 'FAIL')))) + '<br>';
 dbg += 'Detection Mode: window=' + ((features && features.windowSource) ? features.windowSource : '-') + ' / sample=' + ((features && features.sampleSource) ? features.sampleSource : '-') + ' / orientation=' + ((features && features.orientation) ? features.orientation : '-') + '<br>';
+dbg += 'Outer Anchor: ' + (best && best.qrTemplate ? 'QR DIRECT (v31.62)' : 'Contour fallback') + '<br>';
 dbg += 'Final Reason: ' + (bestOk ? (outerOnlyOk ? 'outer-only-ok, Window/S Well not confirmed yet' : (partialMessage ? 'outer+red-window-ok, S Well not confirmed yet' : 'outer+real-feature-ok')) : failReason) + '<br>';
 dbg += 'Final Force: finalGate=' + (forceOkByFinalGate ? 'YES' : 'NO') + ' / strongCandidate=' + (forceOkByStrongCandidate ? 'YES' : 'NO') + ' / outerOnly=' + (outerOnlyOk ? 'YES' : 'NO') + '<br>';
 dbg += 'Best Gate Detail: areaRatio=' + (bestAreaRatio*100).toFixed(2) + '% / ratio=' + best.ratio.toFixed(2) + ' / outerScore=' + Math.round(best.outerScore||0) + ' / appearance=' + (bestAppearanceOk ? 'PASS':'FAIL') + ' / center=' + (bestCenterOk ? 'PASS':'FAIL') + '<br><hr>';
