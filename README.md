@@ -1,12 +1,11 @@
-# ASAP Check v31.76 — Multi-Card + Pink-to-Pink T/C 10%
+# ASAP Check v31.77 — Multi-Card Per-Card Isolation + Net Pink T/C 10%
 
-## v31.76 變更
+## v31.77 變更
 
-- 保留 v31.75 Multi-Card QR Ownership / Voronoi Lock，不改多卡外框與 QR 分區。
-- C 線仍可使用粉紅色 + 暗度協助定位，維持弱 C 的穩定性。
-- T 候選改以粉紅/紅色色度（Pink Strength）為主要排名；暗度只保留 debug，不再讓灰色陰影成為 T。
-- 最終 Positive 門檻改成 Pink(T) / Pink(C) >= 10%。
-- T 仍必須位於 C 下方 0.8 ~ 6.0 mm。
-- 純灰色槽邊、相鄰卡陰影、透視暗線即使 darkness 很強，也不能單獨判成 Positive。
-- Debug 顯示 C Pink、T Pink、Pink T/C 與 10% 門檻。
-- 版本號更新為 v31.76。
+- 保留 v31.76 的 Multi-Card QR Ownership / Voronoi 邏輯與 0.8~6 mm T 幾何限制。
+- CT X 範圍縮窄到卡匣中央約 3 mm，只分析試紙本體，排除 C/T 印字、塑膠槽邊與鄰卡。
+- C/T Pink 強度改成 Local Background Subtraction：Signal Pink - nearby background Pink = Net Pink。
+- C 使用上方局部背景；T 使用下方局部背景，避免 C/T 彼此污染。
+- Positive 主判斷：Net Pink(T) / Net Pink(C) >= 10%。
+- 另加入非常低的 local-noise floor，避免多卡曝光/反射造成背景小波動被誤判成 T。
+- 版本號更新為 v31.77。

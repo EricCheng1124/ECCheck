@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v31.76-t-pink-ratio';
+  const VERSION = 'v31.77-card-isolated-net-pink';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -1424,7 +1424,7 @@
     const stripCenterX = W * 0.50;
 
     // X 方向直接以卡匣中心線為基準，避免 QR 左右小誤差帶動 CT zone。
-    const stripHalfWidth = Math.max(4, W * 0.105);
+    const stripHalfWidth = Math.max(4, W * 0.075); // v31.77: central ~3 mm strip only; excludes printed C/T and card edges
     const x0 = clamp(Math.floor(stripCenterX - stripHalfWidth), 0, W-1);
     const x1 = clamp(Math.ceil(stripCenterX + stripHalfWidth), x0 + 1, W);
 
@@ -1579,9 +1579,9 @@
       end: Math.min(tSearchRange.end, dynTEnd)
     };
     const tRangeValid = dynTRange.start <= dynTRange.end && dynTRange.start < h;
-    // v31.76：C 可以繼續使用「粉紅 + 暗度」協助定位，
-    // 但 T 的存在與 T/C 10% 比例，改成只看粉紅/紅色色度。
-    // 純灰色槽邊、鄰卡陰影、透視造成的暗線，不可再單獨把 Negative 推成 Positive。
+    // v31.77：多卡時每張卡雖已獨立透視，但鄰卡反光/白平衡仍可能讓整個 CT ROI 帶淡粉色。
+    // 因此 T 不再使用「絕對 Pink」；改成每個 band 扣除自己的局部背景 (Net Pink)。
+    // 同時 X 方向已縮到卡匣中央約 3 mm，只看試紙本體，排除右側 C/T 印刷、槽邊與鄰卡。
     function bandStrength(localY) {
       if (!Number.isFinite(localY)) return 0;
       const half = Math.max(1, Math.round(0.35 * pxPerMm));
@@ -1597,13 +1597,13 @@
       return sum / n;
     }
 
-    function bandPinkStrength(localY) {
+    function bandPinkRaw(localY) {
       if (!Number.isFinite(localY)) return 0;
-      const half = Math.max(1, Math.round(0.35 * pxPerMm));
+      const half = Math.max(1, Math.round(0.30 * pxPerMm));
       const a = clamp(Math.floor(localY - half), 0, h-1);
       const b = clamp(Math.ceil(localY + half), a, h-1);
       const vals = [];
-      for (let i=a; i<=b; i++) vals.push(Math.max(0, pinkPositive[i] || 0));
+      for (let i=a; i<=b; i++) vals.push(Math.max(0, pinkSmooth[i] || 0));
       if (!vals.length) return 0;
       vals.sort((x,y)=>y-x);
       const n = Math.max(1, Math.ceil(vals.length * 0.60));
@@ -1612,9 +1612,41 @@
       return sum / n;
     }
 
+    function localPinkBackground(localY, mode) {
+      // C 用上方背景，避免把下方真 T 算進背景；T 用下方背景，避免把上方 C 算進背景。
+      const near = Math.max(1, Math.round(0.75 * pxPerMm));
+      const far  = Math.max(near + 1, Math.round(1.75 * pxPerMm));
+      let a, b;
+      if (mode === 'C') {
+        a = clamp(Math.floor(localY - far), 0, h-1);
+        b = clamp(Math.floor(localY - near), a, h-1);
+      } else {
+        a = clamp(Math.ceil(localY + near), 0, h-1);
+        b = clamp(Math.ceil(localY + far), a, h-1);
+      }
+      const vals=[];
+      for (let i=a; i<=b; i++) vals.push(Math.max(0, pinkSmooth[i] || 0));
+      if (!vals.length) return {bg:0, noise:0};
+      const med=median(vals);
+      let v=0;
+      for (const x of vals) v += (x-med)*(x-med);
+      const noise=Math.sqrt(v/Math.max(1,vals.length));
+      return {bg:med, noise};
+    }
+
+    function bandNetPinkStrength(localY, mode) {
+      const rawPink=bandPinkRaw(localY);
+      const lb=localPinkBackground(localY, mode);
+      return {
+        raw: rawPink,
+        bg: lb.bg,
+        noise: lb.noise,
+        net: Math.max(0, rawPink - lb.bg)
+      };
+    }
+
     // 在 C 下方 0.8~6 mm 的合法區域逐列掃描。
-    // v31.76：T 候選排名以 Pink band 為主；暗度不再參與 T 的主要排名。
-    // 水平連續性只做非常小的 tie-break，避免暖色背景單點雜訊。
+    // v31.77：候選排名改成 Net Pink；大面積暖色/鄰卡反射即使讓 raw pink 升高，扣掉局部背景後不會得分。
     function bestRelativeTInRange(range) {
       if (!range || range.start > range.end) return null;
       let best = null;
@@ -1622,20 +1654,23 @@
       const end = clamp(Math.ceil(range.end), start, h-1);
       for (let ly=start; ly<=end; ly++) {
         const cont = rowLineContinuity(y0 + ly, 'faintT');
-        const pinkStrength = bandPinkStrength(ly);
-        const combinedStrength = bandStrength(ly); // debug only; not used to pass T
+        const np = bandNetPinkStrength(ly, 'T');
+        const combinedStrength = bandStrength(ly); // debug only
         const weakShapeBoost =
-          Math.min(1.2, (cont.run || 0) * 0.025) +
-          (cont.ratio || 0) * 0.45 +
-          (cont.redRatio || 0) * 0.80 +
-          (cont.contrastAvg || 0) * 0.015;
-        const rank = pinkStrength + weakShapeBoost;
+          Math.min(0.8, (cont.run || 0) * 0.018) +
+          (cont.ratio || 0) * 0.28 +
+          (cont.redRatio || 0) * 0.55 +
+          (cont.contrastAvg || 0) * 0.010;
+        const rank = np.net + weakShapeBoost;
         const item = Object.assign({}, cont, {
           localY: ly,
           absY: y0 + ly,
-          profileScore: pinkPositive[ly] || 0,
+          profileScore: np.net,
           bandStrength: combinedStrength,
-          pinkStrength: pinkStrength,
+          pinkStrength: np.net,
+          rawPinkStrength: np.raw,
+          localPinkBackground: np.bg,
+          localPinkNoise: np.noise,
           totalScore: rank
         });
         if (!best || item.totalScore > best.totalScore) best = item;
@@ -1664,19 +1699,21 @@
     const refinedSeparationOk = !!(cCont && tCont &&
       ctGapMm >= T_MIN_GAP_MM && ctGapMm <= T_MAX_GAP_MM);
 
-    // v31.76：最終 T/C 10% 改成 Pink-to-Pink ratio。
-    // cStrength / tStrength 欄位保留相容性，但現在代表 Pink Strength。
+    // v31.77：最終比值使用 Net Pink(T) / Net Pink(C)，而不是 raw/全域 baseline Pink。
     const cCombinedStrength = cCont ? bandStrength(cCont.localY) : 0;
     const tCombinedStrength = tCont ? bandStrength(tCont.localY) : 0;
-    const cStrength = cCont ? bandPinkStrength(cCont.localY) : 0;
-    const tStrength = tCont ? bandPinkStrength(tCont.localY) : 0;
-    const tRelativeThreshold = cStrength * T_RELATIVE_C_RATIO;
+    const cNetInfo = cCont ? bandNetPinkStrength(cCont.localY, 'C') : {raw:0,bg:0,noise:0,net:0};
+    const tNetInfo = tCont ? bandNetPinkStrength(tCont.localY, 'T') : {raw:0,bg:0,noise:0,net:0};
+    const cStrength = cNetInfo.net;
+    const tStrength = tNetInfo.net;
+    const ratioThreshold = cStrength * T_RELATIVE_C_RATIO;
+    // 再加非常低的 local-noise floor：避免 10% 門檻很低時，單一卡匣背景起伏被當 T。
+    const noiseFloor = tNetInfo.noise * 1.25;
+    const tRelativeThreshold = Math.max(ratioThreshold, noiseFloor);
     const tcStrengthRatio = cStrength > 0 ? (tStrength / cStrength) : 0;
     const tRelativeOk = !!(cDetected && tCont && cStrength > 0 && tStrength >= tRelativeThreshold);
 
-    // 只保留非常寬鬆的「像一條水平線」保護。
-    // 真正 Positive/Negative 的主要門檻是 Pink(T) / Pink(C) >= 10%，
-    // 因此純灰色陰影即使 combined darkness 很高，也不能單獨讓 T 成立。
+    // 水平線證據仍只是輔助，不允許灰色暗線單獨成立。
     const tWeakHorizontalEvidence = !!tCont && (
       (tCont.run || 0) >= Math.max(2, Math.floor((tCont.minRun || 2) * 0.35)) ||
       (tCont.ratio || 0) >= 0.040 ||
@@ -1718,11 +1755,11 @@
     );
 
     return {
-      source:'ct-outer-middle10-v31-70-relative-t-primary',
+      source:'ct-outer-middle10-v31-77-card-isolated-net-pink',
       x0, x1, y0, y1, h,
       zone:{x:x0, y:y0, w:Math.max(1, x1-x0), h:Math.max(1, y1-y0), startRatio:ctStartRatio, endRatio:ctEndRatio, widthRatio:ctEndRatio-ctStartRatio, topThirdY:Math.round(topThirdY), topThirdPadding:topThirdPadding, yLimitedByTopThird:false, coordinateSystem:'cassette-30-10-30', qrSide:qSide, stripCenterX, cExpectedAbsY, tExpectedAbsY, bandHalf, locatorY0, locatorY1, pxPerMm, cassetteMm:CASSETTE_L_MM, stripTopMm:STRIP_TOP_MM, stripHeightMm:STRIP_H_MM, tMinGapMm:T_MIN_GAP_MM, tMaxGapMm:T_MAX_GAP_MM, tRelativeCRatio:T_RELATIVE_C_RATIO, ctGapMm, cLocatorAbsY:null, cLocatorHasColor:false},
       raw, profile:positive, baseline:bg, rawBaseline, rawMedian, rawMax, pinkMax, darkMax, combinedMax, selectedMode, lumBackground, lumMedian, mean:stat.mean, std:stat.std,
-      maxScore, threshold, tThreshold, tcRatio, cStrength, tStrength, cCombinedStrength, tCombinedStrength, strengthMode:'pink-to-pink', tRelativeThreshold, tRelativeRatio:T_RELATIVE_C_RATIO, tWeakHorizontalEvidence, candidateFloor, minSep,
+      maxScore, threshold, tThreshold, tcRatio, cStrength, tStrength, cCombinedStrength, tCombinedStrength, cRawPink:cNetInfo.raw, cLocalPinkBg:cNetInfo.bg, cLocalPinkNoise:cNetInfo.noise, tRawPink:tNetInfo.raw, tLocalPinkBg:tNetInfo.bg, tLocalPinkNoise:tNetInfo.noise, ratioThreshold, noiseFloor, strengthMode:'net-pink-local-bg', tRelativeThreshold, tRelativeRatio:T_RELATIVE_C_RATIO, tWeakHorizontalEvidence, candidateFloor, minSep,
       cRange, tRange,
       cPeak:{y:cQ.y, absY:y0+cQ.y, score:cQ.score, detected:cDetected, selected:cSelected, redContinuity:cRed, width:cQ.width, left:y0+cQ.left, right:y0+cQ.right, drop:cQ.drop, sharpness:cQ.sharpness, shoulderRatio:cQ.shoulderRatio, shoulderMaxRatio:cQ.shoulderMaxRatio, nearShoulderRatio:cQ.nearShoulderRatio, quality:cQ.quality || 0, reject:cQ.reject, warning:cQ.warning || '-', maxWidth:cQ.maxWidth},
       tPeak:{y:tQ.y, absY:y0+tQ.y, score:tQ.score, detected:tDetected, selected:tSelected, redContinuity:tRed, width:tQ.width, left:y0+tQ.left, right:y0+tQ.right, drop:tQ.drop, sharpness:tQ.sharpness, shoulderRatio:tQ.shoulderRatio, shoulderMaxRatio:tQ.shoulderMaxRatio, nearShoulderRatio:tQ.nearShoulderRatio, quality:tQ.quality || 0, reject:tQ.reject, warning:tQ.warning || '-', maxWidth:tQ.maxWidth},
@@ -2812,7 +2849,8 @@ scored.forEach((c,i)=>
       dbg += `C Red Continuity=${ct.cPeak.redContinuity.ok ? 'YES' : 'NO'} / Run=${ct.cPeak.redContinuity.run}/${ct.cPeak.redContinuity.minRun} / Ratio=${ct.cPeak.redContinuity.ratio.toFixed(2)}<br>`;
       dbg += `C Width=${ct.cPeak.width} / HalfWidth=${ct.cPeak.halfWidth || ct.cPeak.width} / MaxWidth=${ct.cPeak.maxWidth} / Drop=${ct.cPeak.drop.toFixed(1)} / Sharpness=${ct.cPeak.sharpness.toFixed(2)} / Quality=${(ct.cPeak.quality || 0).toFixed(1)} / Shoulder=${ct.cPeak.shoulderRatio.toFixed(2)} / NearShoulder=${ct.cPeak.nearShoulderRatio.toFixed(2)} / Reject=${ct.cPeak.reject}<br>`;
       dbg += `T Score=${ct.tPeak.score.toFixed(1)} / T Y=${ct.tPeak.absY.toFixed(0)} / T Detected=${ct.tPeak.detected ? 'YES' : 'NO'} / T Selected=${ct.tPeak.selected ? 'YES' : 'NO'} / T Range=${ct.tRange.start}-${ct.tRange.end}<br>`;
-      dbg += `T Relative Threshold=${ct.tThreshold.toFixed(1)} / T/C Ratio=${ct.tcRatio.toFixed(2)}<br>`;
+      dbg += `C Net Pink=${(ct.cStrength||0).toFixed(2)} (raw ${(ct.cRawPink||0).toFixed(2)} - bg ${(ct.cLocalPinkBg||0).toFixed(2)}) / T Net Pink=${(ct.tStrength||0).toFixed(2)} (raw ${(ct.tRawPink||0).toFixed(2)} - bg ${(ct.tLocalPinkBg||0).toFixed(2)})<br>`;
+      dbg += `T Net Threshold=${(ct.tThreshold||0).toFixed(2)} / 10% C=${(ct.ratioThreshold||0).toFixed(2)} / NoiseFloor=${(ct.noiseFloor||0).toFixed(2)} / Net T/C=${(ct.tcRatio||0).toFixed(2)}<br>`;
       dbg += `T Red Continuity=${ct.tPeak.redContinuity.ok ? 'YES' : 'NO'} / Run=${ct.tPeak.redContinuity.run}/${ct.tPeak.redContinuity.minRun} / Ratio=${ct.tPeak.redContinuity.ratio.toFixed(2)}<br>`;
       dbg += `T Width=${ct.tPeak.width} / HalfWidth=${ct.tPeak.halfWidth || ct.tPeak.width} / MaxWidth=${ct.tPeak.maxWidth} / Drop=${ct.tPeak.drop.toFixed(1)} / Sharpness=${ct.tPeak.sharpness.toFixed(2)} / Quality=${(ct.tPeak.quality || 0).toFixed(1)} / Shoulder=${ct.tPeak.shoulderRatio.toFixed(2)} / NearShoulder=${ct.tPeak.nearShoulderRatio.toFixed(2)} / Reject=${ct.tPeak.reject}<br>`;
       if (ct.rejectedPeaks && ct.rejectedPeaks.length) dbg += `Rejected Peaks=${ct.rejectedPeaks.join(', ')}<br>`;
