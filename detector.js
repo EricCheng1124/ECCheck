@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v31.69-relative-t-10pct';
+  const VERSION = 'v31.70-relative-t-primary';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -1579,32 +1579,9 @@
       end: Math.min(tSearchRange.end, dynTEnd)
     };
     const tRangeValid = dynTRange.start <= dynTRange.end && dynTRange.start < h;
-    const tCont = tRangeValid ? bestContinuityInRange(dynTRange, 'faintT') : null;
-
-    // Debug 預期 T 位置放在允許區間中央，不參與最終判定。
-    tExpectedLocalY = clamp(cAnchorY + ((T_MIN_GAP_MM + T_MAX_GAP_MM) * 0.5) * pxPerMm, 0, h-1);
-    tExpectedAbsY = y0 + tExpectedLocalY;
-
-    let cQ = bestPeakInBand('C', cSearchRange, cExpectedLocalY);
-    let tQ = bestPeakInBand('T', dynTRange, tExpectedLocalY);
-    // Debug/波形 marker 使用 continuity 找到的真實水平線位置。
-    if (cCont) { cQ.y=cCont.localY; cQ.score=Math.max(cQ.score||0,cCont.profileScore||0); }
-    if (tCont) { tQ.y=tCont.localY; tQ.score=Math.max(tQ.score||0,tCont.profileScore||0); }
-
-    const cGeometryOk = !!cCont && cCont.localY >= cSearchRange.start && cCont.localY <= cSearchRange.end;
-    const cColorOk = !!cCont && ((cCont.redRatio||0) >= 0.020 || (cCont.redAvg||0) >= 0.95 || (cCont.contrastAvg||0) >= 0.42);
-    const cDetected = !!(cCont && cCont.ok && cGeometryOk && cColorOk);
-
-    const tGeometryOk = !!tCont && tCont.localY >= dynTRange.start && tCont.localY <= dynTRange.end;
-    const tColorOk = !!tCont && ((tCont.redRatio||0) >= 0.020 || (tCont.redAvg||0) >= 1.00 || (tCont.contrastAvg||0) >= 0.45);
-    const ctGapPx = (cCont && tCont) ? (tCont.absY - cCont.absY) : -1;
-    const ctGapMm = ctGapPx >= 0 ? (ctGapPx / Math.max(0.0001, pxPerMm)) : -1;
-    const refinedSeparationOk = !!(cCont && tCont &&
-      ctGapMm >= T_MIN_GAP_MM && ctGapMm <= T_MAX_GAP_MM);
-
-    // v31.69：Negative/Positive 的 T 門檻改成「相依於實際 C 線強度」。
-    // 以每條線中心附近約 ±0.35 mm 的 profile 做積分，降低單一 pixel/單列雜訊。
-    // T strength >= C strength 的 10% 才允許判 Positive；低於 10% 一律視為 Negative。
+    // v31.70：T 判定改成「相對 C 強度」主導。
+    // 不再要求弱 T 先通過固定 red-continuity / color hard threshold，
+    // 否則肉眼可見但很淡的 T 會在進入 10% C 判斷前就被淘汰。
     function bandStrength(localY) {
       if (!Number.isFinite(localY)) return 0;
       const half = Math.max(1, Math.round(0.35 * pxPerMm));
@@ -1614,12 +1591,60 @@
       for (let i=a; i<=b; i++) vals.push(Math.max(0, positive[i] || 0));
       if (!vals.length) return 0;
       vals.sort((x,y)=>y-x);
-      // 取較強的前 60% 平均，兼顧線寬與抗局部雜訊。
       const n = Math.max(1, Math.ceil(vals.length * 0.60));
       let sum = 0;
       for (let i=0; i<n; i++) sum += vals[i];
       return sum / n;
     }
+
+    // 在 C 下方 0.8~6 mm 的合法區域逐列掃描。
+    // 主要排名依 bandStrength；水平/粉紅證據只做小幅加分，不再當第一道硬門檻。
+    function bestRelativeTInRange(range) {
+      if (!range || range.start > range.end) return null;
+      let best = null;
+      const start = clamp(Math.floor(range.start), 0, h-1);
+      const end = clamp(Math.ceil(range.end), start, h-1);
+      for (let ly=start; ly<=end; ly++) {
+        const cont = rowLineContinuity(y0 + ly, 'faintT');
+        const strength = bandStrength(ly);
+        const weakShapeBoost =
+          Math.min(4.0, (cont.run || 0) * 0.10) +
+          (cont.ratio || 0) * 2.0 +
+          (cont.redRatio || 0) * 3.0 +
+          (cont.contrastAvg || 0) * 0.08;
+        const rank = strength + weakShapeBoost;
+        const item = Object.assign({}, cont, {
+          localY: ly,
+          absY: y0 + ly,
+          profileScore: positive[ly] || 0,
+          bandStrength: strength,
+          totalScore: rank
+        });
+        if (!best || item.totalScore > best.totalScore) best = item;
+      }
+      return best;
+    }
+
+    const tCont = tRangeValid ? bestRelativeTInRange(dynTRange) : null;
+
+    // Debug 預期 T 位置放在允許區間中央，不參與最終判定。
+    tExpectedLocalY = clamp(cAnchorY + ((T_MIN_GAP_MM + T_MAX_GAP_MM) * 0.5) * pxPerMm, 0, h-1);
+    tExpectedAbsY = y0 + tExpectedLocalY;
+
+    let cQ = bestPeakInBand('C', cSearchRange, cExpectedLocalY);
+    let tQ = bestPeakInBand('T', dynTRange, tExpectedLocalY);
+    if (cCont) { cQ.y=cCont.localY; cQ.score=Math.max(cQ.score||0,cCont.profileScore||0); }
+    if (tCont) { tQ.y=tCont.localY; tQ.score=Math.max(tQ.score||0,tCont.profileScore||0); }
+
+    const cGeometryOk = !!cCont && cCont.localY >= cSearchRange.start && cCont.localY <= cSearchRange.end;
+    const cColorOk = !!cCont && ((cCont.redRatio||0) >= 0.020 || (cCont.redAvg||0) >= 0.95 || (cCont.contrastAvg||0) >= 0.42);
+    const cDetected = !!(cCont && cCont.ok && cGeometryOk && cColorOk);
+
+    const tGeometryOk = !!tCont && tCont.localY >= dynTRange.start && tCont.localY <= dynTRange.end;
+    const ctGapPx = (cCont && tCont) ? (tCont.absY - cCont.absY) : -1;
+    const ctGapMm = ctGapPx >= 0 ? (ctGapPx / Math.max(0.0001, pxPerMm)) : -1;
+    const refinedSeparationOk = !!(cCont && tCont &&
+      ctGapMm >= T_MIN_GAP_MM && ctGapMm <= T_MAX_GAP_MM);
 
     const cStrength = cCont ? bandStrength(cCont.localY) : 0;
     const tStrength = tCont ? bandStrength(tCont.localY) : 0;
@@ -1627,9 +1652,19 @@
     const tcStrengthRatio = cStrength > 0 ? (tStrength / cStrength) : 0;
     const tRelativeOk = !!(cDetected && tCont && cStrength > 0 && tStrength >= tRelativeThreshold);
 
-    // T 比 C 淡是正常的，但除了幾何/紅色連續性之外，還必須達到 C 強度的 10%。
-    const tDetected = !!(cDetected && tCont && tCont.ok && tGeometryOk && tColorOk && refinedSeparationOk && tRelativeOk);
+    // 只保留非常寬鬆的「像一條水平線」保護，避免純大面積陰影。
+    // 這不是固定顏色門檻；真正 Positive/Negative 的主要門檻是 T/C >= 10%。
+    const tWeakHorizontalEvidence = !!tCont && (
+      (tCont.run || 0) >= Math.max(2, Math.floor((tCont.minRun || 2) * 0.35)) ||
+      (tCont.ratio || 0) >= 0.040 ||
+      (tCont.redRatio || 0) >= 0.006 ||
+      (tCont.redAvg || 0) >= 0.25 ||
+      (tCont.contrastAvg || 0) >= 0.10
+    );
 
+    const tDetected = !!(cDetected && tCont && tGeometryOk && refinedSeparationOk && tRelativeOk && tWeakHorizontalEvidence);
+
+    const tColorOk = tWeakHorizontalEvidence; // 保留既有 debug 欄位相容性
     const cSelected = !!cCont;
     const tSelected = !!tCont;
     const selected = [cQ,tQ].filter((q,i)=>i===0?cSelected:tSelected);
@@ -1646,7 +1681,7 @@
     cQ.detected = cDetected;
     tQ.detected = tDetected;
     cQ.reject = !cCont ? 'no-horizontal-line' : !cGeometryOk ? 'outside-middle10-c-band' : !cCont.ok ? 'no-red-continuity' : !cColorOk ? 'weak-color' : 'PASS';
-    tQ.reject = !tCont ? 'no-horizontal-line' : !tGeometryOk ? 'outside-middle10-t-band' : !tCont.ok ? 'no-red-continuity' : !tColorOk ? 'weak-color' : !refinedSeparationOk ? 't-gap-outside-0.8-6mm' : !tRelativeOk ? 'below-10pct-of-c' : 'PASS';
+    tQ.reject = !tCont ? 'no-t-candidate' : !tGeometryOk ? 'outside-middle10-t-band' : !refinedSeparationOk ? 't-gap-outside-0.8-6mm' : !tRelativeOk ? 'below-10pct-of-c' : !tWeakHorizontalEvidence ? 'no-horizontal-evidence' : 'PASS';
 
     let result = 'Invalid';
     if (cDetected && tDetected) result = 'Positive';
@@ -1660,11 +1695,11 @@
     );
 
     return {
-      source:'ct-outer-middle10-v31-69-relative-t-10pct',
+      source:'ct-outer-middle10-v31-70-relative-t-primary',
       x0, x1, y0, y1, h,
       zone:{x:x0, y:y0, w:Math.max(1, x1-x0), h:Math.max(1, y1-y0), startRatio:ctStartRatio, endRatio:ctEndRatio, widthRatio:ctEndRatio-ctStartRatio, topThirdY:Math.round(topThirdY), topThirdPadding:topThirdPadding, yLimitedByTopThird:false, coordinateSystem:'cassette-30-10-30', qrSide:qSide, stripCenterX, cExpectedAbsY, tExpectedAbsY, bandHalf, locatorY0, locatorY1, pxPerMm, cassetteMm:CASSETTE_L_MM, stripTopMm:STRIP_TOP_MM, stripHeightMm:STRIP_H_MM, tMinGapMm:T_MIN_GAP_MM, tMaxGapMm:T_MAX_GAP_MM, tRelativeCRatio:T_RELATIVE_C_RATIO, ctGapMm, cLocatorAbsY:null, cLocatorHasColor:false},
       raw, profile:positive, baseline:bg, rawBaseline, rawMedian, rawMax, pinkMax, darkMax, combinedMax, selectedMode, lumBackground, lumMedian, mean:stat.mean, std:stat.std,
-      maxScore, threshold, tThreshold, tcRatio, cStrength, tStrength, tRelativeThreshold, tRelativeRatio:T_RELATIVE_C_RATIO, candidateFloor, minSep,
+      maxScore, threshold, tThreshold, tcRatio, cStrength, tStrength, tRelativeThreshold, tRelativeRatio:T_RELATIVE_C_RATIO, tWeakHorizontalEvidence, candidateFloor, minSep,
       cRange, tRange,
       cPeak:{y:cQ.y, absY:y0+cQ.y, score:cQ.score, detected:cDetected, selected:cSelected, redContinuity:cRed, width:cQ.width, left:y0+cQ.left, right:y0+cQ.right, drop:cQ.drop, sharpness:cQ.sharpness, shoulderRatio:cQ.shoulderRatio, shoulderMaxRatio:cQ.shoulderMaxRatio, nearShoulderRatio:cQ.nearShoulderRatio, quality:cQ.quality || 0, reject:cQ.reject, warning:cQ.warning || '-', maxWidth:cQ.maxWidth},
       tPeak:{y:tQ.y, absY:y0+tQ.y, score:tQ.score, detected:tDetected, selected:tSelected, redContinuity:tRed, width:tQ.width, left:y0+tQ.left, right:y0+tQ.right, drop:tQ.drop, sharpness:tQ.sharpness, shoulderRatio:tQ.shoulderRatio, shoulderMaxRatio:tQ.shoulderMaxRatio, nearShoulderRatio:tQ.nearShoulderRatio, quality:tQ.quality || 0, reject:tQ.reject, warning:tQ.warning || '-', maxWidth:tQ.maxWidth},

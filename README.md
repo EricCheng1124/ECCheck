@@ -1,18 +1,17 @@
-# ASAP Check v31.69 — Relative T threshold 10% of C
+# ASAP Check v31.70 — T/C 10% Primary
 
-## Geometry
-- Cassette: 70 × 20 mm.
-- QR code: direction/orientation only.
-- CT analysis zone: middle 10 mm (30 mm from top to 40 mm from top).
-- T candidate must be 0.8–6.0 mm below the detected C line.
+## 判定規則
+- 卡匣：70 × 20 mm。
+- QR Code：主要用於方向判斷。
+- CT 分析區：卡匣上緣 30 mm 到 40 mm，中間固定 10 mm。
+- T 只允許位於實際 C 線下方 0.8–6.0 mm。
+- C 有效後，在合法 T 範圍逐列搜尋最強 band。
+- **T 強度 >= C 強度的 10% → Positive。**
+- **T 強度 < C 強度的 10% → Negative。**
+- 找不到有效 C → Invalid。
 
-## v31.69 changes
-- Positive/Negative T threshold is now relative to the detected C line.
-- T strength must be at least 10% of C strength to be accepted.
-- C/T strength uses a small ±0.35 mm integrated band instead of a single row/pixel.
-- Existing T geometry and red-line continuity gates remain active.
-- Result: C + qualifying T = Positive; C only / T below 10% = Negative; no valid C = Invalid.
-- Version badge, detector version, and cache keys updated to v31.69.
-
-## Debug
-Displays C Strength, T Strength, 10% C threshold, and T/C percentage for tuning.
+## v31.70 變更
+- 修正 v31.69 的判斷順序：弱 T 不再需要先通過固定 `red-continuity/color` hard threshold 才有資格進行 T/C 10% 判定。
+- T 候選改由 C 下方 0.8–6 mm 內的 band strength 主導搜尋。
+- 水平/粉紅證據只保留為非常寬鬆的防陰影輔助條件。
+- 更新頁面版本、detector 版本與 cache key 至 v31.70。
