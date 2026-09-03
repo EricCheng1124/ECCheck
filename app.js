@@ -59,12 +59,12 @@
   let nativeQrDetector = null;
   let nativeQrBusy = false;
   let lastQrGeometry = null;
-  // v31.73: keep the live-locked QR geometry and its coordinate space.
+  // v31.74: keep the live-locked QR geometry and its coordinate space.
   // The captured frame reuses this geometry instead of replacing it with a second QR detection.
   let lockedQrSnapshot = null;
   let capturedLockedQr = null;
   let captureBusy = false;
-  // v31.73: once Capture starts, freeze ALL live QR callbacks until camera is opened again.
+  // v31.74: once Capture starts, freeze ALL live QR callbacks until camera is opened again.
   let qrAnalysisFrozen = false;
   let qrSessionId = 0;
   let lastResultText = 'Ready';
@@ -84,7 +84,7 @@
     ratioMin: 1.20,
     ratioMax: 10.0
   };
-  const MAX_QR_CODES = 10; // v31.73 multi-card: physical QR instances are unique by position, not decoded text
+  const MAX_QR_CODES = 10; // v31.74 multi-card: physical QR instances are unique by position, not decoded text
 
   function unlock() {
     if ((passInput.value || '').trim() === ACCESS_CODE) {
@@ -697,16 +697,53 @@
   function makeLocalDetectionCanvas(original, q) {
     const side=qrSideEstimate(q.geometry);
     const c=q.geometry.center;
-    // QR 位於卡匣靠近一端；以 QR 為中心抓約 11Q 正方形，足以涵蓋整支卡匣，
-    // 但多卡照片時不必每張卡都重跑整張 3K/4K 影像。
-    const half=Math.max(260,side*5.6);
-    const x=Math.max(0,Math.floor(c.x-half)), y=Math.max(0,Math.floor(c.y-half));
-    const x2=Math.min(original.width,Math.ceil(c.x+half)), y2=Math.min(original.height,Math.ceil(c.y+half));
-    const local=document.createElement('canvas'); local.width=Math.max(1,x2-x); local.height=Math.max(1,y2-y);
-    local.getContext('2d',{alpha:false}).drawImage(original,x,y,local.width,local.height,0,0,local.width,local.height);
+    const pts=(q.geometry.points||[]);
+
+    // v31.74 MULTI-CARD ISOLATION:
+    // Do NOT crop a huge 11Q square around each QR. With cards side-by-side that square
+    // contains neighboring cassettes and the outer-frame detector can lock onto the wrong one.
+    // The cassette is 70 x 20 mm and QR is ~14 mm, so card width ~= 1.43Q and length ~= 5Q.
+    // Build a narrow oriented strip from the QR axes and mask everything outside it.
+    let ux={x:1,y:0}, uy={x:0,y:1};
+    if (pts.length>=4) {
+      const vx={x:pts[1].x-pts[0].x,y:pts[1].y-pts[0].y};
+      const vy={x:pts[3].x-pts[0].x,y:pts[3].y-pts[0].y};
+      const lx=Math.hypot(vx.x,vx.y)||1, ly=Math.hypot(vy.x,vy.y)||1;
+      ux={x:vx.x/lx,y:vx.y/lx};
+      uy={x:vy.x/ly,y:vy.y/ly};
+      // Keep the axes close to perpendicular even with perspective noise.
+      const dot=ux.x*uy.x+ux.y*uy.y;
+      uy={x:uy.x-dot*ux.x,y:uy.y-dot*ux.y};
+      const ul=Math.hypot(uy.x,uy.y)||1; uy={x:uy.x/ul,y:uy.y/ul};
+    }
+
+    const halfW=side*0.88;      // full width 1.76Q, just above the real 1.43Q cassette width
+    const topOff=-side*0.82;    // margin above QR centre
+    const botOff= side*4.70;    // enough to include the full ~5Q cassette length
+    const world=(dx,dy)=>({x:c.x+ux.x*dx+uy.x*dy,y:c.y+ux.y*dx+uy.y*dy});
+    const poly=[world(-halfW,topOff),world(halfW,topOff),world(halfW,botOff),world(-halfW,botOff)];
+    const pad=Math.max(12,side*0.10);
+    const xs=poly.map(p=>p.x), ys=poly.map(p=>p.y);
+    const x=Math.max(0,Math.floor(Math.min(...xs)-pad));
+    const y=Math.max(0,Math.floor(Math.min(...ys)-pad));
+    const x2=Math.min(original.width,Math.ceil(Math.max(...xs)+pad));
+    const y2=Math.min(original.height,Math.ceil(Math.max(...ys)+pad));
+
+    const local=document.createElement('canvas');
+    local.width=Math.max(1,x2-x); local.height=Math.max(1,y2-y);
+    const lctx=local.getContext('2d',{alpha:false});
+    // Dark background prevents a neighboring white cassette from becoming an outer-frame candidate.
+    lctx.fillStyle='#252525'; lctx.fillRect(0,0,local.width,local.height);
+    lctx.save();
+    lctx.beginPath();
+    poly.forEach((p,i)=>{const px=p.x-x, py=p.y-y; if(i===0) lctx.moveTo(px,py); else lctx.lineTo(px,py);});
+    lctx.closePath(); lctx.clip();
+    lctx.drawImage(original,x,y,local.width,local.height,0,0,local.width,local.height);
+    lctx.restore();
+
     const geometry={
       center:{x:c.x-x,y:c.y-y},
-      points:(q.geometry.points||[]).map(p=>({x:p.x-x,y:p.y-y}))
+      points:pts.map(p=>({x:p.x-x,y:p.y-y}))
     };
     return {canvas:local, geometry, offsetX:x, offsetY:y};
   }
@@ -718,6 +755,73 @@
     return r;
   }
 
+  function detectQrFinderPatternRegions() {
+    // v31.74 fallback for dense multi-card layouts.
+    // Find QR finder-pattern-like nested squares with OpenCV, then let jsQR decode a small
+    // region around each proposal. This avoids the "one QR per large tile" limitation.
+    if (typeof cv === 'undefined' || !cv.Mat || !canvas || !canvas.width || !canvas.height) return [];
+    let src=null, small=null, gray=null, bin=null, contours=null, hierarchy=null;
+    try {
+      src=cv.imread(canvas);
+      const maxSide=1500;
+      const scale=Math.min(1,maxSide/Math.max(src.cols,src.rows));
+      if (scale<0.999) {
+        small=new cv.Mat();
+        cv.resize(src,small,new cv.Size(Math.max(1,Math.round(src.cols*scale)),Math.max(1,Math.round(src.rows*scale))),0,0,cv.INTER_AREA);
+      } else small=src.clone();
+      gray=new cv.Mat(); cv.cvtColor(small,gray,cv.COLOR_RGBA2GRAY);
+      bin=new cv.Mat();
+      cv.adaptiveThreshold(gray,bin,255,cv.ADAPTIVE_THRESH_GAUSSIAN_C,cv.THRESH_BINARY_INV,31,7);
+      contours=new cv.MatVector(); hierarchy=new cv.Mat();
+      cv.findContours(bin,contours,hierarchy,cv.RETR_TREE,cv.CHAIN_APPROX_SIMPLE);
+      const hs=hierarchy.data32S || [];
+      const raw=[];
+      const minS=Math.max(5,Math.min(small.cols,small.rows)*0.006);
+      const maxS=Math.min(small.cols,small.rows)*0.16;
+      for(let i=0;i<contours.size();i++) {
+        const cnt=contours.get(i);
+        const br=cv.boundingRect(cnt); const area=Math.abs(cv.contourArea(cnt)); cnt.delete();
+        const side=Math.max(br.width,br.height), ratio=br.width/Math.max(1,br.height);
+        if(side<minS || side>maxS || ratio<0.72 || ratio>1.38 || area<br.width*br.height*0.28) continue;
+        // Finder patterns usually create several levels of nested contours.
+        let depth=0, child=(hs[i*4+2]!==undefined?hs[i*4+2]:-1), guard=0;
+        while(child>=0 && guard++<7) { depth++; child=(hs[child*4+2]!==undefined?hs[child*4+2]:-1); }
+        if(depth<2) continue;
+        raw.push({cx:(br.x+br.width/2)/scale,cy:(br.y+br.height/2)/scale,s:side/scale,depth});
+      }
+      raw.sort((a,b)=>(b.depth-a.depth)||(b.s-a.s));
+      const keep=[];
+      for(const r of raw) {
+        if(keep.some(k=>Math.hypot(k.cx-r.cx,k.cy-r.cy)<Math.max(k.s,r.s)*0.55)) continue;
+        keep.push(r); if(keep.length>=36) break;
+      }
+      const regions=[];
+      const add=(x,y,w,h)=>{
+        x=Math.max(0,x); y=Math.max(0,y); w=Math.min(canvas.width-x,w); h=Math.min(canvas.height-y,h);
+        if(w>=50&&h>=50) regions.push({x,y,w,h});
+      };
+      for(const f of keep) {
+        // Finder outer square is ~7 modules; full QR is commonly ~29-37 modules.
+        // Try several generous scales and each possible finder-corner role.
+        for(const mul of [4.3,5.0,5.8]) {
+          const q=f.s*mul, m=f.s*0.55;
+          add(f.cx-m,       f.cy-m,       q,q); // finder is QR top-left
+          add(f.cx-q+m,     f.cy-m,       q,q); // top-right
+          add(f.cx-m,       f.cy-q+m,     q,q); // bottom-left
+          add(f.cx-q+m,     f.cy-q+m,     q,q); // defensive: rotated/corner ambiguity
+        }
+      }
+      return regions;
+    } catch(ex) {
+      console.warn('Finder-pattern QR proposal failed:',ex);
+      return [];
+    } finally {
+      try{if(hierarchy)hierarchy.delete();}catch(_){} try{if(contours)contours.delete();}catch(_){}
+      try{if(bin)bin.delete();}catch(_){} try{if(gray)gray.delete();}catch(_){}
+      try{if(small)small.delete();}catch(_){} try{if(src)src.delete();}catch(_){}
+    }
+  }
+
   async function detectAllQrCodesFromCanvas(seedQr) {
     const found=[];
     const pushUnique=(raw,geometry)=>{
@@ -726,9 +830,19 @@
       found.push({raw:String(raw||''),geometry:cloneQrGeometry(geometry)});
     };
 
-    // v31.73: the QR locked during live preview is authoritative for Card 1.
-    // Photo-time scanning may ADD QR codes, but it must not replace/move the locked one.
-    if (seedQr && seedQr.geometry && seedQr.geometry.center) pushUnique(seedQr.raw || '', seedQr.geometry);
+    // v31.74: HARD FREEZE means the live scanner can no longer change the UI after capture,
+    // but the final card geometry must come from the captured frame itself.  A live-lock seed
+    // is therefore only a search HINT, not an authoritative final QR position.  This avoids a
+    // stale preview coordinate becoming Card 1 when the phone moved a few pixels during capture.
+    if (seedQr && seedQr.geometry && seedQr.geometry.center && typeof window.jsQR === 'function') {
+      try {
+        const sb=qrBox(seedQr.geometry), ss=Math.max(36,qrSideEstimate(seedQr.geometry));
+        const hint={x:seedQr.geometry.center.x-ss*1.15,y:seedQr.geometry.center.y-ss*1.15,w:ss*2.30,h:ss*2.30};
+        const hctx=canvas.getContext('2d',{willReadFrequently:true});
+        const hit=decodeQrRegionFast(hctx,hint,720);
+        if(hit) pushUnique(hit.raw,hit.geometry);
+      } catch(_) {}
+    }
 
     // 1) Native BarcodeDetector can return multiple QR codes at once when supported.
     if (typeof window.BarcodeDetector === 'function') {
@@ -760,7 +874,7 @@
       addGrid(2,1,0.20); addGrid(1,2,0.20); addGrid(2,2,0.16);
       if (W >= H*1.15) addGrid(4,1,0.12);
       else if (H >= W*1.15) addGrid(1,4,0.12);
-      // v31.73: multi-card photos may contain 2x2, 3x2 or 3x3 layouts.
+      // v31.74: multi-card photos may contain 2x2, 3x2 or 3x3 layouts.
       // Add a denser grid so each QR stays large enough for jsQR after down-scaling.
       addGrid(3,2,0.14);
       addGrid(2,3,0.14);
@@ -772,7 +886,18 @@
         if (hit) pushUnique(hit.raw,hit.geometry);
       }
 
-      // v31.73 MULTI-QR PHYSICAL SCAN:
+      // v31.74: finder-pattern proposals isolate each printed QR before decoding.
+      // This is the important fallback when 3-4 identical QRs are touching/very close.
+      if (found.length < MAX_QR_CODES) {
+        const finderRegions=detectQrFinderPatternRegions();
+        for (const a of finderRegions) {
+          if (found.length>=MAX_QR_CODES) break;
+          const hit=decodeQrRegionFast(ctx,a,760);
+          if (hit) pushUnique(hit.raw,hit.geometry);
+        }
+      }
+
+      // v31.74 MULTI-QR PHYSICAL SCAN:
       // jsQR returns only one QR per call. When several identical QR codes sit close together,
       // large tiles keep returning the same code. Use the already-known QR size as a physical
       // ruler and scan small overlapping windows so each call normally contains only ONE QR.
@@ -821,6 +946,10 @@
           if (found.length===before) break;
         }
       }
+    }
+    // Only if every captured-frame decoder failed do we fall back to the frozen live seed.
+    if (!found.length && seedQr && seedQr.geometry && seedQr.geometry.center) {
+      pushUnique(seedQr.raw || '', seedQr.geometry);
     }
     return found.slice(0,MAX_QR_CODES);
   }
@@ -1032,7 +1161,7 @@
   async function captureFromCamera() {
     if (captureBusy || !cameraVideo || !cameraStream) return;
     captureBusy = true;
-    // v31.73 HARD FREEZE: no more live QR activity after the user presses Capture.
+    // v31.74 HARD FREEZE: no more live QR activity after the user presses Capture.
     qrAnalysisFrozen = true;
     stopQrLoop();
     qrSessionId++;
@@ -1071,7 +1200,7 @@
     shot.height = vh;
     shot.getContext('2d').drawImage(cameraVideo, 0, 0, vw, vh);
 
-    // v31.73 TRUE LIVE LOCK:
+    // v31.74 TRUE LIVE LOCK:
     // Preserve the already locked QR and convert its coordinates to the full-resolution shot.
     // analyze() will seed multi-QR detection with this QR and only search for additional cards.
     capturedLockedQr = null;

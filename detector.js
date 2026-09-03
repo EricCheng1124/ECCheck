@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v31.73-multicard-hard-freeze';
+  const VERSION = 'v31.74-multicard-hard-freeze';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
