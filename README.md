@@ -1,18 +1,10 @@
-# ASAP Check v31.72 — Multi-Card + True Live QR Lock
+# ASAP Check v31.73 — Multi-Card + Hard QR Freeze
 
-基於 v31.70 單卡判讀核心，不改動已驗證的 C/T 演算法。
+## v31.73 變更
 
-## v31.72 變更
-
-- **真正沿用 Live Lock**：即時預覽已鎖定的 QR，在拍照後會把座標等比例換算到原始高解析照片，不重新用另一個 QR 結果取代。
-- 多卡拍照後仍會搜尋 QR #2、#3…，但 **Card 1 的已鎖定 QR 為 authoritative anchor**。
-- 支援 `BarcodeDetector` 與 `jsQR` 兩種 Live Lock 座標來源。
-- 修正「QR 已 Locked，按 Capture 後框又跳動／重新出現」的問題。
-- 一張照片最多辨識 10 個 QR Code / 10 張卡匣。
-- 優先使用 BarcodeDetector 一次取得多個 QR；不支援時以 jsQR 分區掃描 + 已找到 QR 遮罩重掃。
-- 新增 3×2、2×3、3×3 搜尋網格，提高多卡照片 QR 命中率。
-- 每個 QR 各自建立局部卡匣 ROI，獨立執行 v31.70 的判讀核心。
-- 多卡依空間位置排序並編號 Card 1, Card 2...。
-- 每張卡維持：中央 10 mm CT 區、C 有效、T 僅可位於 C 下方 0.8–6 mm、T/C >= 10% 判 Positive。
-
-注意：若 QR 太小、模糊、反光或遮擋，仍可能無法解碼；介面會以 Detected Tests 數量顯示實際抓到的卡數。
+- 拍下 Capture 的瞬間立即停止 Live QR timer，並用 session token 廢止所有尚未完成的 BarcodeDetector callback。
+- 拍照後 QR lock/UI 不再被任何 live callback 改寫，避免結果畫面 QR 一直跳出或重新鎖定。
+- 多卡 jsQR 改成「實體位置」辨識：相同 QR 內容也不會合併，只依 QR 中心座標去重。
+- 除原本網格外，新增依已知 QR 尺寸建立的小視窗滑動掃描；相鄰 2~10 張卡時，每個小視窗盡量只包含一個 QR，解決 jsQR 每次只回傳一個 QR 的限制。
+- 每個找到的 QR 獨立建立卡匣 ROI，沿用 v31.70/v31.68 已穩定的 C/T 判讀：中央 10 mm、T 在 C 下 0.8~6 mm、T/C >= 10%。
+- 版本號已更新為 v31.73。

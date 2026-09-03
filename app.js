@@ -59,11 +59,14 @@
   let nativeQrDetector = null;
   let nativeQrBusy = false;
   let lastQrGeometry = null;
-  // v31.72: keep the live-locked QR geometry and its coordinate space.
+  // v31.73: keep the live-locked QR geometry and its coordinate space.
   // The captured frame reuses this geometry instead of replacing it with a second QR detection.
   let lockedQrSnapshot = null;
   let capturedLockedQr = null;
   let captureBusy = false;
+  // v31.73: once Capture starts, freeze ALL live QR callbacks until camera is opened again.
+  let qrAnalysisFrozen = false;
+  let qrSessionId = 0;
   let lastResultText = 'Ready';
   const NTFY_TOPIC = 'ASAPRapidReader';
   let notificationSerial = 0;
@@ -81,7 +84,7 @@
     ratioMin: 1.20,
     ratioMax: 10.0
   };
-  const MAX_QR_CODES = 10; // v31.72 multi-card + true live QR lock: up to 10 QR/cassettes per photo
+  const MAX_QR_CODES = 10; // v31.73 multi-card: physical QR instances are unique by position, not decoded text
 
   function unlock() {
     if ((passInput.value || '').trim() === ACCESS_CODE) {
@@ -540,11 +543,14 @@
   }
 
   async function tryNativeQrDetector() {
-    if (nativeQrBusy || qrLocked || !cameraVideo || typeof window.BarcodeDetector !== 'function') return;
+    if (nativeQrBusy || qrLocked || qrAnalysisFrozen || !cameraVideo || typeof window.BarcodeDetector !== 'function') return;
+    const mySession = qrSessionId;
     nativeQrBusy = true;
     try {
       if (!nativeQrDetector) nativeQrDetector = new window.BarcodeDetector({ formats: ['qr_code'] });
       const codes = await nativeQrDetector.detect(cameraVideo);
+      // A native detect() call can finish after Capture/stopCamera. Never let that stale callback change UI/lock state.
+      if (mySession !== qrSessionId || qrAnalysisFrozen || !cameraStream) return;
       if (codes && codes[0] && codes[0].rawValue) {
         acceptQrCode(codes[0].rawValue, true, qrGeometryFromNative(codes[0]), {
           width: cameraVideo.videoWidth || cameraVideo.clientWidth || 1,
@@ -720,7 +726,7 @@
       found.push({raw:String(raw||''),geometry:cloneQrGeometry(geometry)});
     };
 
-    // v31.72: the QR locked during live preview is authoritative for Card 1.
+    // v31.73: the QR locked during live preview is authoritative for Card 1.
     // Photo-time scanning may ADD QR codes, but it must not replace/move the locked one.
     if (seedQr && seedQr.geometry && seedQr.geometry.center) pushUnique(seedQr.raw || '', seedQr.geometry);
 
@@ -754,7 +760,7 @@
       addGrid(2,1,0.20); addGrid(1,2,0.20); addGrid(2,2,0.16);
       if (W >= H*1.15) addGrid(4,1,0.12);
       else if (H >= W*1.15) addGrid(1,4,0.12);
-      // v31.72: multi-card photos may contain 2x2, 3x2 or 3x3 layouts.
+      // v31.73: multi-card photos may contain 2x2, 3x2 or 3x3 layouts.
       // Add a denser grid so each QR stays large enough for jsQR after down-scaling.
       addGrid(3,2,0.14);
       addGrid(2,3,0.14);
@@ -764,6 +770,28 @@
         if (found.length>=MAX_QR_CODES) break;
         const hit=decodeQrRegionFast(ctx,a,820);
         if (hit) pushUnique(hit.raw,hit.geometry);
+      }
+
+      // v31.73 MULTI-QR PHYSICAL SCAN:
+      // jsQR returns only one QR per call. When several identical QR codes sit close together,
+      // large tiles keep returning the same code. Use the already-known QR size as a physical
+      // ruler and scan small overlapping windows so each call normally contains only ONE QR.
+      // IMPORTANT: uniqueness is by center position (isSameQr), never by raw text.
+      if (found.length < MAX_QR_CODES && found.length > 0) {
+        const seedSide = Math.max(28, Math.min(W, H) * 0.02, qrSideEstimate(found[0].geometry));
+        const win = Math.max(110, seedSide * 2.35);
+        const step = Math.max(58, seedSide * 1.10);
+        // Expand scan beyond just the seed row so 2x2 / 3x2 / 3x3 layouts also work.
+        for (let cy = win * 0.50; cy <= H + win * 0.25 && found.length < MAX_QR_CODES; cy += step) {
+          for (let cx = win * 0.50; cx <= W + win * 0.25 && found.length < MAX_QR_CODES; cx += step) {
+            const region = { x: cx - win/2, y: cy - win/2, w: win, h: win };
+            // Skip windows whose center is already very close to a known QR; neighboring windows still cover the gaps.
+            const tooClose = found.some(q => Math.hypot(q.geometry.center.x-cx, q.geometry.center.y-cy) < seedSide*0.48);
+            if (tooClose) continue;
+            const hit = decodeQrRegionFast(ctx, region, 560);
+            if (hit) pushUnique(hit.raw, hit.geometry);
+          }
+        }
       }
 
       // 找到 1~3 張後，以小遮罩再掃整張縮圖，補相鄰 QR；最多追加到 10 張。
@@ -894,7 +922,9 @@
 
   function scheduleLiveQrScan() {
     stopQrLoop();
+    const mySession = qrSessionId;
     const loop = () => {
+      if (mySession !== qrSessionId || qrAnalysisFrozen) return;
       if (!cameraStream || !cameraVideo || cameraVideo.readyState < 2) {
         if (cameraStream) qrScanTimer = setTimeout(loop, 250);
         return;
@@ -922,7 +952,7 @@
         }
       }
 
-      if (cameraStream) qrScanTimer = setTimeout(loop, qrLocked ? 500 : 260);
+      if (cameraStream && mySession === qrSessionId && !qrAnalysisFrozen) qrScanTimer = setTimeout(loop, qrLocked ? 500 : 260);
     };
     loop();
   }
@@ -954,6 +984,8 @@
     }
 
     captureBusy = false;
+    qrAnalysisFrozen = false;
+    qrSessionId++;
     if (captureBtn) captureBtn.disabled = false;
 
     // v31.54：每次開啟相機都視為「新的一次拍攝」。
@@ -988,6 +1020,7 @@
 
   function stopCamera(keepStage) {
     stopQrLoop();
+    qrSessionId++; // invalidate any BarcodeDetector/jsQR callback already in flight
     if (cameraStream) {
       cameraStream.getTracks().forEach(t => t.stop());
       cameraStream = null;
@@ -999,8 +1032,12 @@
   async function captureFromCamera() {
     if (captureBusy || !cameraVideo || !cameraStream) return;
     captureBusy = true;
+    // v31.73 HARD FREEZE: no more live QR activity after the user presses Capture.
+    qrAnalysisFrozen = true;
+    stopQrLoop();
+    qrSessionId++;
     if (captureBtn) captureBtn.disabled = true;
-    if (cameraStatus) cameraStatus.textContent = 'Preparing image...';
+    if (cameraStatus) cameraStatus.textContent = 'QR locked · Capturing...';
 
     // On iPhone/Safari the first tap can arrive before videoWidth/videoHeight
     // are populated even though play() has resolved. Wait for a real frame.
@@ -1019,8 +1056,11 @@
 
     if (!cameraStream || cameraVideo.readyState < 2 || !cameraVideo.videoWidth || !cameraVideo.videoHeight) {
       captureBusy = false;
+      qrAnalysisFrozen = false;
+      qrSessionId++;
       if (captureBtn) captureBtn.disabled = false;
       if (cameraStatus) cameraStatus.textContent = 'Camera frame not ready. Please tap Capture again.';
+      scheduleLiveQrScan();
       return;
     }
     const vw = cameraVideo.videoWidth;
@@ -1031,7 +1071,7 @@
     shot.height = vh;
     shot.getContext('2d').drawImage(cameraVideo, 0, 0, vw, vh);
 
-    // v31.72 TRUE LIVE LOCK:
+    // v31.73 TRUE LIVE LOCK:
     // Preserve the already locked QR and convert its coordinates to the full-resolution shot.
     // analyze() will seed multi-QR detection with this QR and only search for additional cards.
     capturedLockedQr = null;
@@ -1044,13 +1084,17 @@
       if (g) capturedLockedQr = { raw: lockedQrSnapshot.raw || (lastQr && lastQr.raw) || '', geometry: g };
     }
 
-    // Last chance QR scan from the full-resolution captured frame.
-    if (!qrLocked && typeof window.jsQR === 'function') {
+    // Last-chance seed from the captured frame, but DO NOT call acceptQrCode here.
+    // The result screen must never be changed by a post-capture live/lock callback.
+    if (!capturedLockedQr && typeof window.jsQR === 'function') {
       try {
         const sctx = shot.getContext('2d', { willReadFrequently: true });
         const imageData = sctx.getImageData(0, 0, shot.width, shot.height);
         const code = decodeQrImageData(imageData);
-        if (code && code.data) acceptQrCode(code.data, true, qrGeometryFromJsQr(code), { width: shot.width, height: shot.height });
+        if (code && code.data) {
+          const g = qrGeometryFromJsQr(code);
+          if (g) capturedLockedQr = { raw: String(code.data), geometry: g };
+        }
       } catch (_) {}
     }
 
