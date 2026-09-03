@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v31.67-aspect-lock-ct-continuity';
+  const VERSION = 'v31.68-t-gap-0p8-to-6mm';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -1416,6 +1416,8 @@
     const CASSETTE_L_MM = 70.0;
     const STRIP_TOP_MM = 30.0;
     const STRIP_H_MM = 10.0;
+    const T_MIN_GAP_MM = 0.8;
+    const T_MAX_GAP_MM = 6.0;
     const pxPerMm = H / CASSETTE_L_MM;
     const qSide = Math.max(4, H * (14.0 / 70.0)); // 僅供既有平滑/最小間距參數使用，不參與定位
     const stripCenterX = W * 0.50;
@@ -1562,10 +1564,25 @@
 
     const cCont = bestContinuityInRange(cSearchRange, 'C');
     const cAnchorY = cCont ? cCont.localY : cExpectedLocalY;
-    // T 一定在 C 下方；由實際找到的 C 往下留最小分離，避免同一條 C 被再選成 T。
-    const dynTStart = clamp(Math.max(tSearchRange.start, Math.floor(cAnchorY + Math.max(4, minSep*0.70))), 0, h-1);
-    const dynTRange = {start:dynTStart, end:tSearchRange.end};
-    const tCont = dynTStart < h-1 ? bestContinuityInRange(dynTRange, 'faintT') : null;
+
+    // v31.68：機構條件 hard-lock。
+    // T 線只允許出現在「實際 C 線下方 0.8 ~ 6.0 mm」。
+    // 超過 6 mm 的槽邊、陰影、反光 peak 一律不能成為 T；
+    // 小於 0.8 mm 則視為 C 本身厚度/下緣，不可重複當 T。
+    const tMinGapPx = Math.max(1, T_MIN_GAP_MM * pxPerMm);
+    const tMaxGapPx = Math.max(tMinGapPx + 1, T_MAX_GAP_MM * pxPerMm);
+    const dynTStart = clamp(Math.ceil(cAnchorY + tMinGapPx), 0, h-1);
+    const dynTEnd = clamp(Math.floor(cAnchorY + tMaxGapPx), dynTStart, h-1);
+    const dynTRange = {
+      start: Math.max(tSearchRange.start, dynTStart),
+      end: Math.min(tSearchRange.end, dynTEnd)
+    };
+    const tRangeValid = dynTRange.start <= dynTRange.end && dynTRange.start < h;
+    const tCont = tRangeValid ? bestContinuityInRange(dynTRange, 'faintT') : null;
+
+    // Debug 預期 T 位置放在允許區間中央，不參與最終判定。
+    tExpectedLocalY = clamp(cAnchorY + ((T_MIN_GAP_MM + T_MAX_GAP_MM) * 0.5) * pxPerMm, 0, h-1);
+    tExpectedAbsY = y0 + tExpectedLocalY;
 
     let cQ = bestPeakInBand('C', cSearchRange, cExpectedLocalY);
     let tQ = bestPeakInBand('T', dynTRange, tExpectedLocalY);
@@ -1579,8 +1596,10 @@
 
     const tGeometryOk = !!tCont && tCont.localY >= dynTRange.start && tCont.localY <= dynTRange.end;
     const tColorOk = !!tCont && ((tCont.redRatio||0) >= 0.020 || (tCont.redAvg||0) >= 1.00 || (tCont.contrastAvg||0) >= 0.45);
-    const refinedSeparationOk = !!(cCont && tCont && tCont.absY > cCont.absY &&
-      (tCont.absY-cCont.absY) >= Math.max(4, minSep*0.60));
+    const ctGapPx = (cCont && tCont) ? (tCont.absY - cCont.absY) : -1;
+    const ctGapMm = ctGapPx >= 0 ? (ctGapPx / Math.max(0.0001, pxPerMm)) : -1;
+    const refinedSeparationOk = !!(cCont && tCont &&
+      ctGapMm >= T_MIN_GAP_MM && ctGapMm <= T_MAX_GAP_MM);
     // T 比 C 淡是正常的，但仍要求真實粉紅連續性；灰色槽邊不會單靠 darkness 通過。
     const tDetected = !!(cDetected && tCont && tCont.ok && tGeometryOk && tColorOk && refinedSeparationOk);
 
@@ -1600,7 +1619,7 @@
     cQ.detected = cDetected;
     tQ.detected = tDetected;
     cQ.reject = !cCont ? 'no-horizontal-line' : !cGeometryOk ? 'outside-middle10-c-band' : !cCont.ok ? 'no-red-continuity' : !cColorOk ? 'weak-color' : 'PASS';
-    tQ.reject = !tCont ? 'no-horizontal-line' : !tGeometryOk ? 'outside-middle10-t-band' : !tCont.ok ? 'no-red-continuity' : !tColorOk ? 'weak-color' : !refinedSeparationOk ? 'ct-too-close' : 'PASS';
+    tQ.reject = !tCont ? 'no-horizontal-line' : !tGeometryOk ? 'outside-middle10-t-band' : !tCont.ok ? 'no-red-continuity' : !tColorOk ? 'weak-color' : !refinedSeparationOk ? 't-gap-outside-0.8-6mm' : 'PASS';
 
     let result = 'Invalid';
     if (cDetected && tDetected) result = 'Positive';
@@ -1614,9 +1633,9 @@
     );
 
     return {
-      source:'ct-outer-middle10-v31-67-continuity',
+      source:'ct-outer-middle10-v31-68-t-gap-lock',
       x0, x1, y0, y1, h,
-      zone:{x:x0, y:y0, w:Math.max(1, x1-x0), h:Math.max(1, y1-y0), startRatio:ctStartRatio, endRatio:ctEndRatio, widthRatio:ctEndRatio-ctStartRatio, topThirdY:Math.round(topThirdY), topThirdPadding:topThirdPadding, yLimitedByTopThird:false, coordinateSystem:'cassette-30-10-30', qrSide:qSide, stripCenterX, cExpectedAbsY, tExpectedAbsY, bandHalf, locatorY0, locatorY1, pxPerMm, cassetteMm:CASSETTE_L_MM, stripTopMm:STRIP_TOP_MM, stripHeightMm:STRIP_H_MM, cLocatorAbsY:null, cLocatorHasColor:false},
+      zone:{x:x0, y:y0, w:Math.max(1, x1-x0), h:Math.max(1, y1-y0), startRatio:ctStartRatio, endRatio:ctEndRatio, widthRatio:ctEndRatio-ctStartRatio, topThirdY:Math.round(topThirdY), topThirdPadding:topThirdPadding, yLimitedByTopThird:false, coordinateSystem:'cassette-30-10-30', qrSide:qSide, stripCenterX, cExpectedAbsY, tExpectedAbsY, bandHalf, locatorY0, locatorY1, pxPerMm, cassetteMm:CASSETTE_L_MM, stripTopMm:STRIP_TOP_MM, stripHeightMm:STRIP_H_MM, tMinGapMm:T_MIN_GAP_MM, tMaxGapMm:T_MAX_GAP_MM, ctGapMm, cLocatorAbsY:null, cLocatorHasColor:false},
       raw, profile:positive, baseline:bg, rawBaseline, rawMedian, rawMax, pinkMax, darkMax, combinedMax, selectedMode, lumBackground, lumMedian, mean:stat.mean, std:stat.std,
       maxScore, threshold, tThreshold, tcRatio, candidateFloor, minSep,
       cRange, tRange,

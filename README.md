@@ -1,17 +1,19 @@
-# ASAP Check v31.67 — Aspect Lock + CT Continuity
+# ASAP Check v31.68 — T Gap Lock 0.8–6 mm
 
-定位策略：
+定位/判讀策略：
 - QR Code 只負責卡匣方向。
-- 先由 contour 找 70 x 20 mm 卡匣候選，再用原圖 RGB 邊界梯度把 Top / Bottom / Left / Right 四邊吸附到真正卡匣外緣。
-- 不用 QR 14 mm 去硬推整支 70 mm 外框，避免尺寸誤差被放大。
-- C/T ROI 維持 30 / 10 / 30 幾何：卡匣上 30 mm、中央 10 mm 分析區、下 30 mm。
-- 外框 quality gate 與 C/T 最終結果解耦：C 有效 + T 有效 = Positive；C 有效 + T 無效 = Negative；C 無效才 Invalid。
-- Debug 新增 Edge Snap 狀態與 snap 前後 L/W 尺寸。
+- 卡匣外框維持 70 x 20 mm aspect-lock / edge-snap。
+- C/T ROI 維持 30 / 10 / 30：中央 10 mm 為唯一試紙分析區。
+- C 線先在中央 ROI 上半部找水平紅/粉紅連續線。
+- T 線只允許在「實際 C 線下方 0.8 ~ 6.0 mm」範圍搜尋。
+- 超過 C 下方 6 mm 的槽邊、陰影、反光一律不能判為 T。
+- 小於 0.8 mm 視為 C 線本身厚度/邊緣，不得重複判為 T。
+- 最終：C+T = Positive；只有 C = Negative；無 C = Invalid。
 
-
-## v31.67 changes
-- Version badge/cache key updated to v31.67.
-- Cassette outer frame locks to physical 70:20 = 3.50 aspect ratio after edge detection.
-- Top/bottom are searched as one fixed-length pair, reducing background/internal-edge drift.
-- C/T detection scans horizontal red/pink continuity directly inside the fixed middle 10 mm ROI.
-- Final result remains C+T=Positive, C only=Negative, no C=Invalid.
+## v31.68 changes
+- Version badge / detector version / cache key 更新為 v31.68。
+- 新增 T_MIN_GAP_MM = 0.8。
+- 新增 T_MAX_GAP_MM = 6.0。
+- T 搜尋區由實際偵測到的 C 線動態建立。
+- T 最終判定再次檢查 C→T 實際距離必須落在 0.8~6.0 mm。
+- Debug zone 保留 tMinGapMm / tMaxGapMm / ctGapMm。
