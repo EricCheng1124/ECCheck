@@ -1,17 +1,13 @@
-# ASAP Check v31.70 — T/C 10% Primary
+# ASAP Check v31.71 — Multi-Card
 
-## 判定規則
-- 卡匣：70 × 20 mm。
-- QR Code：主要用於方向判斷。
-- CT 分析區：卡匣上緣 30 mm 到 40 mm，中間固定 10 mm。
-- T 只允許位於實際 C 線下方 0.8–6.0 mm。
-- C 有效後，在合法 T 範圍逐列搜尋最強 band。
-- **T 強度 >= C 強度的 10% → Positive。**
-- **T 強度 < C 強度的 10% → Negative。**
-- 找不到有效 C → Invalid。
+基於 v31.70 單卡判讀核心，不改動已驗證的 C/T 演算法。
 
-## v31.70 變更
-- 修正 v31.69 的判斷順序：弱 T 不再需要先通過固定 `red-continuity/color` hard threshold 才有資格進行 T/C 10% 判定。
-- T 候選改由 C 下方 0.8–6 mm 內的 band strength 主導搜尋。
-- 水平/粉紅證據只保留為非常寬鬆的防陰影輔助條件。
-- 更新頁面版本、detector 版本與 cache key 至 v31.70。
+## v31.71 變更
+- 一張照片最多辨識 10 個 QR Code / 10 張卡匣。
+- 優先使用 BarcodeDetector 一次取得多個 QR；不支援時以 jsQR 分區掃描 + 已找到 QR 遮罩重掃。
+- 新增 3×2、2×3、3×3 搜尋網格，提高多卡照片 QR 命中率。
+- 每個 QR 各自建立局部卡匣 ROI，獨立執行 v31.70 的判讀核心。
+- 多卡依空間位置排序並編號 Card 1, Card 2...。
+- 每張卡維持：中央 10 mm CT 區、C 有效、T 僅可位於 C 下方 0.8–6 mm、T/C >= 10% 判 Positive。
+
+注意：若 QR 太小、模糊、反光或遮擋，仍可能無法解碼；介面會以 Detected Tests 數量顯示實際抓到的卡數。

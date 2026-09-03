@@ -77,6 +77,7 @@
     ratioMin: 1.20,
     ratioMax: 10.0
   };
+  const MAX_QR_CODES = 10; // v31.71 multi-card: up to 10 QR/cassettes per photo
 
   function unlock() {
     if ((passInput.value || '').trim() === ACCESS_CODE) {
@@ -695,7 +696,7 @@
       } catch (_) {}
     }
 
-    if (typeof window.jsQR === 'function' && found.length < 4) {
+    if (typeof window.jsQR === 'function' && found.length < MAX_QR_CODES) {
       const W=canvas.width, H=canvas.height;
       const ctx=canvas.getContext('2d',{willReadFrequently:true});
 
@@ -715,16 +716,21 @@
       addGrid(2,1,0.20); addGrid(1,2,0.20); addGrid(2,2,0.16);
       if (W >= H*1.15) addGrid(4,1,0.12);
       else if (H >= W*1.15) addGrid(1,4,0.12);
+      // v31.71: multi-card photos may contain 2x2, 3x2 or 3x3 layouts.
+      // Add a denser grid so each QR stays large enough for jsQR after down-scaling.
+      addGrid(3,2,0.14);
+      addGrid(2,3,0.14);
+      addGrid(3,3,0.12);
 
       for (const a of regions) {
-        if (found.length>=4) break;
+        if (found.length>=MAX_QR_CODES) break;
         const hit=decodeQrRegionFast(ctx,a,820);
         if (hit) pushUnique(hit.raw,hit.geometry);
       }
 
-      // 找到 1~3 張後，以小遮罩再掃整張縮圖，補相鄰 QR；最多只追加 4 次。
+      // 找到 1~3 張後，以小遮罩再掃整張縮圖，補相鄰 QR；最多追加到 10 張。
       // 這比舊版 decodeQrCanvas 的 9 crops × 3 variants × 多次重跑快很多。
-      if (found.length < 4) {
+      if (found.length < MAX_QR_CODES) {
         const work=cloneCanvas(canvas);
         const wctx=work.getContext('2d');
         const mask=(geometry)=>{
@@ -734,7 +740,7 @@
           wctx.restore();
         };
         found.forEach(x=>mask(x.geometry));
-        for (let i=found.length;i<4;i++) {
+        for (let i=found.length;i<MAX_QR_CODES;i++) {
           const scale=Math.min(1,1000/Math.max(work.width,work.height));
           const tmp=document.createElement('canvas'); tmp.width=Math.max(80,Math.round(work.width*scale)); tmp.height=Math.max(80,Math.round(work.height*scale));
           const tctx=tmp.getContext('2d',{willReadFrequently:true}); tctx.drawImage(work,0,0,tmp.width,tmp.height);
@@ -750,7 +756,7 @@
         }
       }
     }
-    return found.slice(0,4);
+    return found.slice(0,MAX_QR_CODES);
   }
 
   function sortCardsSpatially(items) {
