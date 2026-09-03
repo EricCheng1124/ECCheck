@@ -78,6 +78,10 @@
     ratioMax: 10.0
   };
 
+  // v31.71: multi-card extension built directly on the stable v31.70 single-card core.
+  const BUILD_VERSION = 'v31.71';
+  const MULTI_MAX_CARDS = 8;
+
   function unlock() {
     if ((passInput.value || '').trim() === ACCESS_CODE) {
       sessionStorage.setItem('asap_access', '1');
@@ -653,21 +657,85 @@
     return null;
   }
 
-  function makeLocalDetectionCanvas(original, q) {
-    const side=qrSideEstimate(q.geometry);
-    const c=q.geometry.center;
-    // QR 位於卡匣靠近一端；以 QR 為中心抓約 11Q 正方形，足以涵蓋整支卡匣，
-    // 但多卡照片時不必每張卡都重跑整張 3K/4K 影像。
-    const half=Math.max(260,side*5.6);
-    const x=Math.max(0,Math.floor(c.x-half)), y=Math.max(0,Math.floor(c.y-half));
-    const x2=Math.min(original.width,Math.ceil(c.x+half)), y2=Math.min(original.height,Math.ceil(c.y+half));
-    const local=document.createElement('canvas'); local.width=Math.max(1,x2-x); local.height=Math.max(1,y2-y);
-    local.getContext('2d',{alpha:false}).drawImage(original,x,y,local.width,local.height,0,0,local.width,local.height);
-    const geometry={
+  function makeLocalDetectionCanvas(original, q, allQr) {
+    const side = Math.max(24, qrSideEstimate(q.geometry));
+    const c = q.geometry.center;
+    const pts = Array.isArray(q.geometry.points) ? q.geometry.points : [];
+
+    // Multi-card only. Single-card keeps the untouched v31.70 full-image path.
+    let ux = 1, uy = 0, vx = 0, vy = 1;
+    if (pts.length >= 4) {
+      const topMid = { x:(pts[0].x + pts[1].x)/2, y:(pts[0].y + pts[1].y)/2 };
+      const botMid = { x:(pts[2].x + pts[3].x)/2, y:(pts[2].y + pts[3].y)/2 };
+      const rightMid = { x:(pts[1].x + pts[2].x)/2, y:(pts[1].y + pts[2].y)/2 };
+      const leftMid  = { x:(pts[0].x + pts[3].x)/2, y:(pts[0].y + pts[3].y)/2 };
+      let dx = rightMid.x-leftMid.x, dy = rightMid.y-leftMid.y;
+      let n = Math.hypot(dx,dy) || 1; ux = dx/n; uy = dy/n;
+      dx = botMid.x-topMid.x; dy = botMid.y-topMid.y;
+      n = Math.hypot(dx,dy) || 1; vx = dx/n; vy = dy/n;
+    }
+
+    // 70x20 mm cassette, QR ~=14 mm. Width ~=1.43Q.
+    // Keep a narrow corridor instead of the old 11Q square that could include neighbors.
+    let left  = -1.05 * side;
+    let right =  1.05 * side;
+    let top   = -1.15 * side;
+    let bottom=  5.10 * side;
+
+    // Neighbor ownership: cut at the midpoint to adjacent QR centers.
+    // This is only a multi-card ROI guard; detector.js itself is unchanged.
+    (allQr || []).forEach(other => {
+      if (other === q || !other.geometry || !other.geometry.center) return;
+      const dx = other.geometry.center.x - c.x;
+      const dy = other.geometry.center.y - c.y;
+      const du = dx*ux + dy*uy;
+      const dv = dx*vx + dy*vy;
+      const guard = 0.06 * side;
+      if (Math.abs(du) >= Math.abs(dv)) {
+        if (du > 0) right = Math.min(right, du*0.5 - guard);
+        else left = Math.max(left, du*0.5 + guard);
+      } else {
+        if (dv > 0) bottom = Math.min(bottom, dv*0.5 - guard);
+        else top = Math.max(top, dv*0.5 + guard);
+      }
+    });
+
+    // Never collapse the physical cassette width.
+    const minHalfWidth = 0.76 * side;
+    left = Math.min(left, -minHalfWidth);
+    right = Math.max(right, minHalfWidth);
+
+    const p = (u,v) => ({x:c.x + ux*u + vx*v, y:c.y + uy*u + vy*v});
+    const corridor = [p(left,top), p(right,top), p(right,bottom), p(left,bottom)];
+    const xs = corridor.map(p=>p.x), ys = corridor.map(p=>p.y);
+    const pad = Math.max(10, Math.round(side*0.12));
+    const x = Math.max(0, Math.floor(Math.min(...xs)-pad));
+    const y = Math.max(0, Math.floor(Math.min(...ys)-pad));
+    const x2 = Math.min(original.width, Math.ceil(Math.max(...xs)+pad));
+    const y2 = Math.min(original.height, Math.ceil(Math.max(...ys)+pad));
+
+    const local = document.createElement('canvas');
+    local.width = Math.max(1, x2-x);
+    local.height = Math.max(1, y2-y);
+    const lctx = local.getContext('2d', {alpha:false});
+    lctx.fillStyle = '#111111';
+    lctx.fillRect(0,0,local.width,local.height);
+    lctx.save();
+    lctx.beginPath();
+    corridor.forEach((pt,i) => {
+      const lx = pt.x-x, ly = pt.y-y;
+      if (!i) lctx.moveTo(lx,ly); else lctx.lineTo(lx,ly);
+    });
+    lctx.closePath();
+    lctx.clip();
+    lctx.drawImage(original, x, y, local.width, local.height, 0, 0, local.width, local.height);
+    lctx.restore();
+
+    const geometry = {
       center:{x:c.x-x,y:c.y-y},
-      points:(q.geometry.points||[]).map(p=>({x:p.x-x,y:p.y-y}))
+      points:(q.geometry.points||[]).map(pt=>({x:pt.x-x,y:pt.y-y}))
     };
-    return {canvas:local, geometry, offsetX:x, offsetY:y};
+    return {canvas:local, geometry, offsetX:x, offsetY:y, corridor};
   }
 
   function translateDetectionResult(r, ox, oy) {
@@ -685,7 +753,6 @@
       found.push({raw:String(raw||''),geometry});
     };
 
-    // 1) Native BarcodeDetector can return multiple QR codes at once when supported.
     if (typeof window.BarcodeDetector === 'function') {
       try {
         const detector = nativeQrDetector || new window.BarcodeDetector({formats:['qr_code']});
@@ -695,14 +762,12 @@
       } catch (_) {}
     }
 
-    if (typeof window.jsQR === 'function' && found.length < 4) {
+    // jsQR fallback. Identity is based on geometry, not decoded text, so repeated QR payloads are allowed.
+    if (typeof window.jsQR === 'function' && found.length < MULTI_MAX_CARDS) {
       const W=canvas.width, H=canvas.height;
       const ctx=canvas.getContext('2d',{willReadFrequently:true});
-
-      // v31.52: 先用少量、縮圖後的區塊找 QR。舊版最多會跑 30+ tiles × 3 variants，
-      // 多卡照片主要時間都耗在 jsQR；這裡改為 8~14 個自適應區塊 × 2 variants。
       const regions=[];
-      const addGrid=(cols,rows,overlap=0.16)=>{
+      const addGrid=(cols,rows,overlap=0.18)=>{
         const cellW=W/cols, cellH=H/rows;
         for(let ry=0;ry<rows;ry++) for(let rx=0;rx<cols;rx++) {
           const padX=cellW*overlap, padY=cellH*overlap;
@@ -712,45 +777,47 @@
         }
       };
       regions.push({x:0,y:0,w:W,h:H});
-      addGrid(2,1,0.20); addGrid(1,2,0.20); addGrid(2,2,0.16);
-      if (W >= H*1.15) addGrid(4,1,0.12);
-      else if (H >= W*1.15) addGrid(1,4,0.12);
+      addGrid(2,1,0.22); addGrid(1,2,0.22); addGrid(2,2,0.18);
+      addGrid(3,1,0.16); addGrid(1,3,0.16);
+      addGrid(3,2,0.14); addGrid(2,3,0.14);
 
       for (const a of regions) {
-        if (found.length>=4) break;
-        const hit=decodeQrRegionFast(ctx,a,820);
+        if (found.length>=MULTI_MAX_CARDS) break;
+        const hit=decodeQrRegionFast(ctx,a,900);
         if (hit) pushUnique(hit.raw,hit.geometry);
       }
 
-      // 找到 1~3 張後，以小遮罩再掃整張縮圖，補相鄰 QR；最多只追加 4 次。
-      // 這比舊版 decodeQrCanvas 的 9 crops × 3 variants × 多次重跑快很多。
-      if (found.length < 4) {
+      if (found.length < MULTI_MAX_CARDS) {
         const work=cloneCanvas(canvas);
         const wctx=work.getContext('2d');
         const mask=(geometry)=>{
-          const b=qrBox(geometry), m=Math.max(3,Math.max(b.w,b.h)*0.10);
+          const b=qrBox(geometry), m=Math.max(4,Math.max(b.w,b.h)*0.16);
+          const mx=Math.max(0,b.x-m), my=Math.max(0,b.y-m);
           wctx.save(); wctx.fillStyle='#ffffff';
-          wctx.fillRect(Math.max(0,b.x-m),Math.max(0,b.y-m),Math.min(work.width,b.w+m*2),Math.min(work.height,b.h+m*2));
+          wctx.fillRect(mx,my,Math.min(work.width-mx,b.w+m*2),Math.min(work.height-my,b.h+m*2));
           wctx.restore();
         };
         found.forEach(x=>mask(x.geometry));
-        for (let i=found.length;i<4;i++) {
-          const scale=Math.min(1,1000/Math.max(work.width,work.height));
-          const tmp=document.createElement('canvas'); tmp.width=Math.max(80,Math.round(work.width*scale)); tmp.height=Math.max(80,Math.round(work.height*scale));
-          const tctx=tmp.getContext('2d',{willReadFrequently:true}); tctx.drawImage(work,0,0,tmp.width,tmp.height);
+        for (let i=found.length;i<MULTI_MAX_CARDS;i++) {
+          const scale=Math.min(1,1200/Math.max(work.width,work.height));
+          const tmp=document.createElement('canvas');
+          tmp.width=Math.max(80,Math.round(work.width*scale));
+          tmp.height=Math.max(80,Math.round(work.height*scale));
+          const tctx=tmp.getContext('2d',{willReadFrequently:true});
+          tctx.drawImage(work,0,0,tmp.width,tmp.height);
           const imageData=tctx.getImageData(0,0,tmp.width,tmp.height);
-          let code=decodeQrImageData(imageData) || decodeQrImageData(enhanceQrImageData(imageData,false));
+          let code=decodeQrImageData(imageData) || decodeQrImageData(enhanceQrImageData(imageData,false)) || decodeQrImageData(enhanceQrImageData(imageData,true));
           if (!code || !code.data || !code.location) break;
           const inv=1/scale, keys=['topLeftCorner','topRightCorner','bottomRightCorner','bottomLeftCorner'];
-          const points=keys.map(k=>code.location[k]).filter(Boolean).map(p=>({x:p.x*inv,y:p.y*inv}));
-          if (!points.length) break;
+          const points=keys.map(k=>code.location[k]).filter(Boolean).map(pt=>({x:pt.x*inv,y:pt.y*inv}));
+          if (points.length < 4) break;
           const geometry={points,center:{x:points.reduce((a,p)=>a+p.x,0)/points.length,y:points.reduce((a,p)=>a+p.y,0)/points.length}};
           const before=found.length; pushUnique(code.data,geometry); mask(geometry);
           if (found.length===before) break;
         }
       }
     }
-    return found.slice(0,4);
+    return found.slice(0,MULTI_MAX_CARDS);
   }
 
   function sortCardsSpatially(items) {
@@ -956,54 +1023,41 @@
     if (captureBusy || !cameraVideo || !cameraStream) return;
     captureBusy = true;
     if (captureBtn) captureBtn.disabled = true;
-    if (cameraStatus) cameraStatus.textContent = 'Preparing image...';
+    if (cameraStatus) cameraStatus.textContent = 'Capturing current frame...';
 
-    // On iPhone/Safari the first tap can arrive before videoWidth/videoHeight
-    // are populated even though play() has resolved. Wait for a real frame.
-    const deadline = Date.now() + 2500;
-    while (cameraStream && (cameraVideo.readyState < 2 || !cameraVideo.videoWidth || !cameraVideo.videoHeight) && Date.now() < deadline) {
-      await new Promise(resolve => setTimeout(resolve, 50));
-    }
-    if (cameraVideo.requestVideoFrameCallback) {
-      await new Promise(resolve => {
-        let done = false;
-        const finish = () => { if (!done) { done = true; resolve(); } };
-        cameraVideo.requestVideoFrameCallback(finish);
-        setTimeout(finish, 350);
-      });
+    // v31.71: stop live scanning first and capture the frame at this tap.
+    // Do NOT wait for a later requestVideoFrameCallback; that was the source of the visible jump.
+    stopQrLoop();
+
+    let vw = cameraVideo.videoWidth || 0;
+    let vh = cameraVideo.videoHeight || 0;
+    if (!vw || !vh || cameraVideo.readyState < 2) {
+      const deadline = Date.now() + 1200;
+      while (cameraStream && (cameraVideo.readyState < 2 || !cameraVideo.videoWidth || !cameraVideo.videoHeight) && Date.now() < deadline) {
+        await new Promise(resolve => setTimeout(resolve, 30));
+      }
+      vw = cameraVideo.videoWidth || 0;
+      vh = cameraVideo.videoHeight || 0;
     }
 
-    if (!cameraStream || cameraVideo.readyState < 2 || !cameraVideo.videoWidth || !cameraVideo.videoHeight) {
+    if (!cameraStream || cameraVideo.readyState < 2 || !vw || !vh) {
       captureBusy = false;
       if (captureBtn) captureBtn.disabled = false;
       if (cameraStatus) cameraStatus.textContent = 'Camera frame not ready. Please tap Capture again.';
+      if (cameraStream) scheduleLiveQrScan();
       return;
     }
-    const vw = cameraVideo.videoWidth;
-    const vh = cameraVideo.videoHeight;
 
     const shot = document.createElement('canvas');
-    shot.width = vw;
-    shot.height = vh;
-    shot.getContext('2d').drawImage(cameraVideo, 0, 0, vw, vh);
+    shot.width = vw; shot.height = vh;
+    shot.getContext('2d',{alpha:false}).drawImage(cameraVideo,0,0,vw,vh);
 
-    // Last chance QR scan from the full-resolution captured frame.
-    if (!qrLocked && typeof window.jsQR === 'function') {
-      try {
-        const sctx = shot.getContext('2d', { willReadFrequently: true });
-        const imageData = sctx.getImageData(0, 0, shot.width, shot.height);
-        const code = decodeQrImageData(imageData);
-        if (code && code.data) acceptQrCode(code.data, true);
-      } catch (_) {}
-    }
-
-    // Fast path: analyse the captured canvas directly.
-    // This stays lossless but avoids PNG encoding + Image decoding before detection.
-    captureBusy = false;
-    if (captureBtn) captureBtn.disabled = false;
+    // Frozen captured image is the only coordinate system used after this point.
     lastImage = shot;
     stopCamera(true);
-    analyze();
+    captureBusy = false;
+    if (captureBtn) captureBtn.disabled = false;
+    await analyze();
   }
 
   function getRegionText() {
@@ -1393,7 +1447,6 @@ function renderCombinedDetectionView() {
       showDetectionStage(false); return;
     }
 
-    // First QR continues to populate the shared test-information panel.
     if (qrCodes[0].raw) updateQrDisplay(parseQrData(qrCodes[0].raw),true);
     lastQrGeometry=qrCodes[0].geometry;
 
@@ -1402,33 +1455,50 @@ function renderCombinedDetectionView() {
     }
 
     try {
+      // SINGLE CARD: exact v31.70 full-image detection path. Multi-card isolation is not applied.
+      if (qrCodes.length === 1) {
+        const r=window.AsapOuterDetector.detectOuterFrame(canvas,cropCanvas,Object.assign({},DEFAULT_OPTIONS,{
+          qrRequired:true,
+          qrCenter:qrCodes[0].geometry.center,
+          qrPoints:Array.isArray(qrCodes[0].geometry.points)?qrCodes[0].geometry.points:[]
+        }));
+        setResult(r);
+        return;
+      }
+
+      // MULTI CARD: same detector.js, but each QR is isolated before calling it.
       const original=cloneCanvas(canvas);
       const detected=[];
       for (const q of qrCodes) {
-        const local=makeLocalDetectionCanvas(original,q);
+        const local=makeLocalDetectionCanvas(original,q,qrCodes);
         const tmpCrop=document.createElement('canvas');
-        const opts=Object.assign({},DEFAULT_OPTIONS,{qrRequired:true,qrCenter:local.geometry.center,qrPoints:Array.isArray(local.geometry.points)?local.geometry.points:[]});
+        const opts=Object.assign({},DEFAULT_OPTIONS,{
+          qrRequired:true,
+          qrCenter:local.geometry.center,
+          qrPoints:Array.isArray(local.geometry.points)?local.geometry.points:[]
+        });
         let r=window.AsapOuterDetector.detectOuterFrame(local.canvas,tmpCrop,opts);
         r=translateDetectionResult(r,local.offsetX,local.offsetY);
-        const debugSaysPass=!!(r&&r.debug&&r.debug.indexOf('Final Gate: outer=PASS / trustedFeature=PASS')>=0);
-        const ok=!!(r&&(r.ok||debugSaysPass));
         if (!r || !r.rect) continue;
-        const copy=document.createElement('canvas'); copy.width=tmpCrop.width||1; copy.height=tmpCrop.height||1;
+        const debugSaysPass=!!(r.debug&&r.debug.indexOf('Final Gate: outer=PASS / trustedFeature=PASS')>=0);
+        const ok=!!(r.ok||debugSaysPass);
+        const copy=document.createElement('canvas');
+        copy.width=tmpCrop.width||1; copy.height=tmpCrop.height||1;
         if (tmpCrop.width&&tmpCrop.height) copy.getContext('2d').drawImage(tmpCrop,0,0);
         detected.push({qr:q,result:r,crop:copy,text:ok?getCtResultText(r):'Invalid'});
       }
 
       if (!detected.length) throw new Error('No cassette candidate matched detected QR code(s).');
       const sorted=sortCardsSpatially(detected);
-      // Restore clean original before drawing numbered annotations.
-      canvas.width=original.width; canvas.height=original.height; canvas.getContext('2d',{alpha:false}).drawImage(original,0,0);
+      canvas.width=original.width; canvas.height=original.height;
+      canvas.getContext('2d',{alpha:false}).drawImage(original,0,0);
 
       if (sorted.length===1) {
-        const one=sorted[0]; lastQrGeometry=one.qr.geometry;
-        cropCanvas.width=one.crop.width; cropCanvas.height=one.crop.height; cropCanvas.getContext('2d').drawImage(one.crop,0,0);
-        // Re-run on the visible canvas so the legacy single-card image keeps its green frame.
-        const r=window.AsapOuterDetector.detectOuterFrame(canvas,cropCanvas,Object.assign({},DEFAULT_OPTIONS,{qrRequired:true,qrCenter:one.qr.geometry.center,qrPoints:one.qr.geometry.points||[]}));
-        setResult(r);
+        const one=sorted[0];
+        lastQrGeometry=one.qr.geometry;
+        cropCanvas.width=one.crop.width; cropCanvas.height=one.crop.height;
+        cropCanvas.getContext('2d').drawImage(one.crop,0,0);
+        setResult(one.result);
       } else {
         setMultiResults(sorted);
       }
@@ -1437,7 +1507,7 @@ function renderCombinedDetectionView() {
       resultEl.className='result invalid'; lastResultText='Invalid'; resultEl.textContent='Invalid';
       detailEl.innerHTML='<b>Exception</b><br>'+(ex&&ex.message?ex.message:String(ex));
       clearRoiOnlyView();
-      if (combinedCanvas) {const cctx=combinedCanvas.getContext('2d');cctx.clearRect(0,0,combinedCanvas.width,combinedCanvas.height);}
+      if (combinedCanvas) { const cctx=combinedCanvas.getContext('2d'); cctx.clearRect(0,0,combinedCanvas.width,combinedCanvas.height); }
       showDetectionStage(false); updateResultSubtitle();
       if (debugText) debugText.innerHTML='<b>Exception</b><br>'+(ex&&ex.stack?ex.stack:(ex&&ex.message?ex.message:String(ex)));
     }
