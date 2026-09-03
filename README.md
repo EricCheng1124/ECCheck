@@ -1,11 +1,12 @@
-# ASAP Check v31.74 — Multi-Card QR Isolation + Hard Freeze
+# ASAP Check v31.75 — Multi-Card QR Ownership / Voronoi Lock
 
-## v31.74 變更
+## v31.75 變更
 
-- 多卡 QR：加入 OpenCV QR finder-pattern 候選搜尋，再對每個小區域個別用 jsQR 解碼；改善 3~4 張相鄰、相同 QR 內容時只抓到部分卡片的問題。
-- QR 去重只依實體中心位置，不依 QR 文字內容。
-- Live QR lock 拍照後只當「搜尋提示」；最終座標以拍下來的影像重新確認，避免 preview 座標因拍攝瞬間位移而偏掉。
-- Capture 後維持 Hard Freeze：停止 timer、作廢既有 callback、結果頁不允許 Live QR 再改 UI，因此不會反覆跳出 QR lock。
-- 每張卡的分析 ROI 改成依 QR 方向建立「窄型 70x20 mm 卡匣走廊」，並遮掉走廊外的鄰近卡；不再使用原本約 11Q 的巨大正方形 crop，避免相鄰卡互相搶外框。
-- C/T 判讀核心保持不變：中央 10 mm、T 僅限 C 下方 0.8~6 mm、T/C >= 10%。
-- 版本號更新為 v31.74。
+- 多卡仍保留 v31.74 的 Multi-QR、Hard Freeze 與相同 QR 內容依實體位置區分。
+- 每個 QR 建立自己的卡匣 ownership corridor；卡匣寬依 20 mm / QR 14 mm 固定為約 1.4286Q，只保留 +6% 容差。
+- 對同一排的相鄰 QR，以兩個 QR 中心的垂直平分線切割 ownership（Voronoi half-plane）。
+- 一張卡的分析遮罩不能跨過相鄰 QR 的中線，因此卡匣貼在一起時不會吃到隔壁卡。
+- 不對上下不同排 QR 做 Voronoi 截斷，避免 2x2、3x3 時把上排卡匣長邊切掉。
+- C/T 判讀維持既有穩定規則：中央 10 mm、T 在 C 下方 0.8–6 mm、T/C >= 10%。
+- 拍照後 Live QR 持續 Hard Freeze，不允許結果頁重新跳動。
+- 版本號更新為 v31.75。

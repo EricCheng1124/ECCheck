@@ -59,12 +59,12 @@
   let nativeQrDetector = null;
   let nativeQrBusy = false;
   let lastQrGeometry = null;
-  // v31.74: keep the live-locked QR geometry and its coordinate space.
+  // v31.75: keep the live-locked QR geometry and its coordinate space.
   // The captured frame reuses this geometry instead of replacing it with a second QR detection.
   let lockedQrSnapshot = null;
   let capturedLockedQr = null;
   let captureBusy = false;
-  // v31.74: once Capture starts, freeze ALL live QR callbacks until camera is opened again.
+  // v31.75: once Capture starts, freeze ALL live QR callbacks until camera is opened again.
   let qrAnalysisFrozen = false;
   let qrSessionId = 0;
   let lastResultText = 'Ready';
@@ -84,7 +84,7 @@
     ratioMin: 1.20,
     ratioMax: 10.0
   };
-  const MAX_QR_CODES = 10; // v31.74 multi-card: physical QR instances are unique by position, not decoded text
+  const MAX_QR_CODES = 10; // v31.75 multi-card: physical QR instances are unique by position, not decoded text
 
   function unlock() {
     if ((passInput.value || '').trim() === ACCESS_CODE) {
@@ -694,16 +694,39 @@
     return null;
   }
 
-  function makeLocalDetectionCanvas(original, q) {
+  function clipPolygonToQrOwnership(poly, ownerCenter, otherCenter) {
+    // Keep only points that are closer to this QR center than to the neighboring QR center.
+    // This is the perpendicular-bisector half-plane used by a Voronoi partition.
+    if (!poly || poly.length < 3 || !ownerCenter || !otherCenter) return poly || [];
+    const dx=otherCenter.x-ownerCenter.x, dy=otherCenter.y-ownerCenter.y;
+    const rhs=(otherCenter.x*otherCenter.x+otherCenter.y*otherCenter.y) -
+              (ownerCenter.x*ownerCenter.x+ownerCenter.y*ownerCenter.y);
+    const value=(pt)=>2*(pt.x*dx+pt.y*dy)-rhs; // <= 0 belongs to owner QR
+    const out=[];
+    for(let i=0;i<poly.length;i++) {
+      const a=poly[i], b=poly[(i+1)%poly.length];
+      const fa=value(a), fb=value(b);
+      const aIn=fa<=0, bIn=fb<=0;
+      if (aIn) out.push(a);
+      if (aIn!==bIn) {
+        const den=fa-fb;
+        const t=Math.abs(den)<1e-9?0:(fa/den);
+        out.push({x:a.x+(b.x-a.x)*t,y:a.y+(b.y-a.y)*t});
+      }
+    }
+    return out;
+  }
+
+  function makeLocalDetectionCanvas(original, q, allQrs) {
     const side=qrSideEstimate(q.geometry);
     const c=q.geometry.center;
     const pts=(q.geometry.points||[]);
 
-    // v31.74 MULTI-CARD ISOLATION:
-    // Do NOT crop a huge 11Q square around each QR. With cards side-by-side that square
-    // contains neighboring cassettes and the outer-frame detector can lock onto the wrong one.
-    // The cassette is 70 x 20 mm and QR is ~14 mm, so card width ~= 1.43Q and length ~= 5Q.
-    // Build a narrow oriented strip from the QR axes and mask everything outside it.
+    // v31.75 MULTI-CARD QR OWNERSHIP LOCK
+    // QR gives card direction.  The cassette is 70 x 20 mm and QR is ~14 mm,
+    // therefore the physical cassette width is only 1.4286 Q.  Keep the local
+    // corridor close to that real width instead of allowing a neighboring card
+    // to become an outer-frame candidate.
     let ux={x:1,y:0}, uy={x:0,y:1};
     if (pts.length>=4) {
       const vx={x:pts[1].x-pts[0].x,y:pts[1].y-pts[0].y};
@@ -711,18 +734,40 @@
       const lx=Math.hypot(vx.x,vx.y)||1, ly=Math.hypot(vy.x,vy.y)||1;
       ux={x:vx.x/lx,y:vx.y/lx};
       uy={x:vy.x/ly,y:vy.y/ly};
-      // Keep the axes close to perpendicular even with perspective noise.
       const dot=ux.x*uy.x+ux.y*uy.y;
       uy={x:uy.x-dot*ux.x,y:uy.y-dot*ux.y};
       const ul=Math.hypot(uy.x,uy.y)||1; uy={x:uy.x/ul,y:uy.y/ul};
     }
 
-    const halfW=side*0.88;      // full width 1.76Q, just above the real 1.43Q cassette width
-    const topOff=-side*0.82;    // margin above QR centre
-    const botOff= side*4.70;    // enough to include the full ~5Q cassette length
+    const cassetteHalfWidthQ=(20.0/14.0)*0.5; // 0.714285Q
+    const halfW=side*cassetteHalfWidthQ*1.06; // only +6% tolerance
+    const topOff=-side*0.82;
+    const botOff= side*4.70;
     const world=(dx,dy)=>({x:c.x+ux.x*dx+uy.x*dy,y:c.y+ux.y*dx+uy.y*dy});
-    const poly=[world(-halfW,topOff),world(halfW,topOff),world(halfW,botOff),world(-halfW,botOff)];
-    const pad=Math.max(12,side*0.10);
+    let poly=[world(-halfW,topOff),world(halfW,topOff),world(halfW,botOff),world(-halfW,botOff)];
+
+    // Side-by-side cards are the failure mode when cassettes touch.  Clip this
+    // corridor at the midpoint between neighboring QR centers, but ONLY for QR
+    // centers in the same longitudinal band.  This avoids a QR in a lower row
+    // truncating the long body of a card above it in 2x2 / 3x3 layouts.
+    const neighbors=Array.isArray(allQrs)?allQrs:[];
+    for (const n of neighbors) {
+      if (!n || n===q || !n.geometry || !n.geometry.center) continue;
+      const nc=n.geometry.center;
+      const ddx=nc.x-c.x, ddy=nc.y-c.y;
+      const lateral=ddx*ux.x+ddy*ux.y;
+      const longitudinal=ddx*uy.x+ddy*uy.y;
+      const nSide=Math.max(1,qrSideEstimate(n.geometry));
+      const refSide=(side+nSide)*0.5;
+      // Same physical row / side neighbor.  Allow moderate stagger and rotation.
+      const sameBand=Math.abs(longitudinal) <= refSide*2.15;
+      const isLateral=Math.abs(lateral) >= refSide*0.60;
+      if (!sameBand || !isLateral) continue;
+      const clipped=clipPolygonToQrOwnership(poly,c,nc);
+      if (clipped && clipped.length>=3) poly=clipped;
+    }
+
+    const pad=Math.max(10,side*0.06);
     const xs=poly.map(p=>p.x), ys=poly.map(p=>p.y);
     const x=Math.max(0,Math.floor(Math.min(...xs)-pad));
     const y=Math.max(0,Math.floor(Math.min(...ys)-pad));
@@ -732,7 +777,8 @@
     const local=document.createElement('canvas');
     local.width=Math.max(1,x2-x); local.height=Math.max(1,y2-y);
     const lctx=local.getContext('2d',{alpha:false});
-    // Dark background prevents a neighboring white cassette from becoming an outer-frame candidate.
+    // Dark background + ownership clipping guarantees that an adjacent white
+    // cassette cannot contribute an outer contour to this QR's analysis.
     lctx.fillStyle='#252525'; lctx.fillRect(0,0,local.width,local.height);
     lctx.save();
     lctx.beginPath();
@@ -745,7 +791,7 @@
       center:{x:c.x-x,y:c.y-y},
       points:pts.map(p=>({x:p.x-x,y:p.y-y}))
     };
-    return {canvas:local, geometry, offsetX:x, offsetY:y};
+    return {canvas:local, geometry, offsetX:x, offsetY:y, ownershipPoly:poly};
   }
 
   function translateDetectionResult(r, ox, oy) {
@@ -756,7 +802,7 @@
   }
 
   function detectQrFinderPatternRegions() {
-    // v31.74 fallback for dense multi-card layouts.
+    // v31.75 fallback for dense multi-card layouts.
     // Find QR finder-pattern-like nested squares with OpenCV, then let jsQR decode a small
     // region around each proposal. This avoids the "one QR per large tile" limitation.
     if (typeof cv === 'undefined' || !cv.Mat || !canvas || !canvas.width || !canvas.height) return [];
@@ -830,7 +876,7 @@
       found.push({raw:String(raw||''),geometry:cloneQrGeometry(geometry)});
     };
 
-    // v31.74: HARD FREEZE means the live scanner can no longer change the UI after capture,
+    // v31.75: HARD FREEZE means the live scanner can no longer change the UI after capture,
     // but the final card geometry must come from the captured frame itself.  A live-lock seed
     // is therefore only a search HINT, not an authoritative final QR position.  This avoids a
     // stale preview coordinate becoming Card 1 when the phone moved a few pixels during capture.
@@ -874,7 +920,7 @@
       addGrid(2,1,0.20); addGrid(1,2,0.20); addGrid(2,2,0.16);
       if (W >= H*1.15) addGrid(4,1,0.12);
       else if (H >= W*1.15) addGrid(1,4,0.12);
-      // v31.74: multi-card photos may contain 2x2, 3x2 or 3x3 layouts.
+      // v31.75: multi-card photos may contain 2x2, 3x2 or 3x3 layouts.
       // Add a denser grid so each QR stays large enough for jsQR after down-scaling.
       addGrid(3,2,0.14);
       addGrid(2,3,0.14);
@@ -886,7 +932,7 @@
         if (hit) pushUnique(hit.raw,hit.geometry);
       }
 
-      // v31.74: finder-pattern proposals isolate each printed QR before decoding.
+      // v31.75: finder-pattern proposals isolate each printed QR before decoding.
       // This is the important fallback when 3-4 identical QRs are touching/very close.
       if (found.length < MAX_QR_CODES) {
         const finderRegions=detectQrFinderPatternRegions();
@@ -897,7 +943,7 @@
         }
       }
 
-      // v31.74 MULTI-QR PHYSICAL SCAN:
+      // v31.75 MULTI-QR PHYSICAL SCAN:
       // jsQR returns only one QR per call. When several identical QR codes sit close together,
       // large tiles keep returning the same code. Use the already-known QR size as a physical
       // ruler and scan small overlapping windows so each call normally contains only ONE QR.
@@ -1161,7 +1207,7 @@
   async function captureFromCamera() {
     if (captureBusy || !cameraVideo || !cameraStream) return;
     captureBusy = true;
-    // v31.74 HARD FREEZE: no more live QR activity after the user presses Capture.
+    // v31.75 HARD FREEZE: no more live QR activity after the user presses Capture.
     qrAnalysisFrozen = true;
     stopQrLoop();
     qrSessionId++;
@@ -1200,7 +1246,7 @@
     shot.height = vh;
     shot.getContext('2d').drawImage(cameraVideo, 0, 0, vw, vh);
 
-    // v31.74 TRUE LIVE LOCK:
+    // v31.75 TRUE LIVE LOCK:
     // Preserve the already locked QR and convert its coordinates to the full-resolution shot.
     // analyze() will seed multi-QR detection with this QR and only search for additional cards.
     capturedLockedQr = null;
@@ -1637,7 +1683,7 @@ function renderCombinedDetectionView() {
       const original=cloneCanvas(canvas);
       const detected=[];
       for (const q of qrCodes) {
-        const local=makeLocalDetectionCanvas(original,q);
+        const local=makeLocalDetectionCanvas(original,q,qrCodes);
         const tmpCrop=document.createElement('canvas');
         const opts=Object.assign({},DEFAULT_OPTIONS,{qrRequired:true,qrCenter:local.geometry.center,qrPoints:Array.isArray(local.geometry.points)?local.geometry.points:[]});
         let r=window.AsapOuterDetector.detectOuterFrame(local.canvas,tmpCrop,opts);
