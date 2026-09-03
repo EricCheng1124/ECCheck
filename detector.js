@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v31.64-qr-mm-geometry';
+  const VERSION = 'v31.65-outer30-middle10';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -1410,70 +1410,43 @@
       return best;
     }
 
-    // v31.47：QR-anchored C/T geometry，依新一批實拍將 C/T 固定帶整體下移。
-    // 這一代卡匣的 QR、試紙中心線與 C/T 線具有固定幾何關係。
-    // 外框透視校正後，以 QR 尺寸 Q 當尺規，QR 中心線就是試紙中心線；
-    // C/T 不再在整片 Window/slot 內自由找峰，避免把塑膠槽邊緣陰影誤判成 C/T。
-    // buildQrCassetteTemplates() 使用 cassette length ~= 5.35Q，QR center ~= 0.115H，
-    // 因此在標準化卡匣座標中可反推出 Q 與 QR bottom。
-    // v31.56: QR 實際座標鎖定。不要再由外框 H 反推 QR 位置，
-    // 因為多卡/遠拍時每張外框長度略有差異，會讓 CT zone 看起來忽遠忽近。
-    // qrNorm 是該張 QR 經同一個卡匣透視座標換算後的位置與尺寸。
-    const hasQrNorm = !!(qrNorm && Number.isFinite(qrNorm.cx) && Number.isFinite(qrNorm.cy) && Number.isFinite(qrNorm.side) && qrNorm.side > 3);
-    const qSide = hasQrNorm ? qrNorm.side : (H / 5.35);
-    const qrCenterY = hasQrNorm ? qrNorm.cy : (H * 0.115);
-    const qrBottomY = qrCenterY + qSide * 0.50;
-    const stripCenterX = hasQrNorm ? qrNorm.cx : (W * 0.50);
+    // v31.65：卡匣外框才是 C/T 的幾何基準；QR 只用來確認上下方向。
+    // 卡匣實體長 70 mm。由上邊緣往下 30 mm、由下邊緣往上 30 mm，
+    // 中間固定 10 mm 就是唯一允許分析的試紙區。
+    const CASSETTE_L_MM = 70.0;
+    const STRIP_TOP_MM = 30.0;
+    const STRIP_H_MM = 10.0;
+    const pxPerMm = H / CASSETTE_L_MM;
+    const qSide = Math.max(4, H * (14.0 / 70.0)); // 僅供既有平滑/最小間距參數使用，不參與定位
+    const stripCenterX = W * 0.50;
 
-    // v31.55：CT ROI 改為「窄、短、往下移」。
-    // 實拍顯示舊版 ROI 太靠近 QR、太寬且太長，容易把試紙槽斜面/側壁陰影當成 C/T。
-    // QR 仍只提供比例尺與中心軸；真正分析只取中央試紙本體。
-    const stripHalfWidth = Math.max(4, Math.min(W * 0.105, qSide * 0.16));
+    // X 方向直接以卡匣中心線為基準，避免 QR 左右小誤差帶動 CT zone。
+    const stripHalfWidth = Math.max(4, W * 0.105);
     const x0 = clamp(Math.floor(stripCenterX - stripHalfWidth), 0, W-1);
     const x1 = clamp(Math.ceil(stripCenterX + stripHalfWidth), x0 + 1, W);
 
-    // v31.64：改用實體尺寸做 QR 幾何定位。
-    // 已知：QR = 14 x 14 mm；C 線從 QR 左下 finder square 的下緣往下 11 mm；
-    // C/T 有效線區域位於 9 mm 內。jsQR/BarcodeDetector 的 QR bottom 對應
-    // QR matrix 下緣，而左下 finder square 的下緣亦位於同一條 QR bottom 基準線。
-    const QR_MM = 14.0;
-    const C_FROM_FINDER_BOTTOM_MM = 11.0;
-    const CT_RANGE_MM = 9.0;
-    const pxPerMm = qSide / QR_MM;
-
-    // C 幾何位置完全固定，不再由任何影像 peak 改寫。
-    const baseCAbsY = qrBottomY + C_FROM_FINDER_BOTTOM_MM * pxPerMm;
-    const cExpectedAbsY = baseCAbsY;
-
-    // T 不假設固定 C-T 間距；只限制在 C 下方的 9 mm 實體區域內搜尋。
-    // tExpectedAbsY 僅供 debug/UI 畫參考中心，不作為硬鎖位置。
-    let tExpectedAbsY = cExpectedAbsY + (CT_RANGE_MM * 0.50) * pxPerMm;
-
-    // 保留 locator 欄位只為 debug/UI 相容，但不再參與定位。
-    const locatorY0 = clamp(Math.floor(cExpectedAbsY - 1.0 * pxPerMm), 0, H-1);
-    const locatorY1 = clamp(Math.ceil(cExpectedAbsY + CT_RANGE_MM * pxPerMm), locatorY0 + 1, H);
-    const cLocatorBest = null;
-    const cLocatorHasColor = false;
-
-    // 整個 CT ROI 直接由 mm 定義：C 上方保留 1 mm 容差，C 下方掃描完整 9 mm。
-    const y0 = clamp(Math.floor(cExpectedAbsY - 1.0 * pxPerMm), 0, H-1);
-    const y1 = clamp(Math.ceil(cExpectedAbsY + CT_RANGE_MM * pxPerMm), y0 + 1, H);
+    const y0 = clamp(Math.floor(STRIP_TOP_MM * pxPerMm), 0, H-1);
+    const y1 = clamp(Math.ceil((STRIP_TOP_MM + STRIP_H_MM) * pxPerMm), y0+1, H);
     const h = Math.max(1, y1-y0);
 
-    const cExpectedLocalY = cExpectedAbsY - y0;
-    let tExpectedLocalY = tExpectedAbsY - y0;
-    // C 只允許約 ±0.8 mm 的線寬/印刷/拍攝誤差。
-    const bandHalf = Math.max(3, 0.80 * pxPerMm);
+    // C 位於試紙區上半部；T 位於 C 下方。兩區保留重疊容差，
+    // 但最終仍要求 T 在 refine 後確實位於 C 下方且有最小間距。
+    const cExpectedLocalY = h * 0.25;
+    let tExpectedLocalY = h * 0.68;
+    const cExpectedAbsY = y0 + cExpectedLocalY;
+    let tExpectedAbsY = y0 + tExpectedLocalY;
     const cSearchRange = {
-      start: clamp(Math.floor(cExpectedLocalY - bandHalf), 0, h-1),
-      end: clamp(Math.ceil(cExpectedLocalY + bandHalf), 0, h-1)
+      start: 0,
+      end: clamp(Math.ceil(h * 0.58), 1, h-1)
     };
-    // T 可以出現在 C 下方 1.2~9.0 mm；不再硬鎖成固定 0.33Q。
     let tSearchRange = {
-      start: clamp(Math.floor(cExpectedLocalY + 1.20 * pxPerMm), 0, h-1),
-      end: clamp(Math.ceil(cExpectedLocalY + CT_RANGE_MM * pxPerMm), 0, h-1)
+      start: clamp(Math.floor(h * 0.28), 0, h-1),
+      end: h-1
     };
-    // Debug compatibility fields retained for the existing Advanced Info panel.
+    const bandHalf = h * 0.58;
+    const locatorY0 = y0, locatorY1 = y1;
+    const cLocatorBest = null, cLocatorHasColor = false;
+
     const topThirdY = H / 3;
     const topThirdPadding = 0;
     const windowInnerTop = win.y;
@@ -1573,7 +1546,7 @@
     // v31.64：T 不再假設固定間距；只在 C 下方 1.2~9.0 mm 的物理範圍內找線。
     // expected 僅用於 debug/距離分數，真正 gate 由 tSearchRange 決定。
     tExpectedLocalY = tExpectedAbsY - y0;
-    const tBandHalf = Math.max(4, (CT_RANGE_MM * 0.50) * pxPerMm);
+    const tBandHalf = Math.max(4, h * 0.60);
     let tQ = bestPeakInBand('T', tSearchRange, tExpectedLocalY);
     const cSelected = !!cQ.selected;
     const tSelected = !!tQ.selected;
@@ -1590,9 +1563,9 @@
     tQ.refinedLocalY = (tRed && tRed.ok) ? tRed.localY : tQ.y;
 
     // Geometry distance gate. Peaks at the extreme edge of the narrow band are suspicious.
-    const maxExpectedError = bandHalf * 1.05;
-    const cGeometryOk = cQ.distanceFromExpected <= maxExpectedError;
-    const tGeometryOk = tQ.distanceFromExpected <= maxExpectedError;
+    const maxExpectedError = h;
+    const cGeometryOk = cQ.y >= cSearchRange.start && cQ.y <= cSearchRange.end;
+    const tGeometryOk = tQ.y >= tSearchRange.start && tQ.y <= tSearchRange.end;
 
     const cDetected = !!(cSelected && cQ.score >= threshold * 0.75 && cRed.ok && cGeometryOk);
     // v31.51: T 門檻小幅提高，降低陰性卡把背景陰影當成淡 T 的機率。
@@ -1615,8 +1588,8 @@
 
     cQ.detected = cDetected;
     tQ.detected = tDetected;
-    cQ.reject = !cSelected ? 'below-candidate-floor' : !cGeometryOk ? 'outside-qr-c-band' : cQ.score < threshold * 0.75 ? 'below-threshold' : !cRed.ok ? 'no-red-continuity' : 'PASS';
-    tQ.reject = !tSelected ? 'below-candidate-floor' : !tGeometryOk ? 'outside-qr-t-band' : tQ.score < tThreshold ? 'below-relative-threshold' : !tRed.ok ? 'no-red-continuity' : !refinedSeparationOk ? 'ct-too-close' : !tShapeOk ? 'bad-t-shape' : 'PASS';
+    cQ.reject = !cSelected ? 'below-candidate-floor' : !cGeometryOk ? 'outside-middle10-c-band' : cQ.score < threshold * 0.75 ? 'below-threshold' : !cRed.ok ? 'no-red-continuity' : 'PASS';
+    tQ.reject = !tSelected ? 'below-candidate-floor' : !tGeometryOk ? 'outside-middle10-t-band' : tQ.score < tThreshold ? 'below-relative-threshold' : !tRed.ok ? 'no-red-continuity' : !refinedSeparationOk ? 'ct-too-close' : !tShapeOk ? 'bad-t-shape' : 'PASS';
 
     let result = 'Invalid';
     if (cDetected && tDetected) result = 'Positive';
@@ -1630,9 +1603,9 @@
     );
 
     return {
-      source:'ct-qr-hard-lock-v31-63',
+      source:'ct-outer-middle10-v31-65',
       x0, x1, y0, y1, h,
-      zone:{x:x0, y:y0, w:Math.max(1, x1-x0), h:Math.max(1, y1-y0), startRatio:ctStartRatio, endRatio:ctEndRatio, widthRatio:ctEndRatio-ctStartRatio, topThirdY:Math.round(topThirdY), topThirdPadding:topThirdPadding, yLimitedByTopThird:false, coordinateSystem:'qr-mm-anchored', qrSide:qSide, qrBottomY, stripCenterX, cExpectedAbsY, tExpectedAbsY, bandHalf, locatorY0, locatorY1, pxPerMm, qrMm:QR_MM, cFromFinderBottomMm:C_FROM_FINDER_BOTTOM_MM, ctRangeMm:CT_RANGE_MM, cLocatorAbsY:cLocatorBest?cLocatorBest.absY:null, cLocatorHasColor},
+      zone:{x:x0, y:y0, w:Math.max(1, x1-x0), h:Math.max(1, y1-y0), startRatio:ctStartRatio, endRatio:ctEndRatio, widthRatio:ctEndRatio-ctStartRatio, topThirdY:Math.round(topThirdY), topThirdPadding:topThirdPadding, yLimitedByTopThird:false, coordinateSystem:'cassette-30-10-30', qrSide:qSide, stripCenterX, cExpectedAbsY, tExpectedAbsY, bandHalf, locatorY0, locatorY1, pxPerMm, cassetteMm:CASSETTE_L_MM, stripTopMm:STRIP_TOP_MM, stripHeightMm:STRIP_H_MM, cLocatorAbsY:null, cLocatorHasColor:false},
       raw, profile:positive, baseline:bg, rawBaseline, rawMedian, rawMax, pinkMax, darkMax, combinedMax, selectedMode, lumBackground, lumMedian, mean:stat.mean, std:stat.std,
       maxScore, threshold, tThreshold, tcRatio, candidateFloor, minSep,
       cRange, tRange,
@@ -2342,13 +2315,22 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
     const rawCands=collectOuterCandidates(src, options);
     const qrCenter=options.qrCenter || null;
     const qrPoints=Array.isArray(options.qrPoints) ? options.qrPoints : [];
-    // v31.62：QR 直接定義整支卡匣。
-    // 只要 QR 四角完整可用，就不再讓白色外框 contour 參與最終外框競選，
-    // 避免卡匣上緣/下緣因桌面顏色、反光或陰影被吃掉後，整個綠框上下漂移。
-    // contour 僅保留在 QR 幾何不可用時作 fallback。
+    // v31.65：QR 只負責辨別方向，不再用 QR 尺寸硬推整支卡匣外框。
+    // 最終綠框優先使用影像中真正的卡匣外緣 contour；只有完全找不到可信外框時，
+    // 才使用 QR 幾何 template 當 fallback。這樣 70mm 的長度不會放大 QR 尺寸誤差。
     const qrTemplates=buildQrCassetteTemplates(qrPoints,imgArea);
-    const qrDirectMode=qrTemplates.length>0;
-    const allCands=qrDirectMode ? qrTemplates.slice() : rawCands.slice();
+    const qrDirectMode=false;
+    let rawQualified=[];
+    for (const c of rawCands) {
+      const enc=qrEnclosureMetrics(c,qrCenter,qrPoints);
+      const gate=qrSizeGate(c,qrPoints);
+      const rw=c.rect&&c.rect.size?c.rect.size.width:0;
+      const rh=c.rect&&c.rect.size?c.rect.size.height:0;
+      const ar=Math.max(rw,rh)/Math.max(1,Math.min(rw,rh));
+      // 70x20mm => 3.50:1；放寬給透視與圓角。
+      if (enc.pass && gate.pass && ar>=2.70 && ar<=4.60) rawQualified.push(c);
+    }
+    const allCands=rawQualified.length ? rawQualified : (rawCands.length ? rawCands : qrTemplates.slice());
     const qrRejected=[];
     const enclosingCands=[];
     for (const c of allCands) {
@@ -2378,12 +2360,19 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
       const tLineBonus = ct && ct.tPeak && ct.tPeak.detected ? 3000 : 0;
       // v31.62：QR direct mode 時候選本身就是 QR 幾何模板。
       // bonus 仍保留供 debug；真正的穩定性來自上方已完全排除 contour 競選。
-      const templateBonus = c.qrTemplate ? 12000 : 0;
+      // v31.65：真實外框比例應接近 70/20 = 3.50。
+      const rw2=c.rect&&c.rect.size?c.rect.size.width:0, rh2=c.rect&&c.rect.size?c.rect.size.height:0;
+      const ar2=Math.max(rw2,rh2)/Math.max(1,Math.min(rw2,rh2));
+      const aspectBonus=Math.max(0, 9000 * (1 - Math.abs(ar2-3.50)/1.20));
+      const realContourBonus = c.qrTemplate ? 0 : 15000;
+      const templateBonus = c.qrTemplate ? 1000 : 0;
       c.totalScore =
         geo.score +
         fs.score +
         cLineBonus +
         tLineBonus +
+        aspectBonus +
+        realContourBonus +
         templateBonus -
         noRealSamplePenalty -
         noTrustedFeaturePenalty;
