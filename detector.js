@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v31.75-multicard-qr-voronoi-lock';
+  const VERSION = 'v31.76-t-pink-ratio';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -1579,9 +1579,9 @@
       end: Math.min(tSearchRange.end, dynTEnd)
     };
     const tRangeValid = dynTRange.start <= dynTRange.end && dynTRange.start < h;
-    // v31.70：T 判定改成「相對 C 強度」主導。
-    // 不再要求弱 T 先通過固定 red-continuity / color hard threshold，
-    // 否則肉眼可見但很淡的 T 會在進入 10% C 判斷前就被淘汰。
+    // v31.76：C 可以繼續使用「粉紅 + 暗度」協助定位，
+    // 但 T 的存在與 T/C 10% 比例，改成只看粉紅/紅色色度。
+    // 純灰色槽邊、鄰卡陰影、透視造成的暗線，不可再單獨把 Negative 推成 Positive。
     function bandStrength(localY) {
       if (!Number.isFinite(localY)) return 0;
       const half = Math.max(1, Math.round(0.35 * pxPerMm));
@@ -1597,8 +1597,24 @@
       return sum / n;
     }
 
+    function bandPinkStrength(localY) {
+      if (!Number.isFinite(localY)) return 0;
+      const half = Math.max(1, Math.round(0.35 * pxPerMm));
+      const a = clamp(Math.floor(localY - half), 0, h-1);
+      const b = clamp(Math.ceil(localY + half), a, h-1);
+      const vals = [];
+      for (let i=a; i<=b; i++) vals.push(Math.max(0, pinkPositive[i] || 0));
+      if (!vals.length) return 0;
+      vals.sort((x,y)=>y-x);
+      const n = Math.max(1, Math.ceil(vals.length * 0.60));
+      let sum = 0;
+      for (let i=0; i<n; i++) sum += vals[i];
+      return sum / n;
+    }
+
     // 在 C 下方 0.8~6 mm 的合法區域逐列掃描。
-    // 主要排名依 bandStrength；水平/粉紅證據只做小幅加分，不再當第一道硬門檻。
+    // v31.76：T 候選排名以 Pink band 為主；暗度不再參與 T 的主要排名。
+    // 水平連續性只做非常小的 tie-break，避免暖色背景單點雜訊。
     function bestRelativeTInRange(range) {
       if (!range || range.start > range.end) return null;
       let best = null;
@@ -1606,18 +1622,20 @@
       const end = clamp(Math.ceil(range.end), start, h-1);
       for (let ly=start; ly<=end; ly++) {
         const cont = rowLineContinuity(y0 + ly, 'faintT');
-        const strength = bandStrength(ly);
+        const pinkStrength = bandPinkStrength(ly);
+        const combinedStrength = bandStrength(ly); // debug only; not used to pass T
         const weakShapeBoost =
-          Math.min(4.0, (cont.run || 0) * 0.10) +
-          (cont.ratio || 0) * 2.0 +
-          (cont.redRatio || 0) * 3.0 +
-          (cont.contrastAvg || 0) * 0.08;
-        const rank = strength + weakShapeBoost;
+          Math.min(1.2, (cont.run || 0) * 0.025) +
+          (cont.ratio || 0) * 0.45 +
+          (cont.redRatio || 0) * 0.80 +
+          (cont.contrastAvg || 0) * 0.015;
+        const rank = pinkStrength + weakShapeBoost;
         const item = Object.assign({}, cont, {
           localY: ly,
           absY: y0 + ly,
-          profileScore: positive[ly] || 0,
-          bandStrength: strength,
+          profileScore: pinkPositive[ly] || 0,
+          bandStrength: combinedStrength,
+          pinkStrength: pinkStrength,
           totalScore: rank
         });
         if (!best || item.totalScore > best.totalScore) best = item;
@@ -1646,14 +1664,19 @@
     const refinedSeparationOk = !!(cCont && tCont &&
       ctGapMm >= T_MIN_GAP_MM && ctGapMm <= T_MAX_GAP_MM);
 
-    const cStrength = cCont ? bandStrength(cCont.localY) : 0;
-    const tStrength = tCont ? bandStrength(tCont.localY) : 0;
+    // v31.76：最終 T/C 10% 改成 Pink-to-Pink ratio。
+    // cStrength / tStrength 欄位保留相容性，但現在代表 Pink Strength。
+    const cCombinedStrength = cCont ? bandStrength(cCont.localY) : 0;
+    const tCombinedStrength = tCont ? bandStrength(tCont.localY) : 0;
+    const cStrength = cCont ? bandPinkStrength(cCont.localY) : 0;
+    const tStrength = tCont ? bandPinkStrength(tCont.localY) : 0;
     const tRelativeThreshold = cStrength * T_RELATIVE_C_RATIO;
     const tcStrengthRatio = cStrength > 0 ? (tStrength / cStrength) : 0;
     const tRelativeOk = !!(cDetected && tCont && cStrength > 0 && tStrength >= tRelativeThreshold);
 
-    // 只保留非常寬鬆的「像一條水平線」保護，避免純大面積陰影。
-    // 這不是固定顏色門檻；真正 Positive/Negative 的主要門檻是 T/C >= 10%。
+    // 只保留非常寬鬆的「像一條水平線」保護。
+    // 真正 Positive/Negative 的主要門檻是 Pink(T) / Pink(C) >= 10%，
+    // 因此純灰色陰影即使 combined darkness 很高，也不能單獨讓 T 成立。
     const tWeakHorizontalEvidence = !!tCont && (
       (tCont.run || 0) >= Math.max(2, Math.floor((tCont.minRun || 2) * 0.35)) ||
       (tCont.ratio || 0) >= 0.040 ||
@@ -1681,7 +1704,7 @@
     cQ.detected = cDetected;
     tQ.detected = tDetected;
     cQ.reject = !cCont ? 'no-horizontal-line' : !cGeometryOk ? 'outside-middle10-c-band' : !cCont.ok ? 'no-red-continuity' : !cColorOk ? 'weak-color' : 'PASS';
-    tQ.reject = !tCont ? 'no-t-candidate' : !tGeometryOk ? 'outside-middle10-t-band' : !refinedSeparationOk ? 't-gap-outside-0.8-6mm' : !tRelativeOk ? 'below-10pct-of-c' : !tWeakHorizontalEvidence ? 'no-horizontal-evidence' : 'PASS';
+    tQ.reject = !tCont ? 'no-t-candidate' : !tGeometryOk ? 'outside-middle10-t-band' : !refinedSeparationOk ? 't-gap-outside-0.8-6mm' : !tRelativeOk ? 'pink-below-10pct-of-c' : !tWeakHorizontalEvidence ? 'no-horizontal-evidence' : 'PASS';
 
     let result = 'Invalid';
     if (cDetected && tDetected) result = 'Positive';
@@ -1699,7 +1722,7 @@
       x0, x1, y0, y1, h,
       zone:{x:x0, y:y0, w:Math.max(1, x1-x0), h:Math.max(1, y1-y0), startRatio:ctStartRatio, endRatio:ctEndRatio, widthRatio:ctEndRatio-ctStartRatio, topThirdY:Math.round(topThirdY), topThirdPadding:topThirdPadding, yLimitedByTopThird:false, coordinateSystem:'cassette-30-10-30', qrSide:qSide, stripCenterX, cExpectedAbsY, tExpectedAbsY, bandHalf, locatorY0, locatorY1, pxPerMm, cassetteMm:CASSETTE_L_MM, stripTopMm:STRIP_TOP_MM, stripHeightMm:STRIP_H_MM, tMinGapMm:T_MIN_GAP_MM, tMaxGapMm:T_MAX_GAP_MM, tRelativeCRatio:T_RELATIVE_C_RATIO, ctGapMm, cLocatorAbsY:null, cLocatorHasColor:false},
       raw, profile:positive, baseline:bg, rawBaseline, rawMedian, rawMax, pinkMax, darkMax, combinedMax, selectedMode, lumBackground, lumMedian, mean:stat.mean, std:stat.std,
-      maxScore, threshold, tThreshold, tcRatio, cStrength, tStrength, tRelativeThreshold, tRelativeRatio:T_RELATIVE_C_RATIO, tWeakHorizontalEvidence, candidateFloor, minSep,
+      maxScore, threshold, tThreshold, tcRatio, cStrength, tStrength, cCombinedStrength, tCombinedStrength, strengthMode:'pink-to-pink', tRelativeThreshold, tRelativeRatio:T_RELATIVE_C_RATIO, tWeakHorizontalEvidence, candidateFloor, minSep,
       cRange, tRange,
       cPeak:{y:cQ.y, absY:y0+cQ.y, score:cQ.score, detected:cDetected, selected:cSelected, redContinuity:cRed, width:cQ.width, left:y0+cQ.left, right:y0+cQ.right, drop:cQ.drop, sharpness:cQ.sharpness, shoulderRatio:cQ.shoulderRatio, shoulderMaxRatio:cQ.shoulderMaxRatio, nearShoulderRatio:cQ.nearShoulderRatio, quality:cQ.quality || 0, reject:cQ.reject, warning:cQ.warning || '-', maxWidth:cQ.maxWidth},
       tPeak:{y:tQ.y, absY:y0+tQ.y, score:tQ.score, detected:tDetected, selected:tSelected, redContinuity:tRed, width:tQ.width, left:y0+tQ.left, right:y0+tQ.right, drop:tQ.drop, sharpness:tQ.sharpness, shoulderRatio:tQ.shoulderRatio, shoulderMaxRatio:tQ.shoulderMaxRatio, nearShoulderRatio:tQ.nearShoulderRatio, quality:tQ.quality || 0, reject:tQ.reject, warning:tQ.warning || '-', maxWidth:tQ.maxWidth},

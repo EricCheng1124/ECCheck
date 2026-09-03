@@ -1589,8 +1589,8 @@ function renderCombinedDetectionView() {
       html += `<b>CT Result: ${ct.result}</b><br>`;
       html += `C Score: ${ct.cPeak.score.toFixed(1)} / detected=${ct.cPeak.detected ? 'YES' : 'NO'}<br>`;
       html += `T Score: ${ct.tPeak.score.toFixed(1)} / detected=${ct.tPeak.detected ? 'YES' : 'NO'}<br>`;
-      if (ct.tThreshold !== undefined) html += `C Strength: ${(ct.cStrength||0).toFixed(2)} / T Strength: ${(ct.tStrength||0).toFixed(2)}<br>` +
-        `T Threshold (10% C): ${(ct.tThreshold||0).toFixed(2)} / T/C: ${((ct.tcRatio||0)*100).toFixed(1)}%<br>`;
+      if (ct.tThreshold !== undefined) html += `C Pink: ${(ct.cStrength||0).toFixed(2)} / T Pink: ${(ct.tStrength||0).toFixed(2)}<br>` +
+        `T Pink Threshold (10% C): ${(ct.tThreshold||0).toFixed(2)} / Pink T/C: ${((ct.tcRatio||0)*100).toFixed(1)}%<br>`;
       if (ct.cPeak.redContinuity) html += `C Red Continuity: ${ct.cPeak.redContinuity.ok ? 'YES' : 'NO'} / ratio=${ct.cPeak.redContinuity.ratio.toFixed(2)}<br>`;
       if (ct.tPeak.redContinuity) html += `T Red Continuity: ${ct.tPeak.redContinuity.ok ? 'YES' : 'NO'} / ratio=${ct.tPeak.redContinuity.ratio.toFixed(2)}<br>`;
       html += `Threshold: ${ct.threshold.toFixed(1)} / Peak Count: ${ct.peakCount}<br>`;

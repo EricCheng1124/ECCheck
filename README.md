@@ -1,12 +1,12 @@
-# ASAP Check v31.75 — Multi-Card QR Ownership / Voronoi Lock
+# ASAP Check v31.76 — Multi-Card + Pink-to-Pink T/C 10%
 
-## v31.75 變更
+## v31.76 變更
 
-- 多卡仍保留 v31.74 的 Multi-QR、Hard Freeze 與相同 QR 內容依實體位置區分。
-- 每個 QR 建立自己的卡匣 ownership corridor；卡匣寬依 20 mm / QR 14 mm 固定為約 1.4286Q，只保留 +6% 容差。
-- 對同一排的相鄰 QR，以兩個 QR 中心的垂直平分線切割 ownership（Voronoi half-plane）。
-- 一張卡的分析遮罩不能跨過相鄰 QR 的中線，因此卡匣貼在一起時不會吃到隔壁卡。
-- 不對上下不同排 QR 做 Voronoi 截斷，避免 2x2、3x3 時把上排卡匣長邊切掉。
-- C/T 判讀維持既有穩定規則：中央 10 mm、T 在 C 下方 0.8–6 mm、T/C >= 10%。
-- 拍照後 Live QR 持續 Hard Freeze，不允許結果頁重新跳動。
-- 版本號更新為 v31.75。
+- 保留 v31.75 Multi-Card QR Ownership / Voronoi Lock，不改多卡外框與 QR 分區。
+- C 線仍可使用粉紅色 + 暗度協助定位，維持弱 C 的穩定性。
+- T 候選改以粉紅/紅色色度（Pink Strength）為主要排名；暗度只保留 debug，不再讓灰色陰影成為 T。
+- 最終 Positive 門檻改成 Pink(T) / Pink(C) >= 10%。
+- T 仍必須位於 C 下方 0.8 ~ 6.0 mm。
+- 純灰色槽邊、相鄰卡陰影、透視暗線即使 darkness 很強，也不能單獨判成 Positive。
+- Debug 顯示 C Pink、T Pink、Pink T/C 與 10% 門檻。
+- 版本號更新為 v31.76。
