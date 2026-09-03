@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v31.62-qr-direct-cassette-geometry';
+  const VERSION = 'v31.64-qr-mm-geometry';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -1329,7 +1329,7 @@
       // 連續紅色允許用較弱的水平線證據通過，避免淡陽性被判陰性。
       // v31.51: 陰性保護。T 線不能只靠灰黑陰影通過；至少要有可量測的粉紅/紅色證據。
       // 仍保留淡陽性，但移除 darkAvg 單獨放行，避免陰性卡的槽邊/髒背景被當成 T。
-      const faintColorEvidence = redRatio >= 0.012 || redAvg >= 0.70 || contrastAvg >= 0.28;
+      const faintColorEvidence = redRatio >= 0.018 || redAvg >= 0.90 || contrastAvg >= 0.38;
       const faintOk = faintMode && (maxRun >= minRun || ratio >= minRatio) && faintColorEvidence;
       const ok = strictOk || faintOk;
 
@@ -1363,7 +1363,7 @@
       const rangeEnd = localRange ? localRange.end : h - 1;
       // Anchor refinement near the profile peak. Scanning the full C/T range
       // could jump to a different dark row after perspective correction.
-      const refineRadius = Math.max(5, Math.round(h * 0.045));
+      const refineRadius = Math.max(3, Math.round(qSide * 0.045));
       const startY = clamp(Math.max(y0 + rangeStart, absCenter - refineRadius), y0, y1 - 1);
       const endY = clamp(Math.min(y0 + rangeEnd, absCenter + refineRadius), startY, y1 - 1);
 
@@ -1432,74 +1432,46 @@
     const x0 = clamp(Math.floor(stripCenterX - stripHalfWidth), 0, W-1);
     const x1 = clamp(Math.ceil(stripCenterX + stripHalfWidth), x0 + 1, W);
 
-    // v31.61：兩層 ROI。
-    // 1) 先用較長的 Y locator ROI 找「真正 C 線」與試紙槽結構；
-    // 2) 再用定位後的小 CT ROI 做 C/T 判讀。
-    // 卡匣陰影只能幫忙定位，不能直接被當成 C/T。
-    const baseCAbsY = qrBottomY + qSide * 0.77;
-    const locatorY0 = clamp(Math.floor(qrBottomY + qSide * 0.38), 0, H-1);
-    const locatorY1 = clamp(Math.ceil(qrBottomY + qSide * 1.58), locatorY0 + 1, H);
+    // v31.64：改用實體尺寸做 QR 幾何定位。
+    // 已知：QR = 14 x 14 mm；C 線從 QR 左下 finder square 的下緣往下 11 mm；
+    // C/T 有效線區域位於 9 mm 內。jsQR/BarcodeDetector 的 QR bottom 對應
+    // QR matrix 下緣，而左下 finder square 的下緣亦位於同一條 QR bottom 基準線。
+    const QR_MM = 14.0;
+    const C_FROM_FINDER_BOTTOM_MM = 11.0;
+    const CT_RANGE_MM = 9.0;
+    const pxPerMm = qSide / QR_MM;
 
-    // 在 locator ROI 中，用中央試紙範圍計算「粉紅/紅色」row profile。
-    // C 線一定存在，因此先找 C；陰影僅提供小幅結構加權，不可單獨成為 C。
-    const locatorPink = [];
-    const locatorDark = [];
-    const locatorHalfWidth = Math.max(stripHalfWidth, Math.min(W * 0.14, qSide * 0.22));
-    const lx0 = clamp(Math.floor(stripCenterX - locatorHalfWidth), 0, W-1);
-    const lx1 = clamp(Math.ceil(stripCenterX + locatorHalfWidth), lx0 + 1, W);
-    for (let yy=locatorY0; yy<locatorY1; yy++) {
-      let pink=0, lum=0, n=0;
-      for (let xx=lx0; xx<lx1; xx++) {
-        const idx=(yy*W+xx)*4;
-        const r=data[idx], g=data[idx+1], b=data[idx+2];
-        const yLum=0.299*r+0.587*g+0.114*b;
-        const red=(r-Math.max(g,b)*0.84)+(r-g)*0.16+(r-b)*0.10;
-        pink += Math.max(0, red) * (yLum > 45 ? 1 : 0.5);
-        lum += yLum; n++;
-      }
-      locatorPink.push(n?pink/n:0);
-      locatorDark.push(n?lum/n:0);
-    }
-    const lp = smoothProfile(locatorPink, Math.max(1, Math.round(qSide*0.018)));
-    const ll = smoothProfile(locatorDark, Math.max(1, Math.round(qSide*0.018)));
-    const lpBase = percentile(lp, 0.28);
-    const llBg = percentile(ll, 0.72);
+    // C 幾何位置完全固定，不再由任何影像 peak 改寫。
+    const baseCAbsY = qrBottomY + C_FROM_FINDER_BOTTOM_MM * pxPerMm;
+    const cExpectedAbsY = baseCAbsY;
 
-    // C locator 只允許在 QR 固定預期附近 ±0.25Q，避免跳到 T 或槽邊。
-    const cLocStartAbs = clamp(Math.floor(baseCAbsY - qSide*0.25), locatorY0, locatorY1-1);
-    const cLocEndAbs   = clamp(Math.ceil(baseCAbsY + qSide*0.25), cLocStartAbs+1, locatorY1-1);
-    let cLocatorBest = null;
-    for (let yy=cLocStartAbs; yy<=cLocEndAbs; yy++) {
-      const i=yy-locatorY0;
-      const pScore=Math.max(0,(lp[i]||0)-lpBase);
-      // 結構陰影只作小幅 bonus：真正通過仍必須有紅色。
-      const darkScore=Math.max(0,llBg-(ll[i]||llBg));
-      const dist=Math.abs(yy-baseCAbsY)/Math.max(1,qSide);
-      const score=pScore*1.00 + darkScore*0.08 - dist*2.0;
-      if (!cLocatorBest || score>cLocatorBest.score) cLocatorBest={absY:yy,score,pink:pScore,dark:darkScore};
-    }
+    // T 不假設固定 C-T 間距；只限制在 C 下方的 9 mm 實體區域內搜尋。
+    // tExpectedAbsY 僅供 debug/UI 畫參考中心，不作為硬鎖位置。
+    let tExpectedAbsY = cExpectedAbsY + (CT_RANGE_MM * 0.50) * pxPerMm;
 
-    // 只有 locator 有足夠紅色證據才允許修正 Y；否則完全回到 QR 固定幾何。
-    const cLocatorHasColor = !!(cLocatorBest && cLocatorBest.pink >= 0.55);
-    const cExpectedAbsY = cLocatorHasColor ? cLocatorBest.absY : baseCAbsY;
-    let tExpectedAbsY = cExpectedAbsY + qSide * 0.33;
+    // 保留 locator 欄位只為 debug/UI 相容，但不再參與定位。
+    const locatorY0 = clamp(Math.floor(cExpectedAbsY - 1.0 * pxPerMm), 0, H-1);
+    const locatorY1 = clamp(Math.ceil(cExpectedAbsY + CT_RANGE_MM * pxPerMm), locatorY0 + 1, H);
+    const cLocatorBest = null;
+    const cLocatorHasColor = false;
 
-    // 小 CT ROI 以找到的 C 為錨點：C 位於上段，T 位於下段。
-    // 高度略放寬，但不再把整個塑膠槽都納入判讀。
-    const y0 = clamp(Math.floor(cExpectedAbsY - qSide * 0.18), 0, H-1);
-    const y1 = clamp(Math.ceil(cExpectedAbsY + qSide * 0.58), y0 + 1, H);
+    // 整個 CT ROI 直接由 mm 定義：C 上方保留 1 mm 容差，C 下方掃描完整 9 mm。
+    const y0 = clamp(Math.floor(cExpectedAbsY - 1.0 * pxPerMm), 0, H-1);
+    const y1 = clamp(Math.ceil(cExpectedAbsY + CT_RANGE_MM * pxPerMm), y0 + 1, H);
     const h = Math.max(1, y1-y0);
 
     const cExpectedLocalY = cExpectedAbsY - y0;
     let tExpectedLocalY = tExpectedAbsY - y0;
-    const bandHalf = Math.max(6, qSide * 0.12);
+    // C 只允許約 ±0.8 mm 的線寬/印刷/拍攝誤差。
+    const bandHalf = Math.max(3, 0.80 * pxPerMm);
     const cSearchRange = {
       start: clamp(Math.floor(cExpectedLocalY - bandHalf), 0, h-1),
       end: clamp(Math.ceil(cExpectedLocalY + bandHalf), 0, h-1)
     };
+    // T 可以出現在 C 下方 1.2~9.0 mm；不再硬鎖成固定 0.33Q。
     let tSearchRange = {
-      start: clamp(Math.floor(tExpectedLocalY - bandHalf), 0, h-1),
-      end: clamp(Math.ceil(tExpectedLocalY + bandHalf), 0, h-1)
+      start: clamp(Math.floor(cExpectedLocalY + 1.20 * pxPerMm), 0, h-1),
+      end: clamp(Math.ceil(cExpectedLocalY + CT_RANGE_MM * pxPerMm), 0, h-1)
     };
     // Debug compatibility fields retained for the existing Advanced Info panel.
     const topThirdY = H / 3;
@@ -1598,16 +1570,10 @@
 
     let cQ = bestPeakInBand('C', cSearchRange, cExpectedLocalY);
 
-    // v31.55 C-first：T 只允許出現在 C 下方固定距離的小範圍。
-    // 實拍幾何約 C→T = 0.33Q；不再使用過寬的 ±0.15Q。
-    const cAnchorLocalY = cQ && cQ.selected ? cQ.y : cExpectedLocalY;
-    tExpectedLocalY = cAnchorLocalY + qSide * 0.33;
-    tExpectedAbsY = y0 + tExpectedLocalY;
-    const tBandHalf = Math.max(5, qSide * 0.10);
-    tSearchRange = {
-      start: clamp(Math.floor(tExpectedLocalY - tBandHalf), 0, h-1),
-      end: clamp(Math.ceil(tExpectedLocalY + tBandHalf), 0, h-1)
-    };
+    // v31.64：T 不再假設固定間距；只在 C 下方 1.2~9.0 mm 的物理範圍內找線。
+    // expected 僅用於 debug/距離分數，真正 gate 由 tSearchRange 決定。
+    tExpectedLocalY = tExpectedAbsY - y0;
+    const tBandHalf = Math.max(4, (CT_RANGE_MM * 0.50) * pxPerMm);
     let tQ = bestPeakInBand('T', tSearchRange, tExpectedLocalY);
     const cSelected = !!cQ.selected;
     const tSelected = !!tQ.selected;
@@ -1630,15 +1596,15 @@
 
     const cDetected = !!(cSelected && cQ.score >= threshold * 0.75 && cRed.ok && cGeometryOk);
     // v31.51: T 門檻小幅提高，降低陰性卡把背景陰影當成淡 T 的機率。
-    const tThreshold = Math.min(threshold * 0.72, cQ && cQ.score > 0 ? cQ.score * 0.40 : threshold);
+    const tThreshold = Math.min(threshold * 0.82, cQ && cQ.score > 0 ? cQ.score * 0.46 : threshold);
     const tcRatio = cQ && cQ.score > 0 ? tQ.score / cQ.score : 0;
 
     const tCoreWidth = tQ ? (tQ.halfWidth || tQ.width || 9999) : 9999;
     const tCoreSharpness = tQ ? (tQ.halfSharpness || tQ.sharpness || 0) : 0;
     const tShapeOk = !!(tQ &&
-      tCoreSharpness >= 0.50 &&
+      tCoreSharpness >= 0.56 &&
       tCoreWidth <= Math.max(14, (tQ.maxWidth || 1) * 3.0) &&
-      ((tQ.quality || 0) >= 1.8 || tcRatio >= 0.48));
+      ((tQ.quality || 0) >= 2.1 || tcRatio >= 0.52));
 
     const refinedSeparationOk = !!(cRed && tRed &&
       tRed.absY > cRed.absY &&
@@ -1664,9 +1630,9 @@
     );
 
     return {
-      source:'ct-extended-y-strip-lock-v31-61',
+      source:'ct-qr-hard-lock-v31-63',
       x0, x1, y0, y1, h,
-      zone:{x:x0, y:y0, w:Math.max(1, x1-x0), h:Math.max(1, y1-y0), startRatio:ctStartRatio, endRatio:ctEndRatio, widthRatio:ctEndRatio-ctStartRatio, topThirdY:Math.round(topThirdY), topThirdPadding:topThirdPadding, yLimitedByTopThird:false, coordinateSystem:'qr-anchored', qrSide:qSide, qrBottomY, stripCenterX, cExpectedAbsY, tExpectedAbsY, bandHalf, locatorY0, locatorY1, cLocatorAbsY:cLocatorBest?cLocatorBest.absY:null, cLocatorHasColor},
+      zone:{x:x0, y:y0, w:Math.max(1, x1-x0), h:Math.max(1, y1-y0), startRatio:ctStartRatio, endRatio:ctEndRatio, widthRatio:ctEndRatio-ctStartRatio, topThirdY:Math.round(topThirdY), topThirdPadding:topThirdPadding, yLimitedByTopThird:false, coordinateSystem:'qr-mm-anchored', qrSide:qSide, qrBottomY, stripCenterX, cExpectedAbsY, tExpectedAbsY, bandHalf, locatorY0, locatorY1, pxPerMm, qrMm:QR_MM, cFromFinderBottomMm:C_FROM_FINDER_BOTTOM_MM, ctRangeMm:CT_RANGE_MM, cLocatorAbsY:cLocatorBest?cLocatorBest.absY:null, cLocatorHasColor},
       raw, profile:positive, baseline:bg, rawBaseline, rawMedian, rawMax, pinkMax, darkMax, combinedMax, selectedMode, lumBackground, lumMedian, mean:stat.mean, std:stat.std,
       maxScore, threshold, tThreshold, tcRatio, candidateFloor, minSep,
       cRange, tRange,
@@ -2312,8 +2278,15 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
     const dirs=[
       {x:vx,y:vy,name:'qr-dir-body-v+'}
     ];
-    const L=qSide*5.35;
-    const CW=qSide*1.55;
+    // v31.64: use measured physical geometry instead of empirical cassette/Q ratios.
+    // Cassette = 70 x 20 mm, QR = 14 x 14 mm.
+    const QR_MM=14.0;
+    const CASSETTE_L_MM=70.0;
+    const CASSETTE_W_MM=20.0;
+    const L=qSide*(CASSETTE_L_MM/QR_MM);       // 5.000 Q
+    const CW=qSide*(CASSETTE_W_MM/QR_MM);     // 1.42857 Q
+    // Existing photos place QR center at about 11.5% of cassette length.
+    // This only controls the displayed cassette frame; C/T analysis below is anchored directly to QR.
     const qrCenterFromTop=L*0.115;
     const out=[];
     for (const d of dirs) {
@@ -2455,8 +2428,8 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
         const outW=cropCanvas.width, outH=cropCanvas.height;
 
         if (best.qrTemplate && qp.length >= 4) {
-          const sideByW=outW/1.55;
-          const sideByH=outH/5.35;
+          const sideByW=outW/(20.0/14.0);
+          const sideByH=outH/(70.0/14.0);
           qrNorm={
             cx:outW*0.50,
             cy:outH*0.115,

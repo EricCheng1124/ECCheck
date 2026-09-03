@@ -1,17 +1,19 @@
-# ASAP Check v31.62 — QR Direct Cassette Geometry
+# ASAP Check v31.64 — QR mm Geometry
 
-This build keeps the v31.59 Per-QR fixed CT geometry and moves the complete CT analysis region 0.20Q toward the QR code.
+本版改用實體尺寸作為 C/T 定位基準，不再使用經驗 Q 比例猜測 C/T 位置。
 
-## v31.62 geometry
-- CT ROI top: QR bottom + 0.65Q
-- CT ROI bottom: QR bottom + 1.41Q
-- C expected position: QR bottom + 0.77Q
-- T expected position: QR bottom + 1.07Q
-- C search band: QR bottom + 0.77Q to +1.01Q
-- Width/height and QR-based scale logic otherwise unchanged.
-- Each detected card uses its own QR center and QR size.
-- Window/slot, shadows, peaks, and neighboring cards cannot move the CT zone.
-- QR 四角完整時，整支卡匣外框直接由 QR 幾何建立，不再讓白色 contour 競選最終外框。
-- QR 模式下，標準化 QR 座標固定為 cassette local coordinate，CT ROI 不再受原圖卡匣邊緣抓取誤差影響。
-- contour 僅在 QR 幾何不可用時 fallback。
-- UI / detector VERSION / cache-busting 更新為 v31.62。
+## 已知實體尺寸
+- 卡匣外框：70 x 20 mm
+- QR Code：約 14 x 14 mm
+- C 線：由 QR 左下 finder square 的下緣往卡匣下方 11 mm
+- C/T 有效範圍：9 mm 內
+
+## v31.64 定位邏輯
+- QR 四角決定方向、中心與比例尺。
+- 1 mm = QR side / 14。
+- C 幾何位置 = QR bottom + 11 mm。
+- C 搜尋只允許約 ±0.8 mm 容差。
+- T 不再假設固定 C-T 距離；只在 C 下方約 1.2~9.0 mm 的實體區域內搜尋。
+- 影像中的陰影、槽邊或其他 peak 不得移動 C 的幾何位置。
+- 卡匣 QR template 改用 70/14 = 5.0Q、20/14 = 1.42857Q 的實體比例。
+- 卡匣外框主要供顯示與透視校正；真正 C/T 定位以 QR mm 座標為主。
