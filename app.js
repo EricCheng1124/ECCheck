@@ -876,19 +876,12 @@
       found.push({raw:String(raw||''),geometry:cloneQrGeometry(geometry)});
     };
 
-    // v31.75: HARD FREEZE means the live scanner can no longer change the UI after capture,
-    // but the final card geometry must come from the captured frame itself.  A live-lock seed
-    // is therefore only a search HINT, not an authoritative final QR position.  This avoids a
-    // stale preview coordinate becoming Card 1 when the phone moved a few pixels during capture.
-    if (seedQr && seedQr.geometry && seedQr.geometry.center && typeof window.jsQR === 'function') {
-      try {
-        const sb=qrBox(seedQr.geometry), ss=Math.max(36,qrSideEstimate(seedQr.geometry));
-        const hint={x:seedQr.geometry.center.x-ss*1.15,y:seedQr.geometry.center.y-ss*1.15,w:ss*2.30,h:ss*2.30};
-        const hctx=canvas.getContext('2d',{willReadFrequently:true});
-        const hit=decodeQrRegionFast(hctx,hint,720);
-        if(hit) pushUnique(hit.raw,hit.geometry);
-      } catch(_) {}
-    }
+    // v31.78 ABSOLUTE FREEZE:
+    // Card 1 is the exact QR geometry locked in Live Preview when Capture was pressed.
+    // Never re-decode, re-center, or replace Card 1 from the captured frame.
+    // Captured-frame QR detection may ONLY append Card 2..N.
+    const frozenSeed = !!(seedQr && seedQr.geometry && seedQr.geometry.center);
+    if (frozenSeed) pushUnique(seedQr.raw || '', seedQr.geometry);
 
     // 1) Native BarcodeDetector can return multiple QR codes at once when supported.
     if (typeof window.BarcodeDetector === 'function') {
@@ -993,7 +986,7 @@
         }
       }
     }
-    // Only if every captured-frame decoder failed do we fall back to the frozen live seed.
+    // v31.78: authoritative live seed was inserted above; fallback is only for non-live/gallery paths.
     if (!found.length && seedQr && seedQr.geometry && seedQr.geometry.center) {
       pushUnique(seedQr.raw || '', seedQr.geometry);
     }
@@ -1207,7 +1200,14 @@
   async function captureFromCamera() {
     if (captureBusy || !cameraVideo || !cameraStream) return;
     captureBusy = true;
-    // v31.75 HARD FREEZE: no more live QR activity after the user presses Capture.
+    // v31.78 ABSOLUTE FREEZE: clone the live lock synchronously on the click event, before ANY await.
+    const clickLockedSnapshot = (qrLocked && lockedQrSnapshot && lockedQrSnapshot.geometry) ? {
+      raw: String(lockedQrSnapshot.raw || (lastQr && lastQr.raw) || ''),
+      geometry: cloneQrGeometry(lockedQrSnapshot.geometry),
+      width: Number(lockedQrSnapshot.width || 0),
+      height: Number(lockedQrSnapshot.height || 0)
+    } : null;
+    // v31.78 HARD FREEZE: no more live QR activity after the user presses Capture.
     qrAnalysisFrozen = true;
     stopQrLoop();
     qrSessionId++;
@@ -1250,13 +1250,13 @@
     // Preserve the already locked QR and convert its coordinates to the full-resolution shot.
     // analyze() will seed multi-QR detection with this QR and only search for additional cards.
     capturedLockedQr = null;
-    if (qrLocked && lockedQrSnapshot && lockedQrSnapshot.geometry) {
-      const sw = lockedQrSnapshot.width || vw;
-      const sh = lockedQrSnapshot.height || vh;
+    if (clickLockedSnapshot && clickLockedSnapshot.geometry) {
+      const sw = clickLockedSnapshot.width || vw;
+      const sh = clickLockedSnapshot.height || vh;
       const sx = vw / Math.max(1, sw);
       const sy = vh / Math.max(1, sh);
-      const g = scaleQrGeometry(lockedQrSnapshot.geometry, sx, sy);
-      if (g) capturedLockedQr = { raw: lockedQrSnapshot.raw || (lastQr && lastQr.raw) || '', geometry: g };
+      const g = scaleQrGeometry(clickLockedSnapshot.geometry, sx, sy);
+      if (g) capturedLockedQr = { raw: clickLockedSnapshot.raw, geometry: g, absoluteFrozen: true };
     }
 
     // Last-chance seed from the captured frame, but DO NOT call acceptQrCode here.
