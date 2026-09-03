@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v31.66-edge-snap-ct-decoupled';
+  const VERSION = 'v31.67-aspect-lock-ct-continuity';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -1541,55 +1541,66 @@
       return q;
     }
 
+    // v31.67：C/T 不再先靠 profile peak 過門檻才做紅線驗證。
+    // 既然 30/10/30 已把 ROI 限定在唯一 10 mm 試紙區，就直接逐列搜尋
+    // 「水平粉紅/紅色連續線」。這可避免清楚 C 線因 profile baseline/threshold 被判 Invalid。
+    function bestContinuityInRange(range, mode) {
+      let best = null;
+      const start = clamp(Math.floor(range.start), 0, h-1);
+      const end = clamp(Math.ceil(range.end), start, h-1);
+      for (let ly=start; ly<=end; ly++) {
+        const cont = rowLineContinuity(y0 + ly, mode);
+        const ps = positive[ly] || 0;
+        const colorBoost = (cont.redRatio || 0) * 24 + (cont.contrastAvg || 0) * 0.55;
+        const lineBoost = Math.min(12, (cont.run || 0) * 0.45) + (cont.ratio || 0) * 12;
+        const total = (cont.score || 0) + ps * 0.24 + colorBoost + lineBoost;
+        const item = Object.assign({}, cont, {localY:ly, absY:y0+ly, profileScore:ps, totalScore:total});
+        if (!best || item.totalScore > best.totalScore) best = item;
+      }
+      return best;
+    }
+
+    const cCont = bestContinuityInRange(cSearchRange, 'C');
+    const cAnchorY = cCont ? cCont.localY : cExpectedLocalY;
+    // T 一定在 C 下方；由實際找到的 C 往下留最小分離，避免同一條 C 被再選成 T。
+    const dynTStart = clamp(Math.max(tSearchRange.start, Math.floor(cAnchorY + Math.max(4, minSep*0.70))), 0, h-1);
+    const dynTRange = {start:dynTStart, end:tSearchRange.end};
+    const tCont = dynTStart < h-1 ? bestContinuityInRange(dynTRange, 'faintT') : null;
+
     let cQ = bestPeakInBand('C', cSearchRange, cExpectedLocalY);
+    let tQ = bestPeakInBand('T', dynTRange, tExpectedLocalY);
+    // Debug/波形 marker 使用 continuity 找到的真實水平線位置。
+    if (cCont) { cQ.y=cCont.localY; cQ.score=Math.max(cQ.score||0,cCont.profileScore||0); }
+    if (tCont) { tQ.y=tCont.localY; tQ.score=Math.max(tQ.score||0,tCont.profileScore||0); }
 
-    // v31.64：T 不再假設固定間距；只在 C 下方 1.2~9.0 mm 的物理範圍內找線。
-    // expected 僅用於 debug/距離分數，真正 gate 由 tSearchRange 決定。
-    tExpectedLocalY = tExpectedAbsY - y0;
-    const tBandHalf = Math.max(4, h * 0.60);
-    let tQ = bestPeakInBand('T', tSearchRange, tExpectedLocalY);
-    const cSelected = !!cQ.selected;
-    const tSelected = !!tQ.selected;
-    const selected = [cQ,tQ].filter(q=>q.selected);
+    const cGeometryOk = !!cCont && cCont.localY >= cSearchRange.start && cCont.localY <= cSearchRange.end;
+    const cColorOk = !!cCont && ((cCont.redRatio||0) >= 0.020 || (cCont.redAvg||0) >= 0.95 || (cCont.contrastAvg||0) >= 0.42);
+    const cDetected = !!(cCont && cCont.ok && cGeometryOk && cColorOk);
+
+    const tGeometryOk = !!tCont && tCont.localY >= dynTRange.start && tCont.localY <= dynTRange.end;
+    const tColorOk = !!tCont && ((tCont.redRatio||0) >= 0.020 || (tCont.redAvg||0) >= 1.00 || (tCont.contrastAvg||0) >= 0.45);
+    const refinedSeparationOk = !!(cCont && tCont && tCont.absY > cCont.absY &&
+      (tCont.absY-cCont.absY) >= Math.max(4, minSep*0.60));
+    // T 比 C 淡是正常的，但仍要求真實粉紅連續性；灰色槽邊不會單靠 darkness 通過。
+    const tDetected = !!(cDetected && tCont && tCont.ok && tGeometryOk && tColorOk && refinedSeparationOk);
+
+    const cSelected = !!cCont;
+    const tSelected = !!tCont;
+    const selected = [cQ,tQ].filter((q,i)=>i===0?cSelected:tSelected);
     const allPeaks = [cQ,tQ];
-
-    let cRefineRange = Object.assign({}, cSearchRange);
-    let tRefineRange = Object.assign({}, tSearchRange);
-
-    // Never allow validation refinement to leave the physical QR-anchored band.
-    const cRed = refinePeakToRedLine(cQ.y, cRefineRange, 'C');
-    const tRed = refinePeakToRedLine(tQ.y, tRefineRange, 'faintT');
-    cQ.refinedLocalY = (cRed && cRed.ok) ? cRed.localY : cQ.y;
-    tQ.refinedLocalY = (tRed && tRed.ok) ? tRed.localY : tQ.y;
-
-    // Geometry distance gate. Peaks at the extreme edge of the narrow band are suspicious.
-    const maxExpectedError = h;
-    const cGeometryOk = cQ.y >= cSearchRange.start && cQ.y <= cSearchRange.end;
-    const tGeometryOk = tQ.y >= tSearchRange.start && tQ.y <= tSearchRange.end;
-
-    const cDetected = !!(cSelected && cQ.score >= threshold * 0.75 && cRed.ok && cGeometryOk);
-    // v31.51: T 門檻小幅提高，降低陰性卡把背景陰影當成淡 T 的機率。
-    const tThreshold = Math.min(threshold * 0.82, cQ && cQ.score > 0 ? cQ.score * 0.46 : threshold);
+    const cRefineRange = Object.assign({}, cSearchRange);
+    const tRefineRange = Object.assign({}, dynTRange);
+    const cRed = cCont || refinePeakToRedLine(cQ.y, cRefineRange, 'C');
+    const tRed = tCont || refinePeakToRedLine(tQ.y, tRefineRange, 'faintT');
+    cQ.refinedLocalY = cCont ? cCont.localY : cQ.y;
+    tQ.refinedLocalY = tCont ? tCont.localY : tQ.y;
+    const tThreshold = Math.max(0, threshold * 0.55);
     const tcRatio = cQ && cQ.score > 0 ? tQ.score / cQ.score : 0;
-
-    const tCoreWidth = tQ ? (tQ.halfWidth || tQ.width || 9999) : 9999;
-    const tCoreSharpness = tQ ? (tQ.halfSharpness || tQ.sharpness || 0) : 0;
-    const tShapeOk = !!(tQ &&
-      tCoreSharpness >= 0.56 &&
-      tCoreWidth <= Math.max(14, (tQ.maxWidth || 1) * 3.0) &&
-      ((tQ.quality || 0) >= 2.1 || tcRatio >= 0.52));
-
-    const refinedSeparationOk = !!(cRed && tRed &&
-      tRed.absY > cRed.absY &&
-      (tRed.absY - cRed.absY) >= Math.max(3, minSep * 0.55));
-
-    const tDetected = !!(tSelected && cDetected && tQ.score >= tThreshold &&
-      tRed.ok && tGeometryOk && refinedSeparationOk && tShapeOk);
 
     cQ.detected = cDetected;
     tQ.detected = tDetected;
-    cQ.reject = !cSelected ? 'below-candidate-floor' : !cGeometryOk ? 'outside-middle10-c-band' : cQ.score < threshold * 0.75 ? 'below-threshold' : !cRed.ok ? 'no-red-continuity' : 'PASS';
-    tQ.reject = !tSelected ? 'below-candidate-floor' : !tGeometryOk ? 'outside-middle10-t-band' : tQ.score < tThreshold ? 'below-relative-threshold' : !tRed.ok ? 'no-red-continuity' : !refinedSeparationOk ? 'ct-too-close' : !tShapeOk ? 'bad-t-shape' : 'PASS';
+    cQ.reject = !cCont ? 'no-horizontal-line' : !cGeometryOk ? 'outside-middle10-c-band' : !cCont.ok ? 'no-red-continuity' : !cColorOk ? 'weak-color' : 'PASS';
+    tQ.reject = !tCont ? 'no-horizontal-line' : !tGeometryOk ? 'outside-middle10-t-band' : !tCont.ok ? 'no-red-continuity' : !tColorOk ? 'weak-color' : !refinedSeparationOk ? 'ct-too-close' : 'PASS';
 
     let result = 'Invalid';
     if (cDetected && tDetected) result = 'Positive';
@@ -1603,7 +1614,7 @@
     );
 
     return {
-      source:'ct-outer-middle10-v31-65',
+      source:'ct-outer-middle10-v31-67-continuity',
       x0, x1, y0, y1, h,
       zone:{x:x0, y:y0, w:Math.max(1, x1-x0), h:Math.max(1, y1-y0), startRatio:ctStartRatio, endRatio:ctEndRatio, widthRatio:ctEndRatio-ctStartRatio, topThirdY:Math.round(topThirdY), topThirdPadding:topThirdPadding, yLimitedByTopThird:false, coordinateSystem:'cassette-30-10-30', qrSide:qSide, stripCenterX, cExpectedAbsY, tExpectedAbsY, bandHalf, locatorY0, locatorY1, pxPerMm, cassetteMm:CASSETTE_L_MM, stripTopMm:STRIP_TOP_MM, stripHeightMm:STRIP_H_MM, cLocatorAbsY:null, cLocatorHasColor:false},
       raw, profile:positive, baseline:bg, rawBaseline, rawMedian, rawMax, pinkMax, darkMax, combinedMax, selectedMode, lumBackground, lumMedian, mean:stat.mean, std:stat.std,
@@ -2379,12 +2390,30 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
       const left=search('u',-halfW,Math.max(5,CW*0.22),L*0.30,+1);  // inside 朝 +u
       const right=search('u',halfW,Math.max(5,CW*0.22),L*0.30,-1); // inside 朝 -u
 
-      const newL=bottom.pos-top.pos, newW=right.pos-left.pos;
-      const ratio=newL/Math.max(1,newW);
-      if(newL < L*0.72 || newL > L*1.24 || newW < CW*0.68 || newW > CW*1.30 || ratio < 2.70 || ratio > 4.60) return null;
+      const rawL=bottom.pos-top.pos, newW=right.pos-left.pos;
+      if(rawL < L*0.70 || rawL > L*1.28 || newW < CW*0.68 || newW > CW*1.30) return null;
 
-      const c2={x:cx+vx*((top.pos+bottom.pos)/2)+ux*((left.pos+right.pos)/2),
-                y:cy+vy*((top.pos+bottom.pos)/2)+uy*((left.pos+right.pos)/2)};
+      // v31.67：卡匣實體 70x20 mm，外框長寬比必須是 3.50。
+      // 不再讓 top/bottom 各自搜尋後形成 2.7~4.6 的任意長度；那會把桌面陰影/內部結構吃進外框。
+      // 先由較穩定的左右邊取得實際寬度，再以固定 3.50 倍長度成對搜尋上下邊。
+      const targetL = newW * 3.50;
+      const rawCenterV = (top.pos + bottom.pos) / 2;
+      let pair={center:rawCenterV,score:-1e9,top:null,bottom:null};
+      const centerSpan=Math.max(6,Math.min(L*0.16,targetL*0.12));
+      const centerStep=Math.max(1,Math.round(newW/90));
+      for(let cc=rawCenterV-centerSpan;cc<=rawCenterV+centerSpan;cc+=centerStep){
+        const tp=cc-targetL/2, bp=cc+targetL/2;
+        const ts=sideScore('v',tp,newW*0.30,+1);
+        const bs=sideScore('v',bp,newW*0.30,-1);
+        // QR 端(top)通常很清楚，稍提高 top 權重；同時避免離原候選中心太遠。
+        const prox=Math.abs(cc-rawCenterV)/Math.max(1,centerSpan);
+        const sc=ts*1.08+bs-prox*4.0;
+        if(sc>pair.score) pair={center:cc,score:sc,top:{pos:tp,raw:ts},bottom:{pos:bp,raw:bs}};
+      }
+      const top2=pair.top||top, bottom2=pair.bottom||bottom;
+      const newL=targetL, ratio=3.50;
+      const c2={x:cx+vx*pair.center+ux*((left.pos+right.pos)/2),
+                y:cy+vy*pair.center+uy*((left.pos+right.pos)/2)};
       const hL=newL/2, hW=newW/2;
       const np=[
         {x:c2.x-vx*hL-ux*hW,y:c2.y-vy*hL-uy*hW},
@@ -2396,7 +2425,7 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
       const fake={pts:np};
       const enc=qrEnclosureMetrics(fake, qrCenter || null, []);
       if(qrCenter && !enc.pass) return null;
-      return {pts:np, ratio, oldL:L,oldW:CW,newL,newW,top,bottom,left,right,applied:true};
+      return {pts:np, ratio, oldL:L,oldW:CW,newL,newW,top:top2,bottom:bottom2,left,right,applied:true,aspectLocked:true};
     } catch(e) { console.warn('edge snap failed',e); return null; }
   }
 

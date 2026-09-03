@@ -1,4 +1,4 @@
-# ASAP Check v31.66 — Edge Snap + CT Decoupled
+# ASAP Check v31.67 — Aspect Lock + CT Continuity
 
 定位策略：
 - QR Code 只負責卡匣方向。
@@ -7,3 +7,11 @@
 - C/T ROI 維持 30 / 10 / 30 幾何：卡匣上 30 mm、中央 10 mm 分析區、下 30 mm。
 - 外框 quality gate 與 C/T 最終結果解耦：C 有效 + T 有效 = Positive；C 有效 + T 無效 = Negative；C 無效才 Invalid。
 - Debug 新增 Edge Snap 狀態與 snap 前後 L/W 尺寸。
+
+
+## v31.67 changes
+- Version badge/cache key updated to v31.67.
+- Cassette outer frame locks to physical 70:20 = 3.50 aspect ratio after edge detection.
+- Top/bottom are searched as one fixed-length pair, reducing background/internal-edge drift.
+- C/T detection scans horizontal red/pink continuity directly inside the fixed middle 10 mm ROI.
+- Final result remains C+T=Positive, C only=Negative, no C=Invalid.
