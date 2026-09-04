@@ -1,4 +1,4 @@
-# ASAP Check v31.72 — Base70 Multi-Card + FWHM Observe
+# ASAP Check v31.73 — Base70 Multi-Card + FWHM Observe
 
 ## 本版原則
 - 直接沿用 v31.71 Base70 Multi-Card 架構，不改 QR、多卡分離、外框與拍照流程。
@@ -19,3 +19,11 @@
 - 同一批已知 POS / NEG 照片重複測試。
 - 記錄每張 Card 的 T/C、T Gap(mm)、T FWHM(mm)。
 - 特別觀察誤判 NEG 卡的 FWHM 是否明顯大於真正 T 線。
+
+
+## v31.73
+- T 搜尋範圍：實際 C 線下方 3.0～6.0 mm。
+- T/C >= 10% 規則保留。
+- FWHM 正式參與 T 判定，暫用放寬範圍 0.15～1.50 mm。
+- FWHM 過寬視為陰影/平台；過窄視為尖峰雜訊。
+- QR、多卡 ROI、外框與拍照流程維持 v31.72 架構。
