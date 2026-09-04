@@ -1,12 +1,11 @@
-# ASAP Check v31.76 Base70 Multi-Card Dense QR
+# ASAP Check v31.77 Base70 Multi-Card UI-First QR
 
-Based on v31.75. QR/outer/CT architecture is preserved.
+Based on v31.76, with QR scanning changed to keep mobile UI responsive.
 
-Changes:
-- Multi-card QR discovery now uses dense overlapping grid + sliding-window scans.
-- Added 4/5-column passes for side-by-side cassettes.
-- Small QR windows may be upscaled for better jsQR finder sampling.
-- Known QR codes are masked and the remaining image is re-scanned up to 6 passes.
-- Duplicate identity remains geometry-based, so identical QR payloads are allowed.
-- QR Geometry Backup from v31.75 remains enabled.
-- Weak-T 3-6 mm / T-C 10% / FWHM logic remains unchanged from v31.75.
+- Captured photo is displayed immediately before QR/OpenCV analysis.
+- Removed exhaustive sliding-window + six-pass masked QR scan.
+- Uses native BarcodeDetector first, then a limited set of overlapping 2/3/4/5-column and 2-row jsQR tiles.
+- QR work yields back to the browser every few tiles so iPhone/Safari can repaint.
+- Keeps v31.75 QR Geometry Backup.
+- Keeps weak-T analysis, C-relative 3–6 mm search, T/C 10%, and FWHM gate unchanged.
+- Multi-card maximum remains 8.

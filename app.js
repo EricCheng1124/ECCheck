@@ -81,7 +81,7 @@
   };
 
   // v31.71: multi-card extension built directly on the stable v31.70 single-card core.
-  const BUILD_VERSION = 'v31.76';
+  const BUILD_VERSION = 'v31.77';
   const MULTI_MAX_CARDS = 8;
 
   function unlock() {
@@ -755,15 +755,21 @@
     return r;
   }
 
+  const yieldToUi = () => new Promise(resolve => {
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => setTimeout(resolve, 0));
+    else setTimeout(resolve, 0);
+  });
+
   async function detectAllQrCodesFromCanvas() {
     const found=[];
     const pushUnique=(raw,geometry)=>{
-      if (!geometry || !geometry.center) return;
-      if (found.some(x=>isSameQr(x.geometry,geometry))) return;
+      if (!geometry || !geometry.center) return false;
+      if (found.some(x=>isSameQr(x.geometry,geometry))) return false;
       found.push({raw:String(raw||''),geometry});
+      return true;
     };
 
-    // Native detector can return several QR codes at once. Keep every geometry result.
+    // v31.77: UI-first QR scan. Native multi-result detection is always tried first.
     if (typeof window.BarcodeDetector === 'function') {
       try {
         const detector = nativeQrDetector || new window.BarcodeDetector({formats:['qr_code']});
@@ -771,109 +777,49 @@
         const codes = await detector.detect(canvas);
         (codes||[]).forEach(code=>pushUnique(code.rawValue, qrGeometryFromNative(code)));
       } catch (_) {}
+      await yieldToUi();
     }
 
-    // v31.76 Dense Multi-QR scan:
-    // jsQR returns only one QR per image. Therefore do NOT rely on a full-frame call.
-    // Scan many overlapping windows so neighboring cassettes are isolated into separate images.
+    // jsQR returns one code per image. Use a LIMITED set of overlapping tiles instead of
+    // v31.76's exhaustive sliding-window x masked multi-pass scan, which could freeze iPhone UI.
     if (typeof window.jsQR === 'function' && found.length < MULTI_MAX_CARDS) {
       const W=canvas.width, H=canvas.height;
       const ctx=canvas.getContext('2d',{willReadFrequently:true});
       const regions=[];
+      const seenRegions=new Set();
       const addRegion=(x,y,w,h)=>{
-        x=Math.max(0,x); y=Math.max(0,y);
-        w=Math.min(W-x,w); h=Math.min(H-y,h);
-        if (w>=60 && h>=60) regions.push({x,y,w,h});
+        x=Math.max(0,Math.round(x)); y=Math.max(0,Math.round(y));
+        w=Math.min(W-x,Math.round(w)); h=Math.min(H-y,Math.round(h));
+        if (w<70 || h<70) return;
+        const key=[Math.round(x/12),Math.round(y/12),Math.round(w/12),Math.round(h/12)].join(':');
+        if(seenRegions.has(key)) return;
+        seenRegions.add(key); regions.push({x,y,w,h});
       };
-      const addGrid=(cols,rows,overlap=0.22)=>{
-        const cw=W/cols, ch=H/rows;
-        for(let ry=0;ry<rows;ry++) for(let rx=0;rx<cols;rx++) {
-          const px=cw*overlap, py=ch*overlap;
+      const addGrid=(cols,rows,overlap=0.16)=>{
+        const cw=W/cols, ch=H/rows, px=cw*overlap, py=ch*overlap;
+        for(let ry=0;ry<rows;ry++) for(let rx=0;rx<cols;rx++)
           addRegion(rx*cw-px, ry*ch-py, cw+2*px, ch+2*py);
-        }
-      };
-      const addSliding=(fracW,fracH,stepX,stepY)=>{
-        const rw=W*fracW, rh=H*fracH;
-        const maxX=Math.max(0,W-rw), maxY=Math.max(0,H-rh);
-        for(let fy=0; fy<=1.0001; fy+=stepY) {
-          for(let fx=0; fx<=1.0001; fx+=stepX) {
-            addRegion(maxX*Math.min(1,fx), maxY*Math.min(1,fy), rw, rh);
-          }
-        }
       };
 
-      // Coarse passes first.
+      // Fast full frame, then horizontal/card-friendly partitions, then a few 2-row grids.
       addRegion(0,0,W,H);
-      addGrid(2,1,0.24); addGrid(1,2,0.24); addGrid(2,2,0.22);
-      addGrid(3,1,0.20); addGrid(4,1,0.18); addGrid(5,1,0.16);
-      addGrid(3,2,0.18); addGrid(4,2,0.16); addGrid(5,2,0.14);
-      addGrid(3,3,0.16); addGrid(4,3,0.14);
+      addGrid(2,1,0.20); addGrid(3,1,0.18); addGrid(4,1,0.16); addGrid(5,1,0.14);
+      addGrid(2,2,0.18); addGrid(3,2,0.16); addGrid(4,2,0.14);
 
-      // Dense sliding windows are important when 3-5 cassettes touch/overlap.
-      // Each window tends to contain only one QR, which works around jsQR's one-result limit.
-      addSliding(0.34,0.48,0.20,0.33);
-      addSliding(0.27,0.42,0.16,0.33);
-      addSliding(0.22,0.36,0.14,0.33);
-
-      // Small regions are intentionally allowed to upscale to improve finder-pattern sampling.
+      let processed=0;
       for (const a of regions) {
         if (found.length>=MULTI_MAX_CARDS) break;
-        const hit=decodeQrRegionFast(ctx,a,1350);
+        const hit=decodeQrRegionFast(ctx,a,900);
         if (hit) pushUnique(hit.raw,hit.geometry);
-      }
-
-      // Last-resort masked re-scan. Mask known QR codes and repeatedly scan both the
-      // complete image and dense tiles. This helps when a strong QR keeps winning.
-      if (found.length < MULTI_MAX_CARDS) {
-        const work=cloneCanvas(canvas);
-        const wctx=work.getContext('2d',{willReadFrequently:true});
-        const mask=(geometry)=>{
-          const b=qrBox(geometry), m=Math.max(8,Math.max(b.w,b.h)*0.30);
-          const mx=Math.max(0,b.x-m), my=Math.max(0,b.y-m);
-          wctx.save(); wctx.fillStyle='#ffffff';
-          wctx.fillRect(mx,my,Math.min(work.width-mx,b.w+m*2),Math.min(work.height-my,b.h+m*2));
-          wctx.restore();
-        };
-        found.forEach(x=>mask(x.geometry));
-
-        const scanWorkRegion=(a)=>{
-          const x=Math.max(0,Math.round(a.x)), y=Math.max(0,Math.round(a.y));
-          const w=Math.max(1,Math.min(work.width-x,Math.round(a.w))), h=Math.max(1,Math.min(work.height-y,Math.round(a.h)));
-          if(w<50||h<50) return null;
-          const maxSide=1350, scale=Math.min(2.2,Math.max(1,maxSide/Math.max(w,h)));
-          const tw=Math.max(60,Math.round(w*scale)), th=Math.max(60,Math.round(h*scale));
-          const tmp=document.createElement('canvas'); tmp.width=tw; tmp.height=th;
-          const tctx=tmp.getContext('2d',{willReadFrequently:true});
-          tctx.drawImage(work,x,y,w,h,0,0,tw,th);
-          const id=tctx.getImageData(0,0,tw,th);
-          const vars=[id,enhanceQrImageData(id,false),enhanceQrImageData(id,true)];
-          for(const v of vars){
-            const code=decodeQrImageData(v);
-            if(code&&code.data&&code.location){
-              const inv=1/scale, keys=['topLeftCorner','topRightCorner','bottomRightCorner','bottomLeftCorner'];
-              const points=keys.map(k=>code.location[k]).filter(Boolean).map(pt=>({x:x+pt.x*inv,y:y+pt.y*inv}));
-              if(points.length>=4) return {raw:code.data,geometry:{points,center:{x:points.reduce((q,p)=>q+p.x,0)/points.length,y:points.reduce((q,p)=>q+p.y,0)/points.length}}};
-            }
-          }
-          return null;
-        };
-
-        for(let pass=0; pass<6 && found.length<MULTI_MAX_CARDS; pass++) {
-          let added=false;
-          for(const a of regions) {
-            const hit=scanWorkRegion(a);
-            if(!hit) continue;
-            const before=found.length;
-            pushUnique(hit.raw,hit.geometry);
-            mask(hit.geometry);
-            if(found.length>before){ added=true; if(found.length>=MULTI_MAX_CARDS) break; }
-          }
-          if(!added) break;
+        processed++;
+        // Let Safari paint the captured image and remain responsive during analysis.
+        if ((processed % 3) === 0) {
+          if (cameraStatus) cameraStatus.textContent = `Analyzing QR… ${found.length} found`;
+          await yieldToUi();
         }
       }
     }
 
-    // Stable numbering: left-to-right, then top-to-bottom for near-equal X groups.
     found.sort((a,b)=>{
       const dx=a.geometry.center.x-b.geometry.center.x;
       if(Math.abs(dx)>Math.max(25,canvas.width*0.035)) return dx;
@@ -1081,6 +1027,19 @@
     if (!keepStage) showDetectionStage(!!(combinedCanvas && combinedCanvas.width && combinedCanvas.height));
   }
 
+  function renderCapturedPreview() {
+    if (!combinedCanvas || !canvas || !canvas.width || !canvas.height) return;
+    const maxW=1200;
+    const scale=Math.min(1,maxW/canvas.width);
+    combinedCanvas.width=Math.max(1,Math.round(canvas.width*scale));
+    combinedCanvas.height=Math.max(1,Math.round(canvas.height*scale));
+    const cctx=combinedCanvas.getContext('2d',{alpha:false});
+    cctx.fillStyle='#0f172a';
+    cctx.fillRect(0,0,combinedCanvas.width,combinedCanvas.height);
+    cctx.drawImage(canvas,0,0,combinedCanvas.width,combinedCanvas.height);
+    showDetectionStage(true);
+  }
+
   async function captureFromCamera() {
     if (captureBusy || !cameraVideo || !cameraStream) return;
     captureBusy = true;
@@ -1115,10 +1074,15 @@
     shot.getContext('2d',{alpha:false}).drawImage(cameraVideo,0,0,vw,vh);
 
     // Frozen captured image is the only coordinate system used after this point.
+    // v31.77: display the captured frame BEFORE any QR/OpenCV work.
     lastImage = shot;
     stopCamera(true);
+    resizeAndDrawImage(lastImage);
+    renderCapturedPreview();
+    if (cameraStatus) cameraStatus.textContent = 'Photo captured · Analyzing…';
     captureBusy = false;
     if (captureBtn) captureBtn.disabled = false;
+    await yieldToUi();
     await analyze();
   }
 

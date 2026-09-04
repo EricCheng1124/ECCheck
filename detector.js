@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v31.75-base70-multicard-qr-backup';
+  const VERSION = 'v31.77-base70-multicard-ui-first-qr';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
