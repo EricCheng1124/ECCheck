@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v31.73-base70-multicard-fwhm-gate';
+  const VERSION = 'v31.75-base70-multicard-qr-backup';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -1627,7 +1627,7 @@
       return best;
     }
 
-    const tCont = tRangeValid ? bestRelativeTInRange(dynTRange) : null;
+    let tCont = tRangeValid ? bestRelativeTInRange(dynTRange) : null;
 
     // v31.73：量測 T candidate 的半高全寬 FWHM。
     // 使用 candidate 周圍約 1.2~2.0 mm 的肩部作局部 baseline，
@@ -1677,7 +1677,42 @@
       };
     }
 
-    const tFwhm = tCont ? measureFwhm(tCont.localY) : measureFwhm(NaN);
+    // v31.74：弱 T 不再先被舊的 continuity / color 條件淘汰。
+    // 在 3~6 mm 內保留局部峰，優先挑選具有合理 FWHM 的「線型峰」。
+    // 目的：弱陽性即使顏色很淡，只要形成窄峰仍可進入 T/C 10% 判定；
+    //      寬廣陰影則因 FWHM 過寬而降級。
+    function bestWeakTPeak(range, fallback) {
+      if (!range || range.start > range.end) return fallback || null;
+      const start = clamp(Math.floor(range.start), 1, h-2);
+      const end = clamp(Math.ceil(range.end), start, h-2);
+      let bestPass = null, bestAny = null;
+      for (let ly=start; ly<=end; ly++) {
+        const v = Math.max(0, positive[ly] || 0);
+        const vl = Math.max(0, positive[ly-1] || 0);
+        const vr = Math.max(0, positive[ly+1] || 0);
+        if (v < vl || v < vr) continue; // 只看局部峰頂
+
+        const fw = measureFwhm(ly);
+        const cont = rowLineContinuity(y0 + ly, 'faintT');
+        const strength = bandStrength(ly);
+        const amp = fw.valid ? Math.max(0, fw.amplitude || (fw.peak-fw.baseline)) : 0;
+        const shapeOk = !!(fw.valid && fw.widthMm >= T_FWHM_MIN_MM && fw.widthMm <= T_FWHM_MAX_MM);
+        const shapeBoost = amp * 1.35 +
+          Math.min(2.0, (cont.run || 0) * 0.05) +
+          (cont.ratio || 0) * 0.8 +
+          (cont.redRatio || 0) * 0.8;
+        const item = Object.assign({}, cont, {
+          localY:ly, absY:y0+ly, profileScore:v, bandStrength:strength,
+          totalScore:strength + shapeBoost, preFwhm:fw, preFwhmOk:shapeOk
+        });
+        if (!bestAny || item.totalScore > bestAny.totalScore) bestAny = item;
+        if (shapeOk && (!bestPass || item.totalScore > bestPass.totalScore)) bestPass = item;
+      }
+      return bestPass || bestAny || fallback || null;
+    }
+
+    tCont = tRangeValid ? bestWeakTPeak(dynTRange, tCont) : null;
+    const tFwhm = tCont ? (tCont.preFwhm || measureFwhm(tCont.localY)) : measureFwhm(NaN);
     const tFwhmOk = !!(tFwhm.valid &&
       tFwhm.widthMm >= T_FWHM_MIN_MM && tFwhm.widthMm <= T_FWHM_MAX_MM);
 
@@ -1716,7 +1751,7 @@
       (tCont.contrastAvg || 0) >= 0.10
     );
 
-    const tDetected = !!(cDetected && tCont && tGeometryOk && refinedSeparationOk && tRelativeOk && tWeakHorizontalEvidence && tFwhmOk);
+    const tDetected = !!(cDetected && tCont && tGeometryOk && refinedSeparationOk && tRelativeOk && tFwhmOk);
 
     const tColorOk = tWeakHorizontalEvidence; // 保留既有 debug 欄位相容性
     const cSelected = !!cCont;
@@ -1735,7 +1770,7 @@
     cQ.detected = cDetected;
     tQ.detected = tDetected;
     cQ.reject = !cCont ? 'no-horizontal-line' : !cGeometryOk ? 'outside-middle10-c-band' : !cCont.ok ? 'no-red-continuity' : !cColorOk ? 'weak-color' : 'PASS';
-    tQ.reject = !tCont ? 'no-t-candidate' : !tGeometryOk ? 'outside-middle10-t-band' : !refinedSeparationOk ? 't-gap-outside-3-6mm' : !tRelativeOk ? 'below-10pct-of-c' : !tWeakHorizontalEvidence ? 'no-horizontal-evidence' : !tFwhm.valid ? 'fwhm-no-peak' : !tFwhmOk ? ('fwhm-outside-' + T_FWHM_MIN_MM.toFixed(2) + '-' + T_FWHM_MAX_MM.toFixed(2) + 'mm') : 'PASS';
+    tQ.reject = !tCont ? 'no-t-candidate' : !tGeometryOk ? 'outside-middle10-t-band' : !refinedSeparationOk ? 't-gap-outside-3-6mm' : !tRelativeOk ? 'below-10pct-of-c' : !tFwhm.valid ? 'fwhm-no-peak' : !tFwhmOk ? ('fwhm-outside-' + T_FWHM_MIN_MM.toFixed(2) + '-' + T_FWHM_MAX_MM.toFixed(2) + 'mm') : 'PASS';
 
     let result = 'Invalid';
     if (cDetected && tDetected) result = 'Positive';
@@ -1749,7 +1784,7 @@
     );
 
     return {
-      source:'ct-outer-middle10-v31-73-gap3-6-fwhm-gate',
+      source:'ct-outer-middle10-v31-74-weak-t-peak',
       x0, x1, y0, y1, h,
       zone:{x:x0, y:y0, w:Math.max(1, x1-x0), h:Math.max(1, y1-y0), startRatio:ctStartRatio, endRatio:ctEndRatio, widthRatio:ctEndRatio-ctStartRatio, topThirdY:Math.round(topThirdY), topThirdPadding:topThirdPadding, yLimitedByTopThird:false, coordinateSystem:'cassette-30-10-30', qrSide:qSide, stripCenterX, cExpectedAbsY, tExpectedAbsY, bandHalf, locatorY0, locatorY1, pxPerMm, cassetteMm:CASSETTE_L_MM, stripTopMm:STRIP_TOP_MM, stripHeightMm:STRIP_H_MM, tMinGapMm:T_MIN_GAP_MM, tMaxGapMm:T_MAX_GAP_MM, tFwhmMinMm:T_FWHM_MIN_MM, tFwhmMaxMm:T_FWHM_MAX_MM, tRelativeCRatio:T_RELATIVE_C_RATIO, ctGapMm, cLocatorAbsY:null, cLocatorHasColor:false},
       raw, profile:positive, baseline:bg, rawBaseline, rawMedian, rawMax, pinkMax, darkMax, combinedMax, selectedMode, lumBackground, lumMedian, mean:stat.mean, std:stat.std,
@@ -2600,6 +2635,19 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
         qrRejected.push(c);
       }
     }
+    // v31.75: if image contour gating rejects the only cassette even though QR is valid,
+    // fall back to the physically known QR->70x20 mm cassette geometry.
+    // This does NOT replace a valid contour candidate; it is used only when none survives.
+    let qrGeometryBackupUsed=false;
+    if (!enclosingCands.length && qrTemplates.length && options.qrGeometryBackup !== false) {
+      for (const t of qrTemplates) {
+        t.qrEnclosure={pass:true,reason:'qr-geometry-backup',minClearance:0};
+        t.qrScale={pass:true,reason:'qr-geometry-backup'};
+        t.qrGeometryBackup=true;
+        enclosingCands.push(t);
+      }
+      qrGeometryBackupUsed=true;
+    }
     const scored=[];
     for(const c of enclosingCands.slice(0,18)){
       const fs=candidateFeatureScore(canvas,c,qrCenter);
@@ -2778,6 +2826,8 @@ dbg += 'Raw Candidates: ' + rawCands.length + '<br>';
 dbg += 'QR template candidates: ' + qrTemplates.length + '<br>';
 dbg += 'All Candidates: ' + allCands.length + '<br>';
 dbg += 'QR-enclosing cassette candidates: ' + enclosingCands.length + '<br>';
+if (qrGeometryBackupUsed) dbg += '<b>QR Geometry Backup: USED (70x20 mm from QR)</b><br>';
+else dbg += 'QR Geometry Backup: not needed<br>';
 dbg += 'QR rejected candidates: ' + qrRejected.length + '<br>';
 if (qrRejected.length) dbg += 'QR rejection detail: ' + qrRejected.slice(0,8).map(c=>`${c.method}:${c.qrEnclosure.reason},clear=${c.qrEnclosure.minClearance.toFixed(1)}`).join(' | ') + '<br>';
 dbg += 'Scored Candidates: ' + scored.length + '<br>';
@@ -2890,7 +2940,7 @@ scored.forEach((c,i)=>
 result={
     version:VERSION,
     ok:bestOk,
-    reason:bestOk ? (bestHasRealSample ? best.method+'+third-score-real-feature-gate' : (outerOnlyOk ? best.method+'+outer-only-pass' : (partialMessage ? best.method+'+red-window-outer-pass' : best.method+'+real-feature-gate'))) : failReason,
+    reason:bestOk ? ((best.qrGeometryBackup ? 'qr-geometry-backup+' : '') + (bestHasRealSample ? best.method+'+third-score-real-feature-gate' : (outerOnlyOk ? best.method+'+outer-only-pass' : (partialMessage ? best.method+'+red-window-outer-pass' : best.method+'+real-feature-gate')))) : ((best.qrGeometryBackup ? 'qr-geometry-backup+' : '') + failReason),
     ratio:best.ratio,
     areaRatio:best.rectArea/imgArea,
     fill:best.fill,

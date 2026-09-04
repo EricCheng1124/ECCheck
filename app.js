@@ -63,6 +63,8 @@
   let lastResultText = 'Ready';
   const NTFY_TOPIC = 'ASAPRapidReader';
   let notificationSerial = 0;
+  let lastNotificationKey = '';
+  let lastNotificationAt = 0;
   let gpsLookupToken = 0;
   const advancedLock = document.getElementById('advancedLock');
   const advancedContent = document.getElementById('advancedContent');
@@ -79,7 +81,7 @@
   };
 
   // v31.71: multi-card extension built directly on the stable v31.70 single-card core.
-  const BUILD_VERSION = 'v31.71';
+  const BUILD_VERSION = 'v31.75';
   const MULTI_MAX_CARDS = 8;
 
   function unlock() {
@@ -138,6 +140,14 @@
   }
 
   async function publishNtfyResult(resultText) {
+    const now=Date.now();
+    const key=String(resultText||'')+'|'+String(lastQr.raw||'');
+    // v31.75: prevent duplicate pushes caused by repeated analysis/render callbacks.
+    if (key===lastNotificationKey && now-lastNotificationAt<8000) {
+      if (debugText) debugText.insertAdjacentHTML('afterbegin', 'ntfy: duplicate suppressed<br><hr>');
+      return;
+    }
+    lastNotificationKey=key; lastNotificationAt=now;
     const serial = ++notificationSerial;
     const ts = getTimestampParts();
     const testName = lastQr.item || 'ASAP Rapid Test';
@@ -1369,7 +1379,7 @@ function renderCombinedDetectionView() {
       html += `T Score: ${ct.tPeak.score.toFixed(1)} / detected=${ct.tPeak.detected ? 'YES' : 'NO'}<br>`;
       if (ct.tThreshold !== undefined) html += `C Strength: ${(ct.cStrength||0).toFixed(2)} / T Strength: ${(ct.tStrength||0).toFixed(2)}<br>` +
         `T Threshold (10% C): ${(ct.tThreshold||0).toFixed(2)} / T/C: ${((ct.tcRatio||0)*100).toFixed(1)}%<br>` +
-        `T Gap: ${(ct.zone && Number.isFinite(ct.zone.ctGapMm) ? ct.zone.ctGapMm : 0).toFixed(2)} mm / Allowed: 5.0–6.0 mm<br>` +
+        `T Gap: ${(ct.zone && Number.isFinite(ct.zone.ctGapMm) ? ct.zone.ctGapMm : 0).toFixed(2)} mm / Allowed: 3.0–6.0 mm<br>` +
         `T FWHM (observe only): ${Number.isFinite(ct.tFwhmMm) ? ct.tFwhmMm.toFixed(3) : '-'} mm / ${Number.isFinite(ct.tFwhmPx) ? ct.tFwhmPx.toFixed(2) : '-'} px<br>`;
       if (ct.cPeak.redContinuity) html += `C Red Continuity: ${ct.cPeak.redContinuity.ok ? 'YES' : 'NO'} / ratio=${ct.cPeak.redContinuity.ratio.toFixed(2)}<br>`;
       if (ct.tPeak.redContinuity) html += `T Red Continuity: ${ct.tPeak.redContinuity.ok ? 'YES' : 'NO'} / ratio=${ct.tPeak.redContinuity.ratio.toFixed(2)}<br>`;
@@ -1462,7 +1472,8 @@ function renderCombinedDetectionView() {
         const r=window.AsapOuterDetector.detectOuterFrame(canvas,cropCanvas,Object.assign({},DEFAULT_OPTIONS,{
           qrRequired:true,
           qrCenter:qrCodes[0].geometry.center,
-          qrPoints:Array.isArray(qrCodes[0].geometry.points)?qrCodes[0].geometry.points:[]
+          qrPoints:Array.isArray(qrCodes[0].geometry.points)?qrCodes[0].geometry.points:[],
+          qrGeometryBackup:true
         }));
         setResult(r);
         return;
@@ -1477,7 +1488,8 @@ function renderCombinedDetectionView() {
         const opts=Object.assign({},DEFAULT_OPTIONS,{
           qrRequired:true,
           qrCenter:local.geometry.center,
-          qrPoints:Array.isArray(local.geometry.points)?local.geometry.points:[]
+          qrPoints:Array.isArray(local.geometry.points)?local.geometry.points:[],
+          qrGeometryBackup:true
         });
         let r=window.AsapOuterDetector.detectOuterFrame(local.canvas,tmpCrop,opts);
         r=translateDetectionResult(r,local.offsetX,local.offsetY);
