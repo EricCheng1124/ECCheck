@@ -1,10 +1,11 @@
-# ASAP Check v31.79 — QR 4-Direction Guided OpenCV Outer
+# ASAP Check v31.80
 
-- Based on v31.78 QR-Guided OpenCV Outer.
-- Fixes cassette direction errors caused by treating QR corner ordering as physical cassette TOP.
-- QR is used as scale/axis reference only; Window/slot and S well are NOT required for outer-frame detection.
-- Builds four cassette hypotheses from QR (±u, ±v).
-- Scores each 70×20 mm hypothesis against the real image border/brightness support and chooses the strongest direction.
-- OpenCV contour candidates still use 70×20 mm / QR 14×14 mm geometry validation.
-- Existing UI-first capture, multi-card, QR backup, Weak-T, T gap 3–6 mm, T/C 10%, and FWHM logic are preserved.
-- Debug shows `QR Direction Hypothesis` and `QR Template Image Support`.
+## Changes
+- Multi-card: true QR Voronoi ownership. Each QR/card is isolated at the midpoint to neighboring QR centers before OpenCV outer-frame detection.
+- Single-card: keeps QR-guided OpenCV outer detection.
+- Internal positioning: Window/slot and S-well are retired as positioning gates.
+- After 70x20 mm perspective warp, CT uses a fixed physical ROI: cassette 30~40 mm band, centered on cassette.
+- C is detected inside the fixed CT band; T is searched 3~6 mm below C.
+- Keeps Weak-T, T/C 10%, and FWHM logic.
+
+Goal: outer frame from QR+OpenCV; internal CT from physical cassette coordinates, not re-detected slot geometry.

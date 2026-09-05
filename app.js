@@ -81,7 +81,7 @@
   };
 
   // v31.71: multi-card extension built directly on the stable v31.70 single-card core.
-  const BUILD_VERSION = 'v31.78';
+  const BUILD_VERSION = 'v31.80';
   const MULTI_MAX_CARDS = 8;
 
   function unlock() {
@@ -670,82 +670,71 @@
   function makeLocalDetectionCanvas(original, q, allQr) {
     const side = Math.max(24, qrSideEstimate(q.geometry));
     const c = q.geometry.center;
-    const pts = Array.isArray(q.geometry.points) ? q.geometry.points : [];
 
-    // Multi-card only. Single-card keeps the untouched v31.70 full-image path.
-    let ux = 1, uy = 0, vx = 0, vy = 1;
-    if (pts.length >= 4) {
-      const topMid = { x:(pts[0].x + pts[1].x)/2, y:(pts[0].y + pts[1].y)/2 };
-      const botMid = { x:(pts[2].x + pts[3].x)/2, y:(pts[2].y + pts[3].y)/2 };
-      const rightMid = { x:(pts[1].x + pts[2].x)/2, y:(pts[1].y + pts[2].y)/2 };
-      const leftMid  = { x:(pts[0].x + pts[3].x)/2, y:(pts[0].y + pts[3].y)/2 };
-      let dx = rightMid.x-leftMid.x, dy = rightMid.y-leftMid.y;
-      let n = Math.hypot(dx,dy) || 1; ux = dx/n; uy = dy/n;
-      dx = botMid.x-topMid.x; dy = botMid.y-topMid.y;
-      n = Math.hypot(dx,dy) || 1; vx = dx/n; vy = dy/n;
-    }
-
-    // 70x20 mm cassette, QR ~=14 mm. Width ~=1.43Q.
-    // Keep a narrow corridor instead of the old 11Q square that could include neighbors.
-    let left  = -1.05 * side;
-    let right =  1.05 * side;
-    let top   = -1.15 * side;
-    let bottom=  5.10 * side;
-
-    // Neighbor ownership: cut at the midpoint to adjacent QR centers.
-    // This is only a multi-card ROI guard; detector.js itself is unchanged.
-    (allQr || []).forEach(other => {
-      if (other === q || !other.geometry || !other.geometry.center) return;
-      const dx = other.geometry.center.x - c.x;
-      const dy = other.geometry.center.y - c.y;
-      const du = dx*ux + dy*uy;
-      const dv = dx*vx + dy*vy;
-      const guard = 0.06 * side;
-      if (Math.abs(du) >= Math.abs(dv)) {
-        if (du > 0) right = Math.min(right, du*0.5 - guard);
-        else left = Math.max(left, du*0.5 + guard);
-      } else {
-        if (dv > 0) bottom = Math.min(bottom, dv*0.5 - guard);
-        else top = Math.max(top, dv*0.5 + guard);
+    // v31.80: true Voronoi ownership in IMAGE coordinates.
+    // Each QR owns only pixels closer to itself than to any neighboring QR.
+    // This prevents a dense multi-card ROI from swallowing the next cassette/QR.
+    let poly = [
+      {x:0,y:0}, {x:original.width,y:0},
+      {x:original.width,y:original.height}, {x:0,y:original.height}
+    ];
+    function clipHalfPlane(input, nx, ny, k) {
+      const out=[];
+      if (!input.length) return out;
+      const inside=p => p.x*nx + p.y*ny <= k + 1e-6;
+      const intersect=(a,b)=>{
+        const da=a.x*nx+a.y*ny-k, db=b.x*nx+b.y*ny-k;
+        const t=da/(da-db || 1e-9);
+        return {x:a.x+(b.x-a.x)*t, y:a.y+(b.y-a.y)*t};
+      };
+      for(let i=0;i<input.length;i++){
+        const a=input[i], b=input[(i+1)%input.length];
+        const ia=inside(a), ib=inside(b);
+        if(ia && ib) out.push(b);
+        else if(ia && !ib) out.push(intersect(a,b));
+        else if(!ia && ib){ out.push(intersect(a,b)); out.push(b); }
       }
+      return out;
+    }
+    (allQr||[]).forEach(other=>{
+      if(other===q || !other.geometry?.center) return;
+      const o=other.geometry.center;
+      // |p-c|^2 <= |p-o|^2 -> 2(o-c).p <= |o|^2-|c|^2
+      const nx=2*(o.x-c.x), ny=2*(o.y-c.y);
+      const k=o.x*o.x+o.y*o.y-c.x*c.x-c.y*c.y;
+      poly=clipHalfPlane(poly,nx,ny,k);
     });
 
-    // Never collapse the physical cassette width.
-    const minHalfWidth = 0.76 * side;
-    left = Math.min(left, -minHalfWidth);
-    right = Math.max(right, minHalfWidth);
+    // Also keep work bounded around this QR. Cassette is 70x20 mm, QR ~=14 mm.
+    // Use a generous 6Q square; true Voronoi handles neighboring cards.
+    const bound=[
+      {x:c.x-3.0*side,y:c.y-1.5*side},{x:c.x+3.0*side,y:c.y-1.5*side},
+      {x:c.x+3.0*side,y:c.y+5.5*side},{x:c.x-3.0*side,y:c.y+5.5*side}
+    ];
+    // Clip to the axis-aligned bound with the same half-plane helper.
+    poly=clipHalfPlane(poly, 1,0,c.x+3.0*side);
+    poly=clipHalfPlane(poly,-1,0,-(c.x-3.0*side));
+    poly=clipHalfPlane(poly,0, 1,c.y+5.5*side);
+    poly=clipHalfPlane(poly,0,-1,-(c.y-1.5*side));
+    if(poly.length<3) poly=bound;
 
-    const p = (u,v) => ({x:c.x + ux*u + vx*v, y:c.y + uy*u + vy*v});
-    const corridor = [p(left,top), p(right,top), p(right,bottom), p(left,bottom)];
-    const xs = corridor.map(p=>p.x), ys = corridor.map(p=>p.y);
-    const pad = Math.max(10, Math.round(side*0.12));
-    const x = Math.max(0, Math.floor(Math.min(...xs)-pad));
-    const y = Math.max(0, Math.floor(Math.min(...ys)-pad));
-    const x2 = Math.min(original.width, Math.ceil(Math.max(...xs)+pad));
-    const y2 = Math.min(original.height, Math.ceil(Math.max(...ys)+pad));
-
-    const local = document.createElement('canvas');
-    local.width = Math.max(1, x2-x);
-    local.height = Math.max(1, y2-y);
-    const lctx = local.getContext('2d', {alpha:false});
-    lctx.fillStyle = '#111111';
-    lctx.fillRect(0,0,local.width,local.height);
-    lctx.save();
-    lctx.beginPath();
-    corridor.forEach((pt,i) => {
-      const lx = pt.x-x, ly = pt.y-y;
-      if (!i) lctx.moveTo(lx,ly); else lctx.lineTo(lx,ly);
-    });
-    lctx.closePath();
-    lctx.clip();
-    lctx.drawImage(original, x, y, local.width, local.height, 0, 0, local.width, local.height);
+    const xs=poly.map(p=>p.x), ys=poly.map(p=>p.y);
+    const pad=Math.max(6,Math.round(side*0.08));
+    const x=Math.max(0,Math.floor(Math.min(...xs)-pad));
+    const y=Math.max(0,Math.floor(Math.min(...ys)-pad));
+    const x2=Math.min(original.width,Math.ceil(Math.max(...xs)+pad));
+    const y2=Math.min(original.height,Math.ceil(Math.max(...ys)+pad));
+    const local=document.createElement('canvas');
+    local.width=Math.max(1,x2-x); local.height=Math.max(1,y2-y);
+    const lctx=local.getContext('2d',{alpha:false});
+    lctx.fillStyle='#111'; lctx.fillRect(0,0,local.width,local.height);
+    lctx.save(); lctx.beginPath();
+    poly.forEach((pt,i)=>{ const px=pt.x-x,py=pt.y-y; i?lctx.lineTo(px,py):lctx.moveTo(px,py); });
+    lctx.closePath(); lctx.clip();
+    lctx.drawImage(original,x,y,local.width,local.height,0,0,local.width,local.height);
     lctx.restore();
-
-    const geometry = {
-      center:{x:c.x-x,y:c.y-y},
-      points:(q.geometry.points||[]).map(pt=>({x:pt.x-x,y:pt.y-y}))
-    };
-    return {canvas:local, geometry, offsetX:x, offsetY:y, corridor};
+    const geometry={center:{x:c.x-x,y:c.y-y},points:(q.geometry.points||[]).map(pt=>({x:pt.x-x,y:pt.y-y}))};
+    return {canvas:local,geometry,offsetX:x,offsetY:y,corridor:poly,ownership:'qr-voronoi'};
   }
 
   function translateDetectionResult(r, ox, oy) {

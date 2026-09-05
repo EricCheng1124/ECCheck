@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v31.79-base70-qr-guided-4dir';
+  const VERSION = 'v31.80-qr-voronoi-fixed-ct-roi';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -1222,9 +1222,13 @@
   }
 
   function analyzeCTLines(cropCanvas, win, qrNorm) {
-    if (!cropCanvas || !win) return null;
+    if (!cropCanvas) return null;
     const W = cropCanvas.width;
     const H = cropCanvas.height;
+    // v31.80: after 70x20 perspective warp, CT geometry is physical and fixed.
+    // Window/slot detection is no longer a prerequisite. This synthetic ROI is
+    // centered on the cassette and spans the known 30~40 mm strip band.
+    if (!win) win = {x:W*0.32, y:H*(30/70), w:W*0.36, h:H*(10/70), source:'fixed-physical-ct-roi'};
     const ctx = cropCanvas.getContext('2d', {willReadFrequently:true});
     const data = ctx.getImageData(0,0,W,H).data;
 
@@ -1961,13 +1965,18 @@
     }
     const chosen = makeFixedInternalByDirection(cropCanvas, W, H, directionAnalysis, !!forceQrTop);
 
-    // No physical result window means no conclusive C/T result.
-    const win = chosen.window || null;
-    const sample = chosen.sample || fallbackSampleByWindow(W, H, win, chosen.name);
+    // v31.80: Window/slot and S-well are retired from positioning.
+    // Outer warp defines a 70x20 mm cassette; CT ROI is therefore fixed in mm.
+    const win = {
+      x: Math.round(W*0.32), y: Math.round(H*(30/70)),
+      w: Math.round(W*0.36), h: Math.round(H*(10/70)),
+      source:'fixed-physical-ct-roi'
+    };
+    const sample = null;
     const winCx = win ? win.x + win.w/2 : W*0.50;
     const winCy = win ? win.y + win.h/2 : H*0.40;
-    const sampleCx = sample ? sample.cx : W*0.50;
-    const sampleCy = sample ? sample.cy : H*0.68;
+    const sampleCx = W*0.50;
+    const sampleCy = H*0.72;
     const alignDx = Math.abs(winCx - sampleCx);
     const alignScore = 1 - Math.min(1, alignDx / Math.max(1, W*0.35));
     const windowAboveSample = !!(win && sample && winCy < sampleCy);
@@ -1984,7 +1993,7 @@
       ctAnalysis,
       ctResult: ctAnalysis ? ctAnalysis.result : '-',
       windowSource: win ? win.source : 'not-detected',
-      sampleSource: sample.source,
+      sampleSource: 'retired-v31.80',
       windowCandidates: chosen.windowCandidates,
       sampleCandidates: chosen.sampleCandidates,
       windowDebug: chosen.windowDebug || [],
