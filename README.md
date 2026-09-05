@@ -1,11 +1,13 @@
-# ASAP Check v31.77 Base70 Multi-Card UI-First QR
+# ASAP Check v31.78 QR-Guided OpenCV Outer
 
-Based on v31.76, with QR scanning changed to keep mobile UI responsive.
+此版基於 v31.77，重整大外框判定。
 
-- Captured photo is displayed immediately before QR/OpenCV analysis.
-- Removed exhaustive sliding-window + six-pass masked QR scan.
-- Uses native BarcodeDetector first, then a limited set of overlapping 2/3/4/5-column and 2-row jsQR tiles.
-- QR work yields back to the browser every few tiles so iPhone/Safari can repaint.
-- Keeps v31.75 QR Geometry Backup.
-- Keeps weak-T analysis, C-relative 3–6 mm search, T/C 10%, and FWHM gate unchanged.
-- Multi-card maximum remains 8.
+- QR = 14 x 14 mm，卡匣 = 70 x 20 mm。
+- QR 永遠位於卡匣上方，直接決定卡匣方向。
+- OpenCV contour 必須同時符合 QR 尺度、70/20=3.5 長寬比、方向與 QR 相對位置。
+- 預期：卡匣長邊約 5.0Q、短邊約 1.43Q。
+- Window/slot 與 S well 不再參與大外框判定，也不再畫在 Debug 圖上。
+- 若沒有 OpenCV contour 通過完整 QR 幾何門檻，才使用 QR 70x20 幾何 Backup。
+- Edge Snap 後會再次檢查 QR 幾何，錯誤吸附會被拒絕。
+- C/T 保留 v31.77 Weak-T / T Gap 3~6 mm / T/C 10% / FWHM。
+- 拍照仍採 UI-First，先顯示照片再進行分析。

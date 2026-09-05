@@ -81,7 +81,7 @@
   };
 
   // v31.71: multi-card extension built directly on the stable v31.70 single-card core.
-  const BUILD_VERSION = 'v31.77';
+  const BUILD_VERSION = 'v31.78';
   const MULTI_MAX_CARDS = 8;
 
   function unlock() {
