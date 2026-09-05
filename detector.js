@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v31.78-base70-qr-guided-opencv';
+  const VERSION = 'v31.79-base70-qr-guided-4dir';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -2412,12 +2412,15 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
     const qSide=(un+vn)*0.5;
     ux/=un; uy/=un; vx/=vn; vy/=vn;
 
-    // v31.54：不要再猜 4 個方向。jsQR 的 corner 順序是
-    // TL, TR, BR, BL，因此 TL→BL（v+）就是 QR 圖樣的「下方」。
-    // 本卡匣的 QR 印刷方向固定，卡匣本體永遠位於 QR 的下方；
-    // 直接使用 v+ 可避免背景/螢幕被誤選成卡匣延伸方向。
+    // v31.79：不再把 QR corner ordering 當成卡匣上下方向。
+    // 不同 decoder / QR 本身旋轉時，corner 的語意方向可能造成 90/180 度歧義。
+    // 卡匣一定從 QR 的其中一個邊向外延伸，因此建立四個方向（±u、±v），
+    // 再由原圖的實際外框邊界/亮度對比選出真正的卡匣方向。
     const dirs=[
-      {x:vx,y:vy,name:'qr-dir-body-v+'}
+      {x: vx,y: vy,name:'qr-dir-body-v+'},
+      {x:-vx,y:-vy,name:'qr-dir-body-v-'},
+      {x: ux,y: uy,name:'qr-dir-body-u+'},
+      {x:-ux,y:-uy,name:'qr-dir-body-u-'}
     ];
     // v31.64: use measured physical geometry instead of empirical cassette/Q ratios.
     // Cassette = 70 x 20 mm, QR = 14 x 14 mm.
@@ -2588,6 +2591,57 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
 
 
 
+  // v31.79: score a QR-derived cassette template against the actual image.
+  // Higher score means the predicted 70x20 mm rectangle has real image edges
+  // at its four borders and the inside is reasonably brighter/cleaner than outside.
+  // This is direction-agnostic and is used only to choose among the 4 QR hypotheses.
+  function qrTemplateImageSupport(canvas, pts) {
+    try {
+      if (!canvas || !Array.isArray(pts) || pts.length!==4) return {score:0,edge:0,bright:0};
+      const ctx=canvas.getContext('2d',{willReadFrequently:true});
+      const W=canvas.width,H=canvas.height, im=ctx.getImageData(0,0,W,H).data;
+      const p=orderPoints(pts);
+      if(!p || p.length!==4) return {score:0,edge:0,bright:0};
+      const top={x:(p[0].x+p[1].x)/2,y:(p[0].y+p[1].y)/2};
+      const bot={x:(p[3].x+p[2].x)/2,y:(p[3].y+p[2].y)/2};
+      const left={x:(p[0].x+p[3].x)/2,y:(p[0].y+p[3].y)/2};
+      const right={x:(p[1].x+p[2].x)/2,y:(p[1].y+p[2].y)/2};
+      let vx=bot.x-top.x, vy=bot.y-top.y, ux=right.x-left.x, uy=right.y-left.y;
+      const L=Math.max(1,Math.hypot(vx,vy)), CW=Math.max(1,Math.hypot(ux,uy));
+      vx/=L;vy/=L;ux/=CW;uy/=CW;
+      const cx=(top.x+bot.x)/2, cy=(top.y+bot.y)/2;
+      function lum(x,y){
+        const xx=Math.max(0,Math.min(W-1,Math.round(x))), yy=Math.max(0,Math.min(H-1,Math.round(y)));
+        const i=(yy*W+xx)*4; return .299*im[i]+.587*im[i+1]+.114*im[i+2];
+      }
+      function side(axis,pos,tangentHalf,insideSign){
+        const n=axis==='v'?{x:vx,y:vy}:{x:ux,y:uy};
+        const t=axis==='v'?{x:ux,y:uy}:{x:vx,y:vy};
+        const base={x:cx+n.x*pos,y:cy+n.y*pos};
+        const d=Math.max(2,Math.min(8,Math.round(Math.min(L,CW)*0.025)));
+        let edge=0, bright=0, count=0;
+        for(let k=-10;k<=10;k++){
+          const f=(k/10)*tangentHalf;
+          const bx=base.x+t.x*f, by=base.y+t.y*f;
+          const lm=lum(bx-n.x*d,by-n.y*d), lp=lum(bx+n.x*d,by+n.y*d);
+          edge += Math.abs(lp-lm);
+          bright += insideSign<0 ? (lm-lp) : (lp-lm);
+          count++;
+        }
+        return {edge:count?edge/count:0,bright:count?bright/count:0};
+      }
+      const hL=L/2,hW=CW/2;
+      const a=side('v',-hL,CW*.34,+1), b=side('v',hL,CW*.34,-1),
+            c=side('u',-hW,L*.34,+1), d=side('u',hW,L*.34,-1);
+      const edge=(a.edge+b.edge+c.edge+d.edge)/4;
+      const bright=(a.bright+b.bright+c.bright+d.bright)/4;
+      // Edge is the main evidence. Bright-inside is a small bonus only, since white balance varies.
+      const score=edge*220 + Math.max(-15,Math.min(25,bright))*55;
+      return {score,edge,bright,sides:{top:a,bottom:b,left:c,right:d}};
+    } catch(e) { return {score:0,edge:0,bright:0,error:String(e)}; }
+  }
+
+
   // v31.78: QR-guided OpenCV outer-frame geometry.
   // QR = 14x14 mm, cassette = 70x20 mm, QR is always at the cassette top.
   function qrGuidedOuterMetrics(cand, qrCenter, qrPoints) {
@@ -2685,7 +2739,11 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
       c.featureScore=0; c.featureDetail=null; c.featureAlign=0; c.appearanceDetail=null;
       c.hasRedWindow=false; c.hasRealWindow=false; c.hasRealSample=false;
       const contourBonus=c.qrTemplate ? 0 : 4500;
-      c.totalScore=(guide.score||0) + geo.score*0.35 + contourBonus;
+      // v31.79: for QR fallback templates, choose direction using real image evidence.
+      // A wrong 90/180 degree hypothesis should have much weaker support on the predicted borders.
+      c.templateImageSupport = c.qrTemplate ? qrTemplateImageSupport(canvas,c.pts) : null;
+      const templateSupportBonus = c.qrTemplate && c.templateImageSupport ? c.templateImageSupport.score : 0;
+      c.totalScore=(guide.score||0) + geo.score*0.35 + contourBonus + templateSupportBonus;
       scored.push(c);
     }
     scored.sort((a,b)=>b.totalScore-a.totalScore);
@@ -2793,8 +2851,10 @@ dbg += '<b>Outer Mode: QR-Guided OpenCV (Window/S well NOT used)</b><br>';
       dbg += 'Final Gate: QR geometry=' + (bestOuterGeometryOk ? 'PASS' : 'FAIL') + '<br>';
       if (guideFinal) dbg += `QR Guide: L=${Number(guideFinal.longQ||5).toFixed(2)}Q / W=${Number(guideFinal.shortQ||20/14).toFixed(2)}Q / AR=${Number(guideFinal.aspect||3.5).toFixed(2)} / angle=${Number(guideFinal.angleDiff||0).toFixed(1)}° / QR top=${Number(guideFinal.qrFromTop||0.115).toFixed(3)} / lateral=${Number(guideFinal.lateral||0).toFixed(3)}<br>`;
 dbg += 'UI Status: ' + (bestOk ? 'PASS - QR Guided Outer' : 'FAIL') + '<br>';
-dbg += 'Detection Mode: QR defines TOP / OpenCV finds OUTER / CT uses physical 70mm coordinate<br>';
+dbg += 'Detection Mode: QR gives axis only / 4-direction image check chooses TOP / OpenCV finds OUTER / CT uses physical 70mm coordinate<br>';
 dbg += 'Outer Anchor: ' + (best && best.qrTemplate ? 'QR template fallback' : 'Contour + image edge snap') + '<br>';
+if (best && best.qrTemplate) dbg += '<b>QR Direction Hypothesis: ' + best.method + '</b><br>';
+if (best && best.templateImageSupport) dbg += 'QR Template Image Support: edge=' + Number(best.templateImageSupport.edge||0).toFixed(2) + ' / bright=' + Number(best.templateImageSupport.bright||0).toFixed(2) + ' / score=' + Math.round(best.templateImageSupport.score||0) + '<br>';
 if (best && best.edgeSnap && best.edgeSnap.applied) dbg += 'Edge Snap: APPLIED / L ' + best.edgeSnap.oldL.toFixed(1) + '→' + best.edgeSnap.newL.toFixed(1) + ' / W ' + best.edgeSnap.oldW.toFixed(1) + '→' + best.edgeSnap.newW.toFixed(1) + '<br>';
 else if (best && best.edgeSnap && best.edgeSnap.reason) dbg += 'Edge Snap: rejected (' + best.edgeSnap.reason + ')<br>';
 else dbg += 'Edge Snap: not applied<br>';
@@ -2813,6 +2873,7 @@ scored.forEach((c,i)=>
     `#${i+1}<br>
     Method=${c.method}<br>
     Candidate Score=${Math.round(c.totalScore)} / QRTemplate=${c.qrTemplate ? 'YES':'NO'} / CBonus=${Math.round(c.cLineBonus||0)} / TBonus=${Math.round(c.tLineBonus||0)}<br>
+    QR Direction=${c.method} / TemplateSupport=${c.templateImageSupport ? Math.round(c.templateImageSupport.score||0) : 0}<br>
     Outer Score=${Math.round(c.outerScore||0)}<br>
     Feature Score=${Math.round(c.featureScore||0)}<br>
     No Real S Penalty=${Math.round(c.noRealSamplePenalty||0)}<br>
