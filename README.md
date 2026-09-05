@@ -1,11 +1,17 @@
-# ASAP Check v31.80
+# ASAP Check v31.81
 
-## Changes
-- Multi-card: true QR Voronoi ownership. Each QR/card is isolated at the midpoint to neighboring QR centers before OpenCV outer-frame detection.
-- Single-card: keeps QR-guided OpenCV outer detection.
-- Internal positioning: Window/slot and S-well are retired as positioning gates.
-- After 70x20 mm perspective warp, CT uses a fixed physical ROI: cassette 30~40 mm band, centered on cassette.
-- C is detected inside the fixed CT band; T is searched 3~6 mm below C.
-- Keeps Weak-T, T/C 10%, and FWHM logic.
+## Architecture
+- QR is used for data and orientation only. Manual QR sticker position is NOT used for precise cassette geometry or C/T coordinates.
+- OpenCV outer contour/minAreaRect supplies cassette center, precise angle, width and length.
+- QR logical corner orientation resolves only the 180-degree TOP/BOTTOM ambiguity.
+- Multi-card runs OpenCV on the full captured image for each QR. A candidate must contain its own QR and may not contain another detected QR center. Voronoi cropping is no longer used.
+- QR geometry backup is disabled so a manually shifted QR cannot fabricate a wrong 70x20 cassette frame.
+- After perspective warp, C/T coordinates are derived only from the 70 mm outer frame.
+- C search physical range: 24~31 mm from cassette TOP.
+- T search: 3~6 mm below the detected C line.
+- Weak-T, T/C >= 10%, and FWHM gate are preserved.
 
-Goal: outer frame from QR+OpenCV; internal CT from physical cassette coordinates, not re-detected slot geometry.
+## Debug
+- Cyan: broad outer-based CT analysis band (24~37.5 mm).
+- Green: C search region (24~31 mm).
+- Purple: dynamic T search region (actual C + 3~6 mm).

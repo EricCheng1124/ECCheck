@@ -81,7 +81,7 @@
   };
 
   // v31.71: multi-card extension built directly on the stable v31.70 single-card core.
-  const BUILD_VERSION = 'v31.80';
+  const BUILD_VERSION = 'v31.81';
   const MULTI_MAX_CARDS = 8;
 
   function unlock() {
@@ -751,10 +751,16 @@
 
   async function detectAllQrCodesFromCanvas() {
     const found=[];
-    const pushUnique=(raw,geometry)=>{
+    const pushUnique=(raw,geometry,source)=>{
       if (!geometry || !geometry.center) return false;
-      if (found.some(x=>isSameQr(x.geometry,geometry))) return false;
-      found.push({raw:String(raw||''),geometry});
+      const same=found.find(x=>isSameQr(x.geometry,geometry));
+      if (same) {
+        // jsQR exposes logical QR corners (finder-pattern orientation), which we need
+        // to resolve cassette 180-degree direction. Prefer it over native box corners.
+        if (source==='jsqr' && same.source!=='jsqr') { same.geometry=geometry; same.raw=String(raw||same.raw||''); same.source='jsqr'; }
+        return false;
+      }
+      found.push({raw:String(raw||''),geometry,source:source||'unknown'});
       return true;
     };
 
@@ -764,7 +770,7 @@
         const detector = nativeQrDetector || new window.BarcodeDetector({formats:['qr_code']});
         nativeQrDetector = detector;
         const codes = await detector.detect(canvas);
-        (codes||[]).forEach(code=>pushUnique(code.rawValue, qrGeometryFromNative(code)));
+        (codes||[]).forEach(code=>pushUnique(code.rawValue, qrGeometryFromNative(code),'native'));
       } catch (_) {}
       await yieldToUi();
     }
@@ -799,7 +805,7 @@
       for (const a of regions) {
         if (found.length>=MULTI_MAX_CARDS) break;
         const hit=decodeQrRegionFast(ctx,a,900);
-        if (hit) pushUnique(hit.raw,hit.geometry);
+        if (hit) pushUnique(hit.raw,hit.geometry,'jsqr');
         processed++;
         // Let Safari paint the captured image and remain responsive during analysis.
         if ((processed % 3) === 0) {
@@ -1478,26 +1484,30 @@ function renderCombinedDetectionView() {
           qrRequired:true,
           qrCenter:qrCodes[0].geometry.center,
           qrPoints:Array.isArray(qrCodes[0].geometry.points)?qrCodes[0].geometry.points:[],
-          qrGeometryBackup:true
+          qrGeometryBackup:false
         }));
         setResult(r);
         return;
       }
 
-      // MULTI CARD: same detector.js, but each QR is isolated before calling it.
+      // v31.81 MULTI CARD: do NOT crop/Voronoi the source before OpenCV.
+      // OpenCV sees the full image for every card; each outer candidate must contain
+      // its own QR and must NOT contain another detected QR center. This avoids
+      // cutting a rotated/overlapping cassette in half while still preventing one
+      // contour from swallowing two cards.
       const original=cloneCanvas(canvas);
       const detected=[];
       for (const q of qrCodes) {
-        const local=makeLocalDetectionCanvas(original,q,qrCodes);
         const tmpCrop=document.createElement('canvas');
+        const otherQrCenters=qrCodes.filter(o=>o!==q && o.geometry?.center).map(o=>o.geometry.center);
         const opts=Object.assign({},DEFAULT_OPTIONS,{
           qrRequired:true,
-          qrCenter:local.geometry.center,
-          qrPoints:Array.isArray(local.geometry.points)?local.geometry.points:[],
-          qrGeometryBackup:true
+          qrCenter:q.geometry.center,
+          qrPoints:Array.isArray(q.geometry.points)?q.geometry.points:[],
+          otherQrCenters,
+          qrGeometryBackup:false
         });
-        let r=window.AsapOuterDetector.detectOuterFrame(local.canvas,tmpCrop,opts);
-        r=translateDetectionResult(r,local.offsetX,local.offsetY);
+        let r=window.AsapOuterDetector.detectOuterFrame(original,tmpCrop,opts);
         if (!r || !r.rect) continue;
         const debugSaysPass=!!(r.debug&&r.debug.indexOf('Final Gate: outer=PASS / trustedFeature=PASS')>=0);
         const ok=!!(r.ok||debugSaysPass);

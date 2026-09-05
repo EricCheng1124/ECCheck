@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v31.80-qr-voronoi-fixed-ct-roi';
+  const VERSION = 'v31.81-outer-angle-qr-orientation-physical-ct';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -104,41 +104,58 @@
     src.delete(); srcTri.delete(); dstTri.delete(); M.delete(); dst.delete();
   }
 
-  function orientPointsWithQr(pts, qrCenter) {
+  function orientPointsWithQr(pts, qrCenter, qrPoints) {
     const p = pts.slice();
-    if (!qrCenter || p.length !== 4) return { points:orderPoints(p), applied:false, rotated180:false };
+    if (p.length !== 4) return { points:orderPoints(p), applied:false, rotated180:false };
 
-    // The two shortest disjoint corner pairs are the cassette's short ends.
-    // The end nearest the QR is always the physical top of the cassette.
-    const pairs = [];
-    for (let i=0;i<4;i++) for (let j=i+1;j<4;j++) pairs.push({i,j,d:dist(p[i],p[j])});
+    // Find the two short ends from the OUTER frame itself. This gives the precise
+    // cassette long-axis angle independent of the QR sticker position.
+    const pairs=[];
+    for(let i=0;i<4;i++) for(let j=i+1;j<4;j++) pairs.push({i,j,d:dist(p[i],p[j])});
     pairs.sort((a,b)=>a.d-b.d);
-    const endA = pairs[0];
-    const endB = pairs.find(q => q.i!==endA.i && q.i!==endA.j && q.j!==endA.i && q.j!==endA.j);
-    if (!endB) return { points:orderPoints(p), applied:false, rotated180:false };
+    const endA=pairs[0];
+    const endB=pairs.find(q=>q.i!==endA.i&&q.i!==endA.j&&q.j!==endA.i&&q.j!==endA.j);
+    if(!endB) return {points:orderPoints(p),applied:false,rotated180:false};
+    const centerOf=pair=>({x:(p[pair.i].x+p[pair.j].x)/2,y:(p[pair.i].y+p[pair.j].y)/2});
+    const cA=centerOf(endA), cB=centerOf(endB);
 
-    const centerOf = pair => ({x:(p[pair.i].x+p[pair.j].x)/2, y:(p[pair.i].y+p[pair.j].y)/2});
-    const centerA = centerOf(endA), centerB = centerOf(endB);
-    const topPair = dist(qrCenter,centerA) <= dist(qrCenter,centerB) ? endA : endB;
-    const bottomPair = topPair === endA ? endB : endA;
-    const topCenter = centerOf(topPair), bottomCenter = centerOf(bottomPair);
+    // QR is manually positioned, so QR CENTER is not used for precise geometry.
+    // QR CORNER ORIENTATION is used only to resolve the 180-degree ambiguity.
+    // Decoder corner order gives a QR local down vector (top edge -> bottom edge).
+    let qdx=0,qdy=0,haveQrDir=false;
+    if(Array.isArray(qrPoints) && qrPoints.length>=4){
+      const q=qrPoints.slice(0,4);
+      qdx=((q[3].x-q[0].x)+(q[2].x-q[1].x))*0.5;
+      qdy=((q[3].y-q[0].y)+(q[2].y-q[1].y))*0.5;
+      const n=Math.hypot(qdx,qdy);
+      if(n>3){qdx/=n;qdy/=n;haveQrDir=true;}
+    }
 
-    // Device axis points from QR/top toward the sample-well/bottom.
-    const vx = bottomCenter.x-topCenter.x, vy = bottomCenter.y-topCenter.y;
-    const right = {x:vy, y:-vx};
-    const projection = point => point.x*right.x + point.y*right.y;
-    const sortLeftRight = pair => [p[pair.i],p[pair.j]].sort((a,b)=>projection(a)-projection(b));
-    const topLR = sortLeftRight(topPair);
-    const bottomLR = sortLeftRight(bottomPair);
-    const axisAngle = Math.atan2(vy,vx)*180/Math.PI;
+    let topPair=endA,bottomPair=endB;
+    let topCenter=cA,bottomCenter=cB;
+    if(haveQrDir){
+      const abx=cB.x-cA.x, aby=cB.y-cA.y;
+      // Choose top->bottom outer direction that agrees with QR's decoded down direction.
+      if(abx*qdx + aby*qdy < 0){
+        topPair=endB; bottomPair=endA; topCenter=cB; bottomCenter=cA;
+      }
+    } else if(qrCenter){
+      // Fallback only when corner orientation is unavailable.
+      if(dist(qrCenter,cB) < dist(qrCenter,cA)){
+        topPair=endB; bottomPair=endA; topCenter=cB; bottomCenter=cA;
+      }
+    }
+
+    const vx=bottomCenter.x-topCenter.x, vy=bottomCenter.y-topCenter.y;
+    const right={x:vy,y:-vx};
+    const projection=pt=>pt.x*right.x+pt.y*right.y;
+    const sortLR=pair=>[p[pair.i],p[pair.j]].sort((a,b)=>projection(a)-projection(b));
+    const topLR=sortLR(topPair), bottomLR=sortLR(bottomPair);
+    const axisAngle=Math.atan2(vy,vx)*180/Math.PI;
     return {
       points:[topLR[0],topLR[1],bottomLR[1],bottomLR[0]],
-      applied:true,
-      rotated180:false,
-      axisAngle,
-      correctionAngle:90-axisAngle,
-      topCenter,
-      bottomCenter
+      applied:true, rotated180:false, axisAngle, correctionAngle:90-axisAngle,
+      topCenter,bottomCenter, orientationSource:haveQrDir?'qr-corner-orientation':'qr-center-fallback'
     };
   }
 
@@ -1225,10 +1242,10 @@
     if (!cropCanvas) return null;
     const W = cropCanvas.width;
     const H = cropCanvas.height;
-    // v31.80: after 70x20 perspective warp, CT geometry is physical and fixed.
+    // v31.81: after 70x20 perspective warp, CT geometry is derived from the OUTER frame only.
     // Window/slot detection is no longer a prerequisite. This synthetic ROI is
-    // centered on the cassette and spans the known 30~40 mm strip band.
-    if (!win) win = {x:W*0.32, y:H*(30/70), w:W*0.36, h:H*(10/70), source:'fixed-physical-ct-roi'};
+    // centered on the cassette and uses a physical 24~37.5 mm analysis band; C is restricted to 24~31 mm.
+    if (!win) win = {x:W*0.32, y:H*(24/70), w:W*0.36, h:H*(13.5/70), source:'outer-physical-ct-roi'};
     const ctx = cropCanvas.getContext('2d', {willReadFrequently:true});
     const data = ctx.getImageData(0,0,W,H).data;
 
@@ -1418,8 +1435,13 @@
     // 卡匣實體長 70 mm。由上邊緣往下 30 mm、由下邊緣往上 30 mm，
     // 中間固定 10 mm 就是唯一允許分析的試紙區。
     const CASSETTE_L_MM = 70.0;
-    const STRIP_TOP_MM = 30.0;
-    const STRIP_H_MM = 10.0;
+    // v31.81: C/T geometry is referenced ONLY to the detected 70 mm OUTER frame.
+    // The old 30~40 mm window sat too low in real photos. Use a broader physical
+    // analysis band, but restrict C to 24~31 mm; T remains relative to actual C.
+    const STRIP_TOP_MM = 24.0;
+    const STRIP_H_MM = 13.5;
+    const C_SEARCH_TOP_MM = 24.0;
+    const C_SEARCH_BOTTOM_MM = 31.0;
     const T_MIN_GAP_MM = 3.0;
     const T_MAX_GAP_MM = 6.0;
     const T_FWHM_MIN_MM = 0.15; // 放寬：排除單像素/極尖雜訊
@@ -1440,18 +1462,15 @@
 
     // C 位於試紙區上半部；T 位於 C 下方。兩區保留重疊容差，
     // 但最終仍要求 T 在 refine 後確實位於 C 下方且有最小間距。
-    const cExpectedLocalY = h * 0.25;
-    let tExpectedLocalY = h * 0.68;
+    const cExpectedLocalY = ((C_SEARCH_TOP_MM + C_SEARCH_BOTTOM_MM)*0.5 - STRIP_TOP_MM) * pxPerMm;
+    let tExpectedLocalY = cExpectedLocalY + 4.5 * pxPerMm;
     const cExpectedAbsY = y0 + cExpectedLocalY;
     let tExpectedAbsY = y0 + tExpectedLocalY;
     const cSearchRange = {
-      start: 0,
-      end: clamp(Math.ceil(h * 0.58), 1, h-1)
+      start: clamp(Math.floor((C_SEARCH_TOP_MM-STRIP_TOP_MM)*pxPerMm),0,h-1),
+      end: clamp(Math.ceil((C_SEARCH_BOTTOM_MM-STRIP_TOP_MM)*pxPerMm),1,h-1)
     };
-    let tSearchRange = {
-      start: clamp(Math.floor(h * 0.28), 0, h-1),
-      end: h-1
-    };
+    let tSearchRange = { start:0, end:h-1 };
     const bandHalf = h * 0.58;
     const locatorY0 = y0, locatorY1 = y1;
     const cLocatorBest = null, cLocatorHasColor = false;
@@ -1788,9 +1807,9 @@
     );
 
     return {
-      source:'ct-outer-middle10-v31-74-weak-t-peak',
+      source:'ct-outer-physical-v31-81',
       x0, x1, y0, y1, h,
-      zone:{x:x0, y:y0, w:Math.max(1, x1-x0), h:Math.max(1, y1-y0), startRatio:ctStartRatio, endRatio:ctEndRatio, widthRatio:ctEndRatio-ctStartRatio, topThirdY:Math.round(topThirdY), topThirdPadding:topThirdPadding, yLimitedByTopThird:false, coordinateSystem:'cassette-30-10-30', qrSide:qSide, stripCenterX, cExpectedAbsY, tExpectedAbsY, bandHalf, locatorY0, locatorY1, pxPerMm, cassetteMm:CASSETTE_L_MM, stripTopMm:STRIP_TOP_MM, stripHeightMm:STRIP_H_MM, tMinGapMm:T_MIN_GAP_MM, tMaxGapMm:T_MAX_GAP_MM, tFwhmMinMm:T_FWHM_MIN_MM, tFwhmMaxMm:T_FWHM_MAX_MM, tRelativeCRatio:T_RELATIVE_C_RATIO, ctGapMm, cLocatorAbsY:null, cLocatorHasColor:false},
+      zone:{x:x0, y:y0, w:Math.max(1, x1-x0), h:Math.max(1, y1-y0), startRatio:ctStartRatio, endRatio:ctEndRatio, widthRatio:ctEndRatio-ctStartRatio, topThirdY:Math.round(topThirdY), topThirdPadding:topThirdPadding, yLimitedByTopThird:false, coordinateSystem:'outer-70mm-physical', qrSide:qSide, stripCenterX, cExpectedAbsY, tExpectedAbsY, bandHalf, locatorY0, locatorY1, pxPerMm, cassetteMm:CASSETTE_L_MM, stripTopMm:STRIP_TOP_MM, stripHeightMm:STRIP_H_MM, cSearchTopMm:C_SEARCH_TOP_MM, cSearchBottomMm:C_SEARCH_BOTTOM_MM, tMinGapMm:T_MIN_GAP_MM, tMaxGapMm:T_MAX_GAP_MM, tFwhmMinMm:T_FWHM_MIN_MM, tFwhmMaxMm:T_FWHM_MAX_MM, tRelativeCRatio:T_RELATIVE_C_RATIO, ctGapMm, cLocatorAbsY:null, cLocatorHasColor:false},
       raw, profile:positive, baseline:bg, rawBaseline, rawMedian, rawMax, pinkMax, darkMax, combinedMax, selectedMode, lumBackground, lumMedian, mean:stat.mean, std:stat.std,
       maxScore, threshold, tThreshold, tcRatio, cStrength, tStrength, tRelativeThreshold, tRelativeRatio:T_RELATIVE_C_RATIO, tWeakHorizontalEvidence,
       tFwhmMm:tFwhm.widthMm, tFwhmPx:tFwhm.widthPx, tFwhmValid:tFwhm.valid, tFwhmOk, tFwhmMinMm:T_FWHM_MIN_MM, tFwhmMaxMm:T_FWHM_MAX_MM, tFwhmPeak:tFwhm.peak, tFwhmBaseline:tFwhm.baseline, tFwhmHalfLevel:tFwhm.halfLevel,
@@ -1942,7 +1961,17 @@
       ctx.lineWidth = Math.max(1.5, W/210);
       ctx.strokeRect(z.x, z.y, z.w, z.h);
       ctx.font = `${Math.max(8, Math.round(W/34))}px sans-serif`;
-      ctx.fillText('CT zone', z.x + 2, Math.max(10, z.y - 3));
+      ctx.fillText('Outer-based CT', z.x + 2, Math.max(10, z.y - 3));
+      if (f.ctAnalysis.cRange) {
+        const cy0=f.ctAnalysis.y0+f.ctAnalysis.cRange.start, cy1=f.ctAnalysis.y0+f.ctAnalysis.cRange.end;
+        ctx.strokeStyle='rgba(34,197,94,0.98)'; ctx.strokeRect(z.x,cy0,z.w,Math.max(1,cy1-cy0));
+        ctx.fillStyle='rgba(34,197,94,0.98)'; ctx.fillText('C search',z.x+2,Math.max(10,cy0-3));
+      }
+      if (f.ctAnalysis.tRange) {
+        const ty0=f.ctAnalysis.y0+f.ctAnalysis.tRange.start, ty1=f.ctAnalysis.y0+f.ctAnalysis.tRange.end;
+        ctx.strokeStyle='rgba(168,85,247,0.98)'; ctx.strokeRect(z.x,ty0,z.w,Math.max(1,ty1-ty0));
+        ctx.fillStyle='rgba(168,85,247,0.98)'; ctx.fillText('T search',z.x+2,Math.max(10,ty0-3));
+      }
       ctx.restore();
     }
 
@@ -1968,7 +1997,7 @@
     // v31.80: Window/slot and S-well are retired from positioning.
     // Outer warp defines a 70x20 mm cassette; CT ROI is therefore fixed in mm.
     const win = {
-      x: Math.round(W*0.32), y: Math.round(H*(30/70)),
+      x: Math.round(W*0.32), y: Math.round(H*(24/70)),
       w: Math.round(W*0.36), h: Math.round(H*(10/70)),
       source:'fixed-physical-ct-roi'
     };
@@ -2654,48 +2683,41 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
   // v31.78: QR-guided OpenCV outer-frame geometry.
   // QR = 14x14 mm, cassette = 70x20 mm, QR is always at the cassette top.
   function qrGuidedOuterMetrics(cand, qrCenter, qrPoints) {
-    if (!cand || !qrCenter || !Array.isArray(qrPoints) || qrPoints.length < 4)
+    if (!cand || !Array.isArray(qrPoints) || qrPoints.length < 4)
       return {pass:false, reason:'qr-geometry-missing', score:0};
     const qp=qrPoints.slice(0,4);
     const qEdges=[];
-    for(let i=0;i<4;i++) qEdges.push(dist(qp[i], qp[(i+1)%4]));
+    for(let i=0;i<4;i++) qEdges.push(dist(qp[i],qp[(i+1)%4]));
     const qSide=qEdges.reduce((a,b)=>a+b,0)/4;
-    if (!Number.isFinite(qSide) || qSide < 4) return {pass:false,reason:'qr-side-invalid',score:0};
+    if(!Number.isFinite(qSide)||qSide<4) return {pass:false,reason:'qr-side-invalid',score:0};
 
-    const op=orientPointsWithQr(cand.pts, qrCenter);
-    const pts=op && op.points ? op.points : orderPoints(cand.pts||[]);
-    if (!pts || pts.length!==4) return {pass:false,reason:'outer-points-invalid',score:0};
+    const op=orientPointsWithQr(cand.pts,qrCenter,qrPoints);
+    const pts=op?.points||orderPoints(cand.pts||[]);
+    if(pts.length!==4) return {pass:false,reason:'outer-points-invalid',score:0};
     const top={x:(pts[0].x+pts[1].x)/2,y:(pts[0].y+pts[1].y)/2};
     const bottom={x:(pts[3].x+pts[2].x)/2,y:(pts[3].y+pts[2].y)/2};
     const left={x:(pts[0].x+pts[3].x)/2,y:(pts[0].y+pts[3].y)/2};
     const right={x:(pts[1].x+pts[2].x)/2,y:(pts[1].y+pts[2].y)/2};
-    let lx=bottom.x-top.x, ly=bottom.y-top.y;
-    let wx=right.x-left.x, wy=right.y-left.y;
-    const L=Math.max(1,Math.hypot(lx,ly)), W=Math.max(1,Math.hypot(wx,wy));
-    lx/=L; ly/=L; wx/=W; wy/=W;
+    let lx=bottom.x-top.x,ly=bottom.y-top.y;
+    let wx=right.x-left.x,wy=right.y-left.y;
+    const L=Math.max(1,Math.hypot(lx,ly)),W=Math.max(1,Math.hypot(wx,wy));
+    lx/=L;ly/=L;wx/=W;wy/=W;
 
+    // QR gives SCALE and ORIENTATION only. Manual sticker POSITION is deliberately
+    // not part of the score/gate anymore.
     let qdx=((qp[3].x-qp[0].x)+(qp[2].x-qp[1].x))*0.5;
     let qdy=((qp[3].y-qp[0].y)+(qp[2].y-qp[1].y))*0.5;
-    const qdn=Math.max(1,Math.hypot(qdx,qdy)); qdx/=qdn; qdy/=qdn;
+    const qdn=Math.max(1,Math.hypot(qdx,qdy));qdx/=qdn;qdy/=qdn;
     const dot=clamp(lx*qdx+ly*qdy,-1,1);
     const angleDiff=Math.acos(Math.abs(dot))*180/Math.PI;
-
     const longQ=L/qSide, shortQ=W/qSide, aspect=L/W;
-    const qrFromTop=((qrCenter.x-top.x)*lx+(qrCenter.y-top.y)*ly)/L;
-    const mid={x:(top.x+bottom.x)/2,y:(top.y+bottom.y)/2};
-    const lateral=((qrCenter.x-mid.x)*wx+(qrCenter.y-mid.y)*wy)/W;
     const eL=Math.abs(longQ-5.0)/5.0;
     const eW=Math.abs(shortQ-(20/14))/(20/14);
     const eA=Math.abs(aspect-3.5)/3.5;
-    const eY=Math.abs(qrFromTop-0.115)/0.115;
-    const eX=Math.abs(lateral);
-    const pass = longQ>=4.05 && longQ<=6.15 && shortQ>=1.12 && shortQ<=1.92 &&
-      aspect>=2.85 && aspect<=4.25 && angleDiff<=18 &&
-      qrFromTop>=0.035 && qrFromTop<=0.24 && eX<=0.24;
-    const score=Math.max(0, 30000 - eL*12000 - eW*10000 - eA*7000 -
-      Math.min(1,eY)*3500 - Math.min(1,eX/0.24)*2500 - Math.min(1,angleDiff/18)*2500);
-    return {pass,score,qSide,longQ,shortQ,aspect,angleDiff,qrFromTop,lateral,
-      reason:pass?'PASS':`QR-geometry mismatch L=${longQ.toFixed(2)}Q W=${shortQ.toFixed(2)}Q AR=${aspect.toFixed(2)} angle=${angleDiff.toFixed(1)} top=${qrFromTop.toFixed(3)} lat=${lateral.toFixed(3)}`};
+    const pass=longQ>=3.9&&longQ<=6.35&&shortQ>=1.05&&shortQ<=2.0&&aspect>=2.8&&aspect<=4.35&&angleDiff<=20;
+    const score=Math.max(0,30000-eL*11000-eW*9000-eA*7000-Math.min(1,angleDiff/20)*3000);
+    return {pass,score,qSide,longQ,shortQ,aspect,angleDiff,qrFromTop:null,lateral:null,
+      reason:pass?'PASS':`QR scale/orientation mismatch L=${longQ.toFixed(2)}Q W=${shortQ.toFixed(2)}Q AR=${aspect.toFixed(2)} angle=${angleDiff.toFixed(1)}`};
   }
 
   function detectOuterFrame(canvas, cropCanvas, options) {
@@ -2714,7 +2736,10 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
     for (const c of rawCands) {
       c.qrEnclosure=qrEnclosureMetrics(c,qrCenter,qrPoints);
       c.qrGuide=qrGuidedOuterMetrics(c,qrCenter,qrPoints);
-      if (c.qrEnclosure.pass && c.qrGuide.pass) rawQualified.push(c);
+      const poly=orderPoints(c.pts||[]);
+      const otherInside=(options.otherQrCenters||[]).filter(Boolean).some(pt=>pointInPolygon(pt,poly));
+      c.otherQrInside=otherInside;
+      if (c.qrEnclosure.pass && c.qrGuide.pass && !otherInside) rawQualified.push(c);
     }
     const allCands=rawQualified.slice();
     const qrRejected=[];
@@ -2732,6 +2757,8 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
     let qrGeometryBackupUsed=false;
     if (!enclosingCands.length && qrTemplates.length && options.qrGeometryBackup !== false) {
       for (const t of qrTemplates) {
+        const otherInside=(options.otherQrCenters||[]).filter(Boolean).some(pt=>pointInPolygon(pt,orderPoints(t.pts||[])));
+        if(otherInside) continue;
         t.qrEnclosure={pass:true,reason:'qr-geometry-backup',minClearance:0};
         t.qrScale={pass:true,reason:'qr-geometry-backup'};
         t.qrGuide={pass:true,score:16000,reason:'qr-template-backup',longQ:5.0,shortQ:20/14,aspect:3.5,angleDiff:0,qrFromTop:0.115,lateral:0};
@@ -2779,7 +2806,7 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
     let result;
     if(best){
       let features=null;
-      const qrOrientation = orientPointsWithQr(best.pts, options.qrCenter || null);
+      const qrOrientation = orientPointsWithQr(best.pts, options.qrCenter || null, options.qrPoints || []);
 
       // v31.62：先完成透視校正，再建立 QR local coordinate。
       // 若最終外框來自 QR template，標準化後 QR 的位置/尺寸直接由已知幾何常數決定，
@@ -2882,7 +2909,7 @@ scored.forEach((c,i)=>
     `#${i+1}<br>
     Method=${c.method}<br>
     Candidate Score=${Math.round(c.totalScore)} / QRTemplate=${c.qrTemplate ? 'YES':'NO'} / CBonus=${Math.round(c.cLineBonus||0)} / TBonus=${Math.round(c.tLineBonus||0)}<br>
-    QR Direction=${c.method} / TemplateSupport=${c.templateImageSupport ? Math.round(c.templateImageSupport.score||0) : 0}<br>
+    QR/Outer Direction=${c.method} / OtherQRInside=${c.otherQrInside ? 'YES':'NO'} / TemplateSupport=${c.templateImageSupport ? Math.round(c.templateImageSupport.score||0) : 0}<br>
     Outer Score=${Math.round(c.outerScore||0)}<br>
     Feature Score=${Math.round(c.featureScore||0)}<br>
     No Real S Penalty=${Math.round(c.noRealSamplePenalty||0)}<br>
