@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v31.86-top-anchor-widthx3.5-warp';
+  const VERSION = 'v31.87-long-edge-first-top-recovery';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -2522,8 +2522,11 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
   function refineOuterByImageEdges(canvas, pts, qrCenter) {
     try {
       if (!canvas || !Array.isArray(pts) || pts.length !== 4) return null;
+
+      // QR is used only to resolve which end is TOP. Its sticker position is not
+      // used for the cassette dimensions.
       const oriented = orientPointsWithQr(pts, qrCenter || null);
-      const p = oriented.points; // TL,TR,BR,BL；QR 端應在 top
+      const p = oriented.points; // TL,TR,BR,BL with QR end at TOP
       if (!p || p.length !== 4) return null;
 
       const ctx = canvas.getContext('2d', {willReadFrequently:true});
@@ -2536,6 +2539,7 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
       const rightMid={x:(p[1].x+p[2].x)/2,y:(p[1].y+p[2].y)/2};
       const cx=(topMid.x+botMid.x)/2, cy=(topMid.y+botMid.y)/2;
 
+      // v = cassette long-axis (TOP -> BOTTOM), u = cassette width-axis.
       let vx=botMid.x-topMid.x, vy=botMid.y-topMid.y;
       let ux=rightMid.x-leftMid.x, uy=rightMid.y-leftMid.y;
       const L=Math.max(1,Math.hypot(vx,vy)), CW=Math.max(1,Math.hypot(ux,uy));
@@ -2543,19 +2547,26 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
       const halfL=L/2, halfW=CW/2;
 
       function rgbAt(x,y){
-        const xx=Math.max(0,Math.min(W-1,Math.round(x))), yy=Math.max(0,Math.min(H-1,Math.round(y)));
+        const xx=Math.max(0,Math.min(W-1,Math.round(x)));
+        const yy=Math.max(0,Math.min(H-1,Math.round(y)));
         const i=(yy*W+xx)*4;
         return [im[i],im[i+1],im[i+2]];
       }
+
+      function lumAt(x,y){
+        const c=rgbAt(x,y);
+        return .299*c[0]+.587*c[1]+.114*c[2];
+      }
+
+      // Generic border score used for the two long sides.
       function sideScore(axis, pos, tangentHalf, insideSign){
-        // 比較邊界內外約 2~4px 的 RGB 差；同時偏好「卡匣內側較亮」。
         const normal = axis==='v' ? {x:vx,y:vy} : {x:ux,y:uy};
         const tangent = axis==='v' ? {x:ux,y:uy} : {x:vx,y:vy};
         const base={x:cx+normal.x*pos,y:cy+normal.y*pos};
-        const d=Math.max(2,Math.min(5,Math.round(Math.min(CW,L)*0.018)));
+        const d=Math.max(2,Math.min(6,Math.round(Math.min(CW,L)*0.020)));
         let diff=0, bright=0, n=0;
-        for(let k=-12;k<=12;k++){
-          const t=(k/12)*tangentHalf;
+        for(let k=-16;k<=16;k++){
+          const t=(k/16)*tangentHalf;
           const bx=base.x+tangent.x*t, by=base.y+tangent.y*t;
           const a=rgbAt(bx-normal.x*d, by-normal.y*d);
           const b=rgbAt(bx+normal.x*d, by+normal.y*d);
@@ -2563,76 +2574,133 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
           diff += Math.sqrt(dr*dr+dg*dg+db*db);
           const la=.299*a[0]+.587*a[1]+.114*a[2];
           const lb=.299*b[0]+.587*b[1]+.114*b[2];
-          // insideSign<0 => negative side is inside; >0 => positive side is inside
           bright += insideSign<0 ? (la-lb) : (lb-la);
           n++;
         }
-        return n ? diff/n + Math.max(-8,Math.min(20,bright/n))*0.45 : 0;
+        return n ? diff/n + Math.max(-8,Math.min(20,bright/n))*0.40 : 0;
       }
+
       function search(axis, expected, span, tangentHalf, insideSign){
-        let best={pos:expected,score:-1e9};
+        let best={pos:expected,score:-1e9,raw:0};
         const step=Math.max(1,Math.min(3,Math.round(Math.min(CW,L)/180)));
         for(let s=expected-span;s<=expected+span;s+=step){
           const sc=sideScore(axis,s,tangentHalf,insideSign);
           const proximity=Math.abs(s-expected)/Math.max(1,span);
-          const total=sc - proximity*5.0;
+          const total=sc-proximity*3.5;
           if(total>best.score) best={pos:s,score:total,raw:sc};
         }
         return best;
       }
 
-      const top=search('v',-halfL,Math.max(8,L*0.13),CW*0.30,+1);   // inside 朝 +v
-      const bottom=search('v',halfL,Math.max(8,L*0.16),CW*0.30,-1); // inside 朝 -v
-      const left=search('u',-halfW,Math.max(5,CW*0.22),L*0.30,+1);  // inside 朝 +u
-      const right=search('u',halfW,Math.max(5,CW*0.22),L*0.30,-1); // inside 朝 -u
+      // -------- v31.87 LONG-EDGE FIRST --------
+      // Find the two long cassette sides first. These define the true angle
+      // and the 20 mm physical width. TOP/BOTTOM are not used to determine scale.
+      const left=search('u',-halfW,Math.max(6,CW*0.30),L*0.36,+1);
+      const right=search('u', halfW,Math.max(6,CW*0.30),L*0.36,-1);
+      const newW=right.pos-left.pos;
 
-      const rawL=bottom.pos-top.pos, newW=right.pos-left.pos;
-      if(rawL < L*0.70 || rawL > L*1.28 || newW < CW*0.68 || newW > CW*1.30) return null;
+      if(!Number.isFinite(newW) || newW < CW*0.62 || newW > CW*1.38) return null;
 
-      // v31.86：固定物理比例，且以「真正 TOP 邊」作為 0 mm 基準。
-      // 左右長邊只負責量出實際寬度；卡匣長度永遠 = 寬度 × 3.50。
-      // 不再用 top/bottom 的平均中心決定 70 mm，避免其中一端漂移後把 C/T mm 座標整體拉偏。
-      const targetL = newW * 3.50;
+      // Physical cassette length is fixed by 70/20 = 3.50.
+      const targetL=newW*3.50;
 
-      // QR 只用來把外框方向定義成 TOP/BOTTOM；TOP 的精確位置仍由原圖邊界搜尋。
-      // 在原候選 top 附近做較細緻搜尋，找到真正卡匣上緣後直接鎖為 0 mm。
-      const topAnchorSpan=Math.max(6,Math.min(L*0.14,targetL*0.10));
-      const topAnchor=search('v',-halfL,topAnchorSpan,newW*0.34,+1);
+      // Search a candidate TOP edge over a much larger range toward the QR end.
+      // This fixes the previous failure where the initial contour already cut off
+      // the cassette top, so the old small search window could never recover it.
+      function topEdgeMetrics(pos){
+        const base={x:cx+vx*pos,y:cy+vy*pos};
+        const d=Math.max(2,Math.min(7,Math.round(newW*0.035)));
+        const samples=31;
+        let diffSum=0, signedSum=0, strong=0;
+        const vals=[];
+        for(let i=0;i<samples;i++){
+          // Sample central 88% of cassette width; avoid rounded corners.
+          const f=-0.44 + 0.88*(i/(samples-1));
+          const bx=base.x+ux*(f*newW), by=base.y+uy*(f*newW);
+          const outside=lumAt(bx-vx*d,by-vy*d);
+          const inside =lumAt(bx+vx*d,by+vy*d);
+          const dd=Math.abs(inside-outside);
+          vals.push(dd);
+          diffSum+=dd;
+          signedSum+=(inside-outside);
+        }
+        const mean=diffSum/samples;
+        // Adaptive continuity: a real cassette TOP should exist across most width.
+        const strongTh=Math.max(2.2,mean*0.48);
+        for(const v of vals) if(v>=strongTh) strong++;
+        const continuity=strong/samples;
+        const brightInside=signedSum/samples;
+        const score=mean*1.0 + continuity*18 + Math.max(-5,Math.min(12,brightInside))*0.30;
+        return {pos,mean,continuity,brightInside,score};
+      }
 
-      // 70 mm 物理長度由寬度決定，BOTTOM 不再獨立漂移。
+      const expectedTop=-halfL;
+      const outwardSpan=Math.max(CW*1.15,L*0.34,targetL*0.22);
+      const inwardSpan=Math.max(CW*0.45,L*0.10);
+      const step=Math.max(1,Math.round(newW/95));
+
+      let topAnchor=null;
+      for(let pos=expectedTop-outwardSpan; pos<=expectedTop+inwardSpan; pos+=step){
+        const m=topEdgeMetrics(pos);
+
+        // Prefer a continuous physical edge, not a QR border or an internal slot line.
+        // QR/internal edges tend to be much shorter across the cassette width.
+        const outwardPenalty=Math.max(0,(pos-expectedTop)/Math.max(1,inwardSpan))*2.0;
+        const total=m.score-outwardPenalty;
+        if(!topAnchor || total>topAnchor.total)
+          topAnchor={...m,total};
+      }
+      if(!topAnchor) return null;
+
+      // Require at least modest across-width continuity. Do not make this too hard:
+      // white-on-white photos can have weak absolute contrast.
+      if(topAnchor.continuity < 0.32 || topAnchor.mean < 1.2) return null;
+
       const topPos=topAnchor.pos;
       const bottomPos=topPos+targetL;
-      const bottomCheckRaw=sideScore('v',bottomPos,newW*0.30,-1);
 
-      const top2={pos:topPos,raw:topAnchor.raw ?? topAnchor.score};
-      const bottom2={pos:bottomPos,raw:bottomCheckRaw,derived:true};
-      const newL=targetL, ratio=3.50;
+      // Bottom is derived from TOP + 70 mm. We only measure it for debug/support.
+      const bottomCheck=topEdgeMetrics(bottomPos);
 
-      // Width center remains image-measured from the left/right borders.
       const uCenter=(left.pos+right.pos)/2;
       const centerV=topPos+targetL/2;
-      const c2={x:cx+vx*centerV+ux*uCenter,
-                y:cy+vy*centerV+uy*uCenter};
-      const hL=newL/2, hW=newW/2;
+      const c2={
+        x:cx+vx*centerV+ux*uCenter,
+        y:cy+vy*centerV+uy*uCenter
+      };
+
+      const hL=targetL/2, hW=newW/2;
       const np=[
         {x:c2.x-vx*hL-ux*hW,y:c2.y-vy*hL-uy*hW},
         {x:c2.x-vx*hL+ux*hW,y:c2.y-vy*hL+uy*hW},
         {x:c2.x+vx*hL+ux*hW,y:c2.y+vy*hL+uy*hW},
         {x:c2.x+vx*hL-ux*hW,y:c2.y+vy*hL-uy*hW}
       ];
-      // QR 必須仍被包含；否則不要接受 snap。
-      const fake={pts:np};
-      const enc=qrEnclosureMetrics(fake, qrCenter || null, []);
-      if(qrCenter && !enc.pass) return null;
+
+      // Pairing safety only: the user's QR center must still belong to this card.
+      // QR sticker position is NOT used to calculate TOP/width/length.
+      if(qrCenter && !pointInPolygon(qrCenter,orderPoints(np))) return null;
+
       return {
-        pts:np, ratio, oldL:L, oldW:CW, newL, newW,
-        top:top2, bottom:bottom2, left, right,
-        applied:true, aspectLocked:true,
+        pts:np,
+        ratio:3.50,
+        oldL:L, oldW:CW,
+        newL:targetL, newW,
+        left,right,
+        top:{pos:topPos,raw:topAnchor.mean,continuity:topAnchor.continuity},
+        bottom:{pos:bottomPos,raw:bottomCheck.mean,continuity:bottomCheck.continuity,derived:true},
+        applied:true,
+        aspectLocked:true,
+        longEdgeFirst:true,
         topAnchored:true,
+        topSearchOutwardPx:outwardSpan,
         lengthDerivedFromWidth:true,
         bottomDerivedFromTop:true
       };
-    } catch(e) { console.warn('edge snap failed',e); return null; }
+    } catch(e) {
+      console.warn('edge snap failed',e);
+      return null;
+    }
   }
 
 
@@ -3036,7 +3104,9 @@ if (best && best.qrTemplate) dbg += '<b>QR Direction Hypothesis: ' + best.method
 if (best && best.templateImageSupport) dbg += 'QR Template Image Support: edge=' + Number(best.templateImageSupport.edge||0).toFixed(2) + ' / bright=' + Number(best.templateImageSupport.bright||0).toFixed(2) + ' / score=' + Math.round(best.templateImageSupport.score||0) + '<br>';
 if (best && best.edgeSnap && best.edgeSnap.applied) {
   dbg += 'Edge Snap: APPLIED / L ' + best.edgeSnap.oldL.toFixed(1) + '→' + best.edgeSnap.newL.toFixed(1) + ' / W ' + best.edgeSnap.oldW.toFixed(1) + '→' + best.edgeSnap.newW.toFixed(1) + '<br>';
-  if (best.edgeSnap.topAnchored) dbg += '<b>Warp Length Lock: TOP=edge anchor / Length=Width×3.50 / Bottom=derived</b><br>';
+  if (best.edgeSnap.topAnchored) dbg += '<b>Warp Lock: LONG-EDGE FIRST / TOP=wide edge search / Length=Width×3.50 / Bottom=derived</b><br>';
+  if (best.edgeSnap.longEdgeFirst) dbg += `Long-edge First: YES / TOP continuity=${Number(best.edgeSnap.top?.continuity||0).toFixed(2)} / outward search=${Number(best.edgeSnap.topSearchOutwardPx||0).toFixed(1)} px<br>`;
+
 }
 else if (best && best.edgeSnap && best.edgeSnap.reason) dbg += 'Edge Snap: rejected (' + best.edgeSnap.reason + ')<br>';
 else dbg += 'Edge Snap: not applied<br>';
