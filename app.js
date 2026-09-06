@@ -81,7 +81,7 @@
   };
 
   // v31.71: multi-card extension built directly on the stable v31.70 single-card core.
-  const BUILD_VERSION = 'v31.90';
+  const BUILD_VERSION = 'v31.91';
   const MULTI_MAX_CARDS = 8;
 
   function unlock() {
@@ -1490,7 +1490,7 @@ function renderCombinedDetectionView() {
         return;
       }
 
-      // v31.90 MULTI CARD: do NOT crop/Voronoi the source before OpenCV.
+      // v31.91 MULTI CARD: do NOT crop/Voronoi the source before OpenCV.
       // OpenCV sees the full image for every card; each outer candidate must contain
       // its own QR and must NOT contain another detected QR center. This avoids
       // cutting a rotated/overlapping cassette in half while still preventing one
