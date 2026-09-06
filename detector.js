@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v31.94-second-stage-inner-registration';
+  const VERSION = 'v31.95-qr-plane-perspective-reference';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -1816,7 +1816,7 @@
     );
 
     return {
-      source:'ct-physical-structure-v31-94',
+      source:'ct-physical-structure-v31-95',
       x0, x1, y0, y1, h,
       zone:{x:x0, y:y0, w:Math.max(1, x1-x0), h:Math.max(1, y1-y0), startRatio:ctStartRatio, endRatio:ctEndRatio, widthRatio:ctEndRatio-ctStartRatio, topThirdY:Math.round(topThirdY), topThirdPadding:topThirdPadding, yLimitedByTopThird:false, coordinateSystem:'outer-60x18mm-centered-strip', qrSide:qSide, stripCenterX, cExpectedAbsY, tExpectedAbsY, bandHalf, locatorY0, locatorY1, pxPerMm, cassetteMm:CASSETTE_L_MM, cassetteWidthMm:CASSETTE_W_MM, grooveTopMm:GROOVE_TOP_MM, grooveHeightMm:GROOVE_H_MM, grooveWidthMm:GROOVE_W_MM, stripTopMm:STRIP_TOP_MM, stripHeightMm:STRIP_H_MM, stripWidthMm:STRIP_W_MM, ctSafeTopMm:CT_SAFE_TOP_MM, ctSafeBottomMm:CT_SAFE_BOTTOM_MM, cSearchTopMm:C_SEARCH_TOP_MM, cSearchBottomMm:C_SEARCH_BOTTOM_MM, tMinGapMm:T_MIN_GAP_MM, tMaxGapMm:T_MAX_GAP_MM, tFwhmMinMm:T_FWHM_MIN_MM, tFwhmMaxMm:T_FWHM_MAX_MM, tRelativeCRatio:T_RELATIVE_C_RATIO, ctGapMm, cLocatorAbsY:null, cLocatorHasColor:false},
       raw, profile:positive, baseline:bg, rawBaseline, rawMedian, rawMax, pinkMax, darkMax, combinedMax, selectedMode, lumBackground, lumMedian, mean:stat.mean, std:stat.std,
@@ -3263,6 +3263,115 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
   }
 
 
+
+  // v31.95: use the FLAT SQUARE QR as a perspective reference for the cassette plane.
+  // Important: QR POSITION is still NOT used to place the cassette outer frame.
+  // Only the projective deformation of the QR square is used to remove camera perspective
+  // when evaluating an outer candidate.
+  function qrPlaneGeometryScore(pts, qrPoints) {
+    try {
+      if(!Array.isArray(pts) || pts.length!==4 ||
+         !Array.isArray(qrPoints) || qrPoints.length<4)
+        return {pass:false,score:0,reason:'qr-plane-geometry-missing'};
+
+      const q=qrPoints.slice(0,4);
+      const qLens=[];
+      for(let i=0;i<4;i++){
+        const a=q[i], b=q[(i+1)%4];
+        qLens.push(Math.hypot(a.x-b.x,a.y-b.y));
+      }
+      const qSide=qLens.reduce((a,b)=>a+b,0)/4;
+      if(!Number.isFinite(qSide) || qSide<8)
+        return {pass:false,score:0,reason:'qr-plane-too-small'};
+
+      // Map the observed QR quadrilateral to an exact square. This is the
+      // projective rectification of the cassette plane.
+      const side=200;
+      const srcQ=cv.matFromArray(4,1,cv.CV_32FC2,[
+        q[0].x,q[0].y, q[1].x,q[1].y, q[2].x,q[2].y, q[3].x,q[3].y
+      ]);
+      const dstQ=cv.matFromArray(4,1,cv.CV_32FC2,[
+        0,0, side,0, side,side, 0,side
+      ]);
+      const Hm=cv.getPerspectiveTransform(srcQ,dstQ);
+
+      const oriented=orientPointsWithQr(pts,null,qrPoints);
+      const p=(oriented&&oriented.points&&oriented.points.length===4)?
+        oriented.points:orderPoints(pts);
+
+      const srcP=cv.matFromArray(4,1,cv.CV_32FC2,[
+        p[0].x,p[0].y, p[1].x,p[1].y, p[2].x,p[2].y, p[3].x,p[3].y
+      ]);
+      const dstP=new cv.Mat();
+      cv.perspectiveTransform(srcP,dstP,Hm);
+
+      const rp=[];
+      for(let i=0;i<4;i++){
+        rp.push({x:dstP.data32F[i*2],y:dstP.data32F[i*2+1]});
+      }
+
+      srcQ.delete(); dstQ.delete(); Hm.delete(); srcP.delete(); dstP.delete();
+
+      const v=(a,b)=>({x:b.x-a.x,y:b.y-a.y});
+      const len=(a)=>Math.max(1e-9,Math.hypot(a.x,a.y));
+      const dot=(a,b)=>a.x*b.x+a.y*b.y;
+      const cosine=(a,b)=>Math.abs(dot(a,b)/(len(a)*len(b)));
+
+      const top=v(rp[0],rp[1]);
+      const right=v(rp[1],rp[2]);
+      const bottom=v(rp[3],rp[2]);
+      const left=v(rp[0],rp[3]);
+
+      const wt=len(top), wb=len(bottom), ll=len(left), lr=len(right);
+      const avgW=(wt+wb)/2, avgL=(ll+lr)/2;
+      const ratio=avgL/Math.max(1,avgW);
+      const target=60/18;
+
+      // After QR-plane rectification a true cassette should be close to a Euclidean rectangle.
+      const topBottomParallel=1-cosine(top,bottom);   // 1 = parallel ignoring sign
+      const leftRightParallel=1-cosine(left,right);
+      // Actually cosine() returns abs cosine, so use absolute-cos closeness directly.
+      const tbParallel=cosine(top,bottom);
+      const lrParallel=cosine(left,right);
+      const orth1=1-cosine(top,left);
+      const orth2=1-cosine(top,right);
+      const orth=(orth1+orth2)/2;
+
+      const widthBalance=Math.min(wt,wb)/Math.max(wt,wb);
+      const lengthBalance=Math.min(ll,lr)/Math.max(ll,lr);
+      const ratioErr=Math.abs(ratio-target)/target;
+
+      // Hard-enough gate to reject a perspective-plausible but physically wrong outer,
+      // while leaving tolerance for QR corner noise / lens distortion.
+      const pass=
+        ratio>=2.95 && ratio<=3.72 &&
+        tbParallel>=0.94 &&
+        lrParallel>=0.94 &&
+        orth>=0.86 &&
+        widthBalance>=0.84 &&
+        lengthBalance>=0.88;
+
+      const score=
+        Math.max(0,1-ratioErr)*65 +
+        tbParallel*28 + lrParallel*28 +
+        orth*34 +
+        widthBalance*18 + lengthBalance*18;
+
+      return {
+        pass,score,reason:pass?'PASS':'qr-plane-rectified-geometry-fail',
+        ratio,target,ratioErr,
+        tbParallel,lrParallel,orth,
+        widthBalance,lengthBalance,
+        rectifiedPts:rp,
+        qrSide
+      };
+    } catch(e){
+      console.warn('v31.95 QR-plane geometry failed',e);
+      return {pass:false,score:0,reason:'qr-plane-exception'};
+    }
+  }
+
+
 function detectOuterFrame(canvas, cropCanvas, options) {
     if (typeof cv === 'undefined' || !cv.Mat) return {version:VERSION,ok:false,reason:'opencv-not-ready'};
     options = Object.assign({ minAreaRatio:0.01, ratioMin:1.20, ratioMax:10.0 }, options||{});
@@ -3270,9 +3379,9 @@ function detectOuterFrame(canvas, cropCanvas, options) {
     const rawCands=collectOuterCandidates(src, options);
     const qrCenter=options.qrCenter || null;
     const qrPoints=Array.isArray(options.qrPoints) ? options.qrPoints : [];
-    // v31.65：QR 只負責辨別方向，不再用 QR 尺寸硬推整支卡匣外框。
+    // v31.65：QR 只提供卡片身分、TOP方向與平面透視；QR 貼附位置不參與卡匣外框定位。
     // 最終綠框優先使用影像中真正的卡匣外緣 contour；只有完全找不到可信外框時，
-    // 才使用 QR 幾何 template 當 fallback。這樣 70mm 的長度不會放大 QR 尺寸誤差。
+    // 才使用 QR 幾何 template 當 fallback。QR 正方形只用來校正投影變形，不用 QR 位置或尺寸去推卡匣邊界。
     const qrTemplates=buildQrCassetteTemplates(qrPoints,imgArea);
     const qrDirectMode=false;
     let rawQualified=[];
@@ -3324,9 +3433,12 @@ function detectOuterFrame(canvas, cropCanvas, options) {
       const qrPairBonus=(c.qrEnclosure&&c.qrEnclosure.pass)?2200:0;
       c.fourEdgeSupport=outerFourEdgeSupport(canvas,c.pts);
 
-      // v31.93: after a candidate is warped, known internal mechanics must appear
-      // near their physical locations. This strongly separates a true oblique outer
-      // frame from a geometrically plausible but shifted/skewed rectangle.
+      // v31.95: QR is a perspective reference only. Its manually placed POSITION
+      // never determines cassette TOP/LEFT/etc. The QR square projectively rectifies
+      // the plane, then the candidate must look like a 60x18 rectangle in that plane.
+      c.qrPlaneGeometry=qrPlaneGeometryScore(c.pts,qrPoints);
+
+      // v31.93: known internal mechanics remain a second independent validator.
       c.innerStructure=outerInnerStructureScore(canvas,c.pts,qrCenter,qrPoints);
 
       const edgeSupportBonus=
@@ -3335,9 +3447,12 @@ function detectOuterFrame(canvas, cropCanvas, options) {
       const innerStructureBonus=
         Math.min(15000,Math.max(0,c.innerStructure.score||0)*180) +
         (c.innerStructure.pass?4500:-2500);
+      const qrPlaneBonus=
+        Math.min(22000,Math.max(0,c.qrPlaneGeometry.score||0)*95) +
+        (c.qrPlaneGeometry.pass?7000:-6500);
 
       c.totalScore=(physical.score||0) + geo.score*0.35 + contourBonus +
-        qrPairBonus + edgeSupportBonus + innerStructureBonus;
+        qrPairBonus + edgeSupportBonus + innerStructureBonus + qrPlaneBonus;
       scored.push(c);
     }
     scored.sort((a,b)=>b.totalScore-a.totalScore);
@@ -3363,15 +3478,21 @@ function detectOuterFrame(canvas, cropCanvas, options) {
         const innerNotWorse=snapInner.pass &&
           snapInner.score >= Math.max(8,(beforeInner.score||0)*0.72);
 
-        if (pm.pass && supportNotWorse && innerNotWorse) {
+        const beforeQrPlane=best.qrPlaneGeometry || qrPlaneGeometryScore(best.pts,qrPoints);
+        const snapQrPlane=qrPlaneGeometryScore(snap.pts,qrPoints);
+        const qrPlaneNotWorse=snapQrPlane.pass &&
+          snapQrPlane.score >= Math.max(20,(beforeQrPlane.score||0)*0.80);
+
+        if (pm.pass && supportNotWorse && innerNotWorse && qrPlaneNotWorse) {
           best.edgeSnap=snap; best.pts=snap.pts; best.ratio=snap.ratio;
           best.rectArea=snap.newL*snap.newW; best.rect=trial.rect;
           best.outerPhysical=pm; best.fourEdgeSupport=snapSupport;
           best.innerStructure=snapInner;
+          best.qrPlaneGeometry=snapQrPlane;
         } else {
           best.edgeSnap={
             applied:false,
-            reason:!pm.pass?'rejected-by-outer-geometry':(!supportNotWorse?'rejected-by-four-edge-support':'rejected-by-inner-structure'),
+            reason:!pm.pass?'rejected-by-outer-geometry':(!supportNotWorse?'rejected-by-four-edge-support':(!innerNotWorse?'rejected-by-inner-structure':'rejected-by-qr-plane-geometry')),
             attempt:pm,
             edgeSupport:snapSupport
           };
@@ -3453,7 +3574,13 @@ function detectOuterFrame(canvas, cropCanvas, options) {
       const guideFinal = best.qrGuide || qrGuidedOuterMetrics(best,qrCenter,qrPoints); // debug only
       const physicalFinal = best.outerPhysical || outerPhysicalMetrics(best,imgArea);
       const edgeSupportFinal = best.fourEdgeSupport || outerFourEdgeSupport(canvas,best.pts);
-      const bestOuterGeometryOk = !!(physicalFinal && physicalFinal.pass && edgeSupportFinal && edgeSupportFinal.pass);
+      const qrPlaneFinal = best.qrPlaneGeometry || qrPlaneGeometryScore(best.pts,qrPoints);
+      const qrPlaneRequired = Array.isArray(qrPoints) && qrPoints.length>=4;
+      const bestOuterGeometryOk = !!(
+        physicalFinal && physicalFinal.pass &&
+        edgeSupportFinal && edgeSupportFinal.pass &&
+        (!qrPlaneRequired || (qrPlaneFinal && qrPlaneFinal.pass))
+      );
       const bestAppearanceOk = true;
       const bestCenterOk = true;
       const bestHasTrustedRedWindow = false;
@@ -3469,13 +3596,20 @@ function detectOuterFrame(canvas, cropCanvas, options) {
       if(!bestOuterGeometryOk) {
         if(!(physicalFinal && physicalFinal.pass))
           failReason=(physicalFinal&&physicalFinal.reason)?physicalFinal.reason:'outer-geometry-fail';
-        else
+        else if(!(edgeSupportFinal&&edgeSupportFinal.pass))
           failReason=(edgeSupportFinal&&edgeSupportFinal.reason)?edgeSupportFinal.reason:'outer-edge-support-fail';
+        else
+          failReason=(qrPlaneFinal&&qrPlaneFinal.reason)?qrPlaneFinal.reason:'qr-plane-geometry-fail';
       } else failReason = 'PASS';
 
 let dbg='';
 
 dbg += '<b>Debug Summary</b><br>';
+if(best.qrPlaneGeometry){
+  const qpg=best.qrPlaneGeometry;
+  dbg += `<b>QR Perspective Reference: ${qpg.pass?'PASS':'FAIL'}</b><br>`;
+  dbg += `QR-plane ratio=${Number(qpg.ratio||0).toFixed(3)} / target=3.333 / orth=${Number(qpg.orth||0).toFixed(3)} / parallel=${Number(qpg.tbParallel||0).toFixed(3)},${Number(qpg.lrParallel||0).toFixed(3)}<br>`;
+}
 if(best.innerRegistration){
   const ir=best.innerRegistration;
   dbg += `<b>Inner Registration: ${ir.applied?'APPLIED':'NO CHANGE'} / ${ir.reason||'-'}</b><br>`;
