@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v31.85-four-edge-outer-validation';
+  const VERSION = 'v31.86-top-anchor-widthx3.5-warp';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -2589,27 +2589,30 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
       const rawL=bottom.pos-top.pos, newW=right.pos-left.pos;
       if(rawL < L*0.70 || rawL > L*1.28 || newW < CW*0.68 || newW > CW*1.30) return null;
 
-      // v31.67：卡匣實體 70x20 mm，外框長寬比必須是 3.50。
-      // 不再讓 top/bottom 各自搜尋後形成 2.7~4.6 的任意長度；那會把桌面陰影/內部結構吃進外框。
-      // 先由較穩定的左右邊取得實際寬度，再以固定 3.50 倍長度成對搜尋上下邊。
+      // v31.86：固定物理比例，且以「真正 TOP 邊」作為 0 mm 基準。
+      // 左右長邊只負責量出實際寬度；卡匣長度永遠 = 寬度 × 3.50。
+      // 不再用 top/bottom 的平均中心決定 70 mm，避免其中一端漂移後把 C/T mm 座標整體拉偏。
       const targetL = newW * 3.50;
-      const rawCenterV = (top.pos + bottom.pos) / 2;
-      let pair={center:rawCenterV,score:-1e9,top:null,bottom:null};
-      const centerSpan=Math.max(6,Math.min(L*0.16,targetL*0.12));
-      const centerStep=Math.max(1,Math.round(newW/90));
-      for(let cc=rawCenterV-centerSpan;cc<=rawCenterV+centerSpan;cc+=centerStep){
-        const tp=cc-targetL/2, bp=cc+targetL/2;
-        const ts=sideScore('v',tp,newW*0.30,+1);
-        const bs=sideScore('v',bp,newW*0.30,-1);
-        // QR 端(top)通常很清楚，稍提高 top 權重；同時避免離原候選中心太遠。
-        const prox=Math.abs(cc-rawCenterV)/Math.max(1,centerSpan);
-        const sc=ts*1.08+bs-prox*4.0;
-        if(sc>pair.score) pair={center:cc,score:sc,top:{pos:tp,raw:ts},bottom:{pos:bp,raw:bs}};
-      }
-      const top2=pair.top||top, bottom2=pair.bottom||bottom;
+
+      // QR 只用來把外框方向定義成 TOP/BOTTOM；TOP 的精確位置仍由原圖邊界搜尋。
+      // 在原候選 top 附近做較細緻搜尋，找到真正卡匣上緣後直接鎖為 0 mm。
+      const topAnchorSpan=Math.max(6,Math.min(L*0.14,targetL*0.10));
+      const topAnchor=search('v',-halfL,topAnchorSpan,newW*0.34,+1);
+
+      // 70 mm 物理長度由寬度決定，BOTTOM 不再獨立漂移。
+      const topPos=topAnchor.pos;
+      const bottomPos=topPos+targetL;
+      const bottomCheckRaw=sideScore('v',bottomPos,newW*0.30,-1);
+
+      const top2={pos:topPos,raw:topAnchor.raw ?? topAnchor.score};
+      const bottom2={pos:bottomPos,raw:bottomCheckRaw,derived:true};
       const newL=targetL, ratio=3.50;
-      const c2={x:cx+vx*pair.center+ux*((left.pos+right.pos)/2),
-                y:cy+vy*pair.center+uy*((left.pos+right.pos)/2)};
+
+      // Width center remains image-measured from the left/right borders.
+      const uCenter=(left.pos+right.pos)/2;
+      const centerV=topPos+targetL/2;
+      const c2={x:cx+vx*centerV+ux*uCenter,
+                y:cy+vy*centerV+uy*uCenter};
       const hL=newL/2, hW=newW/2;
       const np=[
         {x:c2.x-vx*hL-ux*hW,y:c2.y-vy*hL-uy*hW},
@@ -2621,7 +2624,14 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
       const fake={pts:np};
       const enc=qrEnclosureMetrics(fake, qrCenter || null, []);
       if(qrCenter && !enc.pass) return null;
-      return {pts:np, ratio, oldL:L,oldW:CW,newL,newW,top:top2,bottom:bottom2,left,right,applied:true,aspectLocked:true};
+      return {
+        pts:np, ratio, oldL:L, oldW:CW, newL, newW,
+        top:top2, bottom:bottom2, left, right,
+        applied:true, aspectLocked:true,
+        topAnchored:true,
+        lengthDerivedFromWidth:true,
+        bottomDerivedFromTop:true
+      };
     } catch(e) { console.warn('edge snap failed',e); return null; }
   }
 
@@ -3024,7 +3034,10 @@ dbg += 'Detection Mode: OpenCV finds OUTER + exact angle / QR orientation resolv
 dbg += 'Outer Anchor: ' + (best && best.qrTemplate ? 'QR template fallback' : 'Contour + image edge snap') + '<br>';
 if (best && best.qrTemplate) dbg += '<b>QR Direction Hypothesis: ' + best.method + '</b><br>';
 if (best && best.templateImageSupport) dbg += 'QR Template Image Support: edge=' + Number(best.templateImageSupport.edge||0).toFixed(2) + ' / bright=' + Number(best.templateImageSupport.bright||0).toFixed(2) + ' / score=' + Math.round(best.templateImageSupport.score||0) + '<br>';
-if (best && best.edgeSnap && best.edgeSnap.applied) dbg += 'Edge Snap: APPLIED / L ' + best.edgeSnap.oldL.toFixed(1) + '→' + best.edgeSnap.newL.toFixed(1) + ' / W ' + best.edgeSnap.oldW.toFixed(1) + '→' + best.edgeSnap.newW.toFixed(1) + '<br>';
+if (best && best.edgeSnap && best.edgeSnap.applied) {
+  dbg += 'Edge Snap: APPLIED / L ' + best.edgeSnap.oldL.toFixed(1) + '→' + best.edgeSnap.newL.toFixed(1) + ' / W ' + best.edgeSnap.oldW.toFixed(1) + '→' + best.edgeSnap.newW.toFixed(1) + '<br>';
+  if (best.edgeSnap.topAnchored) dbg += '<b>Warp Length Lock: TOP=edge anchor / Length=Width×3.50 / Bottom=derived</b><br>';
+}
 else if (best && best.edgeSnap && best.edgeSnap.reason) dbg += 'Edge Snap: rejected (' + best.edgeSnap.reason + ')<br>';
 else dbg += 'Edge Snap: not applied<br>';
 dbg += 'Final Reason: ' + (bestOk ? 'outer-first-opencv-ok' : failReason) + '<br>';
