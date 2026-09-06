@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v31.87-long-edge-first-top-recovery';
+  const VERSION = 'v31.88-four-line-perspective-outer';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -2523,182 +2523,160 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
     try {
       if (!canvas || !Array.isArray(pts) || pts.length !== 4) return null;
 
-      // QR is used only to resolve which end is TOP. Its sticker position is not
-      // used for the cassette dimensions.
+      // v31.88:
+      // Do NOT derive 70 mm length from a single image-space width.
+      // Instead, recover four physical border lines and intersect them.
+      // QR only resolves which short side is TOP.
       const oriented = orientPointsWithQr(pts, qrCenter || null);
-      const p = oriented.points; // TL,TR,BR,BL with QR end at TOP
+      const p = oriented.points; // TL,TR,BR,BL
       if (!p || p.length !== 4) return null;
 
-      const ctx = canvas.getContext('2d', {willReadFrequently:true});
-      const W = canvas.width, H = canvas.height;
-      const im = ctx.getImageData(0,0,W,H).data;
+      const ctx=canvas.getContext('2d',{willReadFrequently:true});
+      const W=canvas.width,H=canvas.height;
+      const im=ctx.getImageData(0,0,W,H).data;
 
-      const topMid={x:(p[0].x+p[1].x)/2,y:(p[0].y+p[1].y)/2};
-      const botMid={x:(p[3].x+p[2].x)/2,y:(p[3].y+p[2].y)/2};
-      const leftMid={x:(p[0].x+p[3].x)/2,y:(p[0].y+p[3].y)/2};
-      const rightMid={x:(p[1].x+p[2].x)/2,y:(p[1].y+p[2].y)/2};
-      const cx=(topMid.x+botMid.x)/2, cy=(topMid.y+botMid.y)/2;
-
-      // v = cassette long-axis (TOP -> BOTTOM), u = cassette width-axis.
-      let vx=botMid.x-topMid.x, vy=botMid.y-topMid.y;
-      let ux=rightMid.x-leftMid.x, uy=rightMid.y-leftMid.y;
-      const L=Math.max(1,Math.hypot(vx,vy)), CW=Math.max(1,Math.hypot(ux,uy));
-      vx/=L; vy/=L; ux/=CW; uy/=CW;
-      const halfL=L/2, halfW=CW/2;
-
-      function rgbAt(x,y){
+      function lum(x,y){
         const xx=Math.max(0,Math.min(W-1,Math.round(x)));
         const yy=Math.max(0,Math.min(H-1,Math.round(y)));
         const i=(yy*W+xx)*4;
-        return [im[i],im[i+1],im[i+2]];
+        return .299*im[i]+.587*im[i+1]+.114*im[i+2];
+      }
+      function mix(a,b,t){ return {x:a.x+(b.x-a.x)*t,y:a.y+(b.y-a.y)*t}; }
+      function sub(a,b){ return {x:a.x-b.x,y:a.y-b.y}; }
+      function add(a,b){ return {x:a.x+b.x,y:a.y+b.y}; }
+      function mul(a,k){ return {x:a.x*k,y:a.y*k}; }
+      function norm(a){ const d=Math.max(1e-9,Math.hypot(a.x,a.y)); return {x:a.x/d,y:a.y/d}; }
+      function dot(a,b){ return a.x*b.x+a.y*b.y; }
+      function cross(a,b){ return a.x*b.y-a.y*b.x; }
+
+      // Initial four edges only provide search corridors.
+      const top0=[p[0],p[1]], right0=[p[1],p[2]], bottom0=[p[3],p[2]], left0=[p[0],p[3]];
+      const c0={x:(p[0].x+p[1].x+p[2].x+p[3].x)/4,
+                y:(p[0].y+p[1].y+p[2].y+p[3].y)/4};
+      const width0=(Math.hypot(p[1].x-p[0].x,p[1].y-p[0].y)+Math.hypot(p[2].x-p[3].x,p[2].y-p[3].y))/2;
+      const len0=(Math.hypot(p[3].x-p[0].x,p[3].y-p[0].y)+Math.hypot(p[2].x-p[1].x,p[2].y-p[1].y))/2;
+
+      function edgeNormal(a,b){
+        const t=norm(sub(b,a));
+        let n={x:-t.y,y:t.x};
+        const mid=mix(a,b,.5);
+        // normal points from border toward initial cassette center
+        if(dot(sub(c0,mid),n)<0) n=mul(n,-1);
+        return {t,n};
       }
 
-      function lumAt(x,y){
-        const c=rgbAt(x,y);
-        return .299*c[0]+.587*c[1]+.114*c[2];
-      }
-
-      // Generic border score used for the two long sides.
-      function sideScore(axis, pos, tangentHalf, insideSign){
-        const normal = axis==='v' ? {x:vx,y:vy} : {x:ux,y:uy};
-        const tangent = axis==='v' ? {x:ux,y:uy} : {x:vx,y:vy};
-        const base={x:cx+normal.x*pos,y:cy+normal.y*pos};
-        const d=Math.max(2,Math.min(6,Math.round(Math.min(CW,L)*0.020)));
-        let diff=0, bright=0, n=0;
-        for(let k=-16;k<=16;k++){
-          const t=(k/16)*tangentHalf;
-          const bx=base.x+tangent.x*t, by=base.y+tangent.y*t;
-          const a=rgbAt(bx-normal.x*d, by-normal.y*d);
-          const b=rgbAt(bx+normal.x*d, by+normal.y*d);
-          const dr=a[0]-b[0], dg=a[1]-b[1], db=a[2]-b[2];
-          diff += Math.sqrt(dr*dr+dg*dg+db*db);
-          const la=.299*a[0]+.587*a[1]+.114*a[2];
-          const lb=.299*b[0]+.587*b[1]+.114*b[2];
-          bright += insideSign<0 ? (la-lb) : (lb-la);
-          n++;
+      // Score a complete line displaced normally from an initial edge.
+      // True outer borders should be continuous over a large fraction of their length.
+      function scoreParallelLine(a,b,offset,trim=0.08){
+        const {t,n}=edgeNormal(a,b);
+        const aa=add(a,mul(n,offset)), bb=add(b,mul(n,offset));
+        const edgeLen=Math.hypot(bb.x-aa.x,bb.y-aa.y);
+        const d=Math.max(2,Math.min(7,edgeLen*0.018));
+        const N=41;
+        let sum=0,signed=0;
+        const vals=[];
+        for(let i=0;i<N;i++){
+          const f=trim+(1-2*trim)*(i/(N-1));
+          const q=mix(aa,bb,f);
+          const out=lum(q.x-n.x*d,q.y-n.y*d);
+          const inn=lum(q.x+n.x*d,q.y+n.y*d);
+          const v=Math.abs(inn-out);
+          vals.push(v); sum+=v; signed+=(inn-out);
         }
-        return n ? diff/n + Math.max(-8,Math.min(20,bright/n))*0.40 : 0;
+        const mean=sum/N;
+        const th=Math.max(2.0,mean*.48);
+        let strong=0;
+        for(const v of vals) if(v>=th) strong++;
+        const continuity=strong/N;
+        const brightInside=signed/N;
+        return {
+          a:aa,b:bb,offset,mean,continuity,brightInside,
+          score:mean + continuity*18 + Math.max(-5,Math.min(12,brightInside))*.22
+        };
       }
 
-      function search(axis, expected, span, tangentHalf, insideSign){
-        let best={pos:expected,score:-1e9,raw:0};
-        const step=Math.max(1,Math.min(3,Math.round(Math.min(CW,L)/180)));
-        for(let s=expected-span;s<=expected+span;s+=step){
-          const sc=sideScore(axis,s,tangentHalf,insideSign);
-          const proximity=Math.abs(s-expected)/Math.max(1,span);
-          const total=sc-proximity*3.5;
-          if(total>best.score) best={pos:s,score:total,raw:sc};
+      function bestParallel(a,b,outwardSpan,inwardSpan,trim,preferOutward=false){
+        let best=null;
+        const span=outwardSpan+inwardSpan;
+        const step=Math.max(1,Math.round(Math.max(2,span/90)));
+        // edge normal points inward, therefore negative offset searches outward.
+        for(let off=-outwardSpan;off<=inwardSpan;off+=step){
+          const m=scoreParallelLine(a,b,off,trim);
+          let total=m.score;
+          // Slightly prefer the outermost credible line. This helps avoid QR/slot edges.
+          if(preferOutward) total += Math.max(0,-off/outwardSpan)*2.2;
+          if(!best || total>best.total) best={...m,total};
         }
         return best;
       }
 
-      // -------- v31.87 LONG-EDGE FIRST --------
-      // Find the two long cassette sides first. These define the true angle
-      // and the 20 mm physical width. TOP/BOTTOM are not used to determine scale.
-      const left=search('u',-halfW,Math.max(6,CW*0.30),L*0.36,+1);
-      const right=search('u', halfW,Math.max(6,CW*0.30),L*0.36,-1);
-      const newW=right.pos-left.pos;
+      // 1) Recover the two long borders independently.
+      // Wide outward corridor is intentional: the seed contour may be inside the real shell.
+      const sideOut=Math.max(8,width0*.55);
+      const sideIn =Math.max(5,width0*.24);
+      const left =bestParallel(left0[0],left0[1],sideOut,sideIn,.12,true);
+      const right=bestParallel(right0[0],right0[1],sideOut,sideIn,.12,true);
+      if(!left||!right) return null;
 
-      if(!Number.isFinite(newW) || newW < CW*0.62 || newW > CW*1.38) return null;
+      // 2) Recover TOP and BOTTOM as real short border lines.
+      // TOP gets a larger outward search because previous builds often clipped the QR end.
+      const topOut=Math.max(width0*1.25,len0*.34);
+      const topIn =Math.max(width0*.32,len0*.09);
+      const botOut=Math.max(width0*.75,len0*.22);
+      const botIn =Math.max(width0*.30,len0*.09);
+      const top   =bestParallel(top0[0],top0[1],topOut,topIn,.12,true);
+      const bottom=bestParallel(bottom0[0],bottom0[1],botOut,botIn,.12,true);
+      if(!top||!bottom) return null;
 
-      // Physical cassette length is fixed by 70/20 = 3.50.
-      const targetL=newW*3.50;
+      // Basic continuity gates only; white-on-white borders can be weak.
+      if(left.continuity<.25 || right.continuity<.25 ||
+         top.continuity<.25 || bottom.continuity<.25) return null;
 
-      // Search a candidate TOP edge over a much larger range toward the QR end.
-      // This fixes the previous failure where the initial contour already cut off
-      // the cassette top, so the old small search window could never recover it.
-      function topEdgeMetrics(pos){
-        const base={x:cx+vx*pos,y:cy+vy*pos};
-        const d=Math.max(2,Math.min(7,Math.round(newW*0.035)));
-        const samples=31;
-        let diffSum=0, signedSum=0, strong=0;
-        const vals=[];
-        for(let i=0;i<samples;i++){
-          // Sample central 88% of cassette width; avoid rounded corners.
-          const f=-0.44 + 0.88*(i/(samples-1));
-          const bx=base.x+ux*(f*newW), by=base.y+uy*(f*newW);
-          const outside=lumAt(bx-vx*d,by-vy*d);
-          const inside =lumAt(bx+vx*d,by+vy*d);
-          const dd=Math.abs(inside-outside);
-          vals.push(dd);
-          diffSum+=dd;
-          signedSum+=(inside-outside);
-        }
-        const mean=diffSum/samples;
-        // Adaptive continuity: a real cassette TOP should exist across most width.
-        const strongTh=Math.max(2.2,mean*0.48);
-        for(const v of vals) if(v>=strongTh) strong++;
-        const continuity=strong/samples;
-        const brightInside=signedSum/samples;
-        const score=mean*1.0 + continuity*18 + Math.max(-5,Math.min(12,brightInside))*0.30;
-        return {pos,mean,continuity,brightInside,score};
+      function lineIntersection(a,b,c,d){
+        const r=sub(b,a), ss=sub(d,c);
+        const den=cross(r,ss);
+        if(Math.abs(den)<1e-6) return null;
+        const t=cross(sub(c,a),ss)/den;
+        return add(a,mul(r,t));
       }
 
-      const expectedTop=-halfL;
-      const outwardSpan=Math.max(CW*1.15,L*0.34,targetL*0.22);
-      const inwardSpan=Math.max(CW*0.45,L*0.10);
-      const step=Math.max(1,Math.round(newW/95));
+      // Four actual line intersections => perspective quadrilateral.
+      const TL=lineIntersection(top.a,top.b,left.a,left.b);
+      const TR=lineIntersection(top.a,top.b,right.a,right.b);
+      const BL=lineIntersection(bottom.a,bottom.b,left.a,left.b);
+      const BR=lineIntersection(bottom.a,bottom.b,right.a,right.b);
+      if(!TL||!TR||!BR||!BL) return null;
+      const np=[TL,TR,BR,BL];
 
-      let topAnchor=null;
-      for(let pos=expectedTop-outwardSpan; pos<=expectedTop+inwardSpan; pos+=step){
-        const m=topEdgeMetrics(pos);
+      // Geometry sanity. Perspective is allowed, so opposite sides need not have equal px lengths.
+      const wt=Math.hypot(TR.x-TL.x,TR.y-TL.y);
+      const wb=Math.hypot(BR.x-BL.x,BR.y-BL.y);
+      const ll=Math.hypot(BL.x-TL.x,BL.y-TL.y);
+      const lr=Math.hypot(BR.x-TR.x,BR.y-TR.y);
+      const avgW=(wt+wb)/2, avgL=(ll+lr)/2;
+      if(avgW<8 || avgL<avgW*2.25 || avgL>avgW*5.2) return null;
+      if(Math.min(wt,wb)/Math.max(wt,wb)<.45) return null;
+      if(Math.min(ll,lr)/Math.max(ll,lr)<.58) return null;
 
-        // Prefer a continuous physical edge, not a QR border or an internal slot line.
-        // QR/internal edges tend to be much shorter across the cassette width.
-        const outwardPenalty=Math.max(0,(pos-expectedTop)/Math.max(1,inwardSpan))*2.0;
-        const total=m.score-outwardPenalty;
-        if(!topAnchor || total>topAnchor.total)
-          topAnchor={...m,total};
-      }
-      if(!topAnchor) return null;
-
-      // Require at least modest across-width continuity. Do not make this too hard:
-      // white-on-white photos can have weak absolute contrast.
-      if(topAnchor.continuity < 0.32 || topAnchor.mean < 1.2) return null;
-
-      const topPos=topAnchor.pos;
-      const bottomPos=topPos+targetL;
-
-      // Bottom is derived from TOP + 70 mm. We only measure it for debug/support.
-      const bottomCheck=topEdgeMetrics(bottomPos);
-
-      const uCenter=(left.pos+right.pos)/2;
-      const centerV=topPos+targetL/2;
-      const c2={
-        x:cx+vx*centerV+ux*uCenter,
-        y:cy+vy*centerV+uy*uCenter
-      };
-
-      const hL=targetL/2, hW=newW/2;
-      const np=[
-        {x:c2.x-vx*hL-ux*hW,y:c2.y-vy*hL-uy*hW},
-        {x:c2.x-vx*hL+ux*hW,y:c2.y-vy*hL+uy*hW},
-        {x:c2.x+vx*hL+ux*hW,y:c2.y+vy*hL+uy*hW},
-        {x:c2.x+vx*hL-ux*hW,y:c2.y+vy*hL-uy*hW}
-      ];
-
-      // Pairing safety only: the user's QR center must still belong to this card.
-      // QR sticker position is NOT used to calculate TOP/width/length.
+      // QR is only a pairing/orientation safety check.
       if(qrCenter && !pointInPolygon(qrCenter,orderPoints(np))) return null;
 
       return {
         pts:np,
-        ratio:3.50,
-        oldL:L, oldW:CW,
-        newL:targetL, newW,
-        left,right,
-        top:{pos:topPos,raw:topAnchor.mean,continuity:topAnchor.continuity},
-        bottom:{pos:bottomPos,raw:bottomCheck.mean,continuity:bottomCheck.continuity,derived:true},
+        ratio:avgL/avgW,
+        oldL:len0,oldW:width0,newL:avgL,newW:avgW,
+        left,right,top,bottom,
         applied:true,
-        aspectLocked:true,
+        fourLineOuter:true,
+        perspectiveOuter:true,
         longEdgeFirst:true,
-        topAnchored:true,
-        topSearchOutwardPx:outwardSpan,
-        lengthDerivedFromWidth:true,
-        bottomDerivedFromTop:true
+        qrOrientationOnly:true,
+        aspectLocked:false,
+        lengthDerivedFromWidth:false,
+        bottomDerivedFromTop:false
       };
-    } catch(e) {
-      console.warn('edge snap failed',e);
+    } catch(e){
+      console.warn('4-line outer recovery failed',e);
       return null;
     }
   }
@@ -3104,8 +3082,8 @@ if (best && best.qrTemplate) dbg += '<b>QR Direction Hypothesis: ' + best.method
 if (best && best.templateImageSupport) dbg += 'QR Template Image Support: edge=' + Number(best.templateImageSupport.edge||0).toFixed(2) + ' / bright=' + Number(best.templateImageSupport.bright||0).toFixed(2) + ' / score=' + Math.round(best.templateImageSupport.score||0) + '<br>';
 if (best && best.edgeSnap && best.edgeSnap.applied) {
   dbg += 'Edge Snap: APPLIED / L ' + best.edgeSnap.oldL.toFixed(1) + '→' + best.edgeSnap.newL.toFixed(1) + ' / W ' + best.edgeSnap.oldW.toFixed(1) + '→' + best.edgeSnap.newW.toFixed(1) + '<br>';
-  if (best.edgeSnap.topAnchored) dbg += '<b>Warp Lock: LONG-EDGE FIRST / TOP=wide edge search / Length=Width×3.50 / Bottom=derived</b><br>';
-  if (best.edgeSnap.longEdgeFirst) dbg += `Long-edge First: YES / TOP continuity=${Number(best.edgeSnap.top?.continuity||0).toFixed(2)} / outward search=${Number(best.edgeSnap.topSearchOutwardPx||0).toFixed(1)} px<br>`;
+  if (best.edgeSnap.topAnchored) dbg += '<b>Outer Lock: 4 physical border lines / perspective quadrilateral</b><br>';
+  if (best.edgeSnap.longEdgeFirst) dbg += `4-Line Outer: YES / TOP continuity=${Number(best.edgeSnap.top?.continuity||0).toFixed(2)} / outward search=${Number(best.edgeSnap.topSearchOutwardPx||0).toFixed(1)} px<br>`;
 
 }
 else if (best && best.edgeSnap && best.edgeSnap.reason) dbg += 'Edge Snap: rejected (' + best.edgeSnap.reason + ')<br>';
