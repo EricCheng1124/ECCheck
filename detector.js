@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v31.93-inner-structure-validated-outer';
+  const VERSION = 'v31.94-second-stage-inner-registration';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -1816,7 +1816,7 @@
     );
 
     return {
-      source:'ct-physical-structure-v31-92',
+      source:'ct-physical-structure-v31-94',
       x0, x1, y0, y1, h,
       zone:{x:x0, y:y0, w:Math.max(1, x1-x0), h:Math.max(1, y1-y0), startRatio:ctStartRatio, endRatio:ctEndRatio, widthRatio:ctEndRatio-ctStartRatio, topThirdY:Math.round(topThirdY), topThirdPadding:topThirdPadding, yLimitedByTopThird:false, coordinateSystem:'outer-60x18mm-centered-strip', qrSide:qSide, stripCenterX, cExpectedAbsY, tExpectedAbsY, bandHalf, locatorY0, locatorY1, pxPerMm, cassetteMm:CASSETTE_L_MM, cassetteWidthMm:CASSETTE_W_MM, grooveTopMm:GROOVE_TOP_MM, grooveHeightMm:GROOVE_H_MM, grooveWidthMm:GROOVE_W_MM, stripTopMm:STRIP_TOP_MM, stripHeightMm:STRIP_H_MM, stripWidthMm:STRIP_W_MM, ctSafeTopMm:CT_SAFE_TOP_MM, ctSafeBottomMm:CT_SAFE_BOTTOM_MM, cSearchTopMm:C_SEARCH_TOP_MM, cSearchBottomMm:C_SEARCH_BOTTOM_MM, tMinGapMm:T_MIN_GAP_MM, tMaxGapMm:T_MAX_GAP_MM, tFwhmMinMm:T_FWHM_MIN_MM, tFwhmMaxMm:T_FWHM_MAX_MM, tRelativeCRatio:T_RELATIVE_C_RATIO, ctGapMm, cLocatorAbsY:null, cLocatorHasColor:false},
       raw, profile:positive, baseline:bg, rawBaseline, rawMedian, rawMax, pinkMax, darkMax, combinedMax, selectedMode, lumBackground, lumMedian, mean:stat.mean, std:stat.std,
@@ -3006,7 +3006,161 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
   }
 
   
-  // v31.93: validate an OUTER candidate by asking whether, after perspective warp,
+  
+  // v31.94: second-stage INNER REGISTRATION.
+  // The first stage is the 4-corner perspective warp. This second stage measures
+  // the known centered groove (22..40 mm, 8 mm wide) in the warped image and only
+  // permits a SMALL X/Y translation + X/Y scale correction. No rotation/shear and
+  // no free-form deformation are allowed.
+  function registerInnerGeometry(cropCanvas) {
+    try {
+      if(!cropCanvas || cropCanvas.width<40 || cropCanvas.height<100)
+        return {applied:false,reason:'inner-reg-small-canvas'};
+
+      const W=cropCanvas.width,H=cropCanvas.height;
+      const ctx=cropCanvas.getContext('2d',{willReadFrequently:true});
+      const img=ctx.getImageData(0,0,W,H).data;
+      const pxX=W/18.0, pxY=H/60.0;
+      const cx=W*.5;
+
+      function lum(x,y){
+        const xx=Math.max(0,Math.min(W-1,Math.round(x)));
+        const yy=Math.max(0,Math.min(H-1,Math.round(y)));
+        const i=(yy*W+xx)*4;
+        return .299*img[i]+.587*img[i+1]+.114*img[i+2];
+      }
+      function vScore(x,y0,y1){
+        const off=Math.max(1.5,.30*pxX);
+        const N=35; let sum=0,strong=0;
+        for(let i=0;i<N;i++){
+          const y=y0+(y1-y0)*(i/(N-1));
+          const v=Math.abs(lum(x-off,y)-lum(x+off,y));
+          sum+=v; if(v>=3.0) strong++;
+        }
+        return {mean:sum/N,continuity:strong/N};
+      }
+      function hScore(y,x0,x1){
+        const off=Math.max(1.5,.30*pxY);
+        const N=29; let sum=0,strong=0;
+        for(let i=0;i<N;i++){
+          const x=x0+(x1-x0)*(i/(N-1));
+          const v=Math.abs(lum(x,y-off)-lum(x,y+off));
+          sum+=v; if(v>=3.0) strong++;
+        }
+        return {mean:sum/N,continuity:strong/N};
+      }
+      function searchBest(centerPx,radiusPx,scoreFn){
+        let best=null;
+        const a=Math.max(1,Math.floor(centerPx-radiusPx));
+        const b=Math.min((scoreFn.axis==='x'?W:H)-2,Math.ceil(centerPx+radiusPx));
+        for(let p=a;p<=b;p++){
+          const m=scoreFn(p);
+          const total=m.mean+m.continuity*8;
+          if(!best||total>best.total) best={pos:p,total,...m};
+        }
+        return best;
+      }
+
+      // Known groove geometry in the already-warped 60x18 coordinate system.
+      const expLeft =cx-4*pxX, expRight=cx+4*pxX;
+      const expTop  =22*pxY,   expBottom=40*pxY;
+
+      // Side edges are sampled mainly through the straight middle portion of the groove,
+      // avoiding the bevels at its top/bottom.
+      const sideY0=24.2*pxY, sideY1=37.8*pxY;
+      const sxL=(x)=>vScore(x,sideY0,sideY1); sxL.axis='x';
+      const sxR=(x)=>vScore(x,sideY0,sideY1); sxR.axis='x';
+
+      // Top/bottom are searched across the central groove width.
+      const topX0=cx-3.6*pxX, topX1=cx+3.6*pxX;
+      const syT=(y)=>hScore(y,topX0,topX1); syT.axis='y';
+      const syB=(y)=>hScore(y,topX0,topX1); syB.axis='y';
+
+      const xRad=1.8*pxX, yRad=2.2*pxY;
+      const L=searchBest(expLeft,xRad,sxL);
+      const R=searchBest(expRight,xRad,sxR);
+      const T=searchBest(expTop,yRad,syT);
+      const B=searchBest(expBottom,yRad,syB);
+      if(!L||!R||!T||!B) return {applied:false,reason:'inner-reg-edge-missing'};
+
+      const obsW=R.pos-L.pos, obsH=B.pos-T.pos;
+      const targetW=8*pxX, targetH=18*pxY;
+      if(obsW<targetW*.70 || obsW>targetW*1.30 ||
+         obsH<targetH*.78 || obsH>targetH*1.22)
+        return {applied:false,reason:'inner-reg-size-outlier',L,R,T,B};
+
+      const obsCx=(L.pos+R.pos)*.5, obsCy=(T.pos+B.pos)*.5;
+      const targetCx=cx, targetCy=31*pxY; // midpoint of 22..40 mm
+
+      let scaleX=targetW/obsW, scaleY=targetH/obsH;
+      // This is a residual correction, not a new warp. Keep it deliberately small.
+      scaleX=Math.max(.94,Math.min(1.06,scaleX));
+      scaleY=Math.max(.94,Math.min(1.06,scaleY));
+
+      let translateX=targetCx-scaleX*obsCx;
+      let translateY=targetCy-scaleY*obsCy;
+
+      // Max residual translation: 1.5 mm in either axis.
+      const maxTx=1.5*pxX, maxTy=1.5*pxY;
+      translateX=Math.max(-maxTx,Math.min(maxTx,translateX));
+      translateY=Math.max(-maxTy,Math.min(maxTy,translateY));
+
+      const evidence=[L,R,T,B];
+      const meanEvidence=evidence.reduce((a,v)=>a+v.mean,0)/4;
+      const meanContinuity=evidence.reduce((a,v)=>a+v.continuity,0)/4;
+      const lrBalance=Math.min(L.mean,R.mean)/Math.max(1,Math.max(L.mean,R.mean));
+      const tbBalance=Math.min(T.mean,B.mean)/Math.max(1,Math.max(T.mean,B.mean));
+
+      // Do not move a good front-view warp on weak/noisy internal evidence.
+      const credible=meanEvidence>=1.8 && meanContinuity>=.20 &&
+                     Math.max(L.mean,R.mean)>=2.0 &&
+                     Math.max(T.mean,B.mean)>=1.5;
+      if(!credible){
+        return {applied:false,reason:'inner-reg-low-confidence',
+          meanEvidence,meanContinuity,lrBalance,tbBalance,L,R,T,B};
+      }
+
+      const shiftMmX=Math.abs(translateX)/pxX;
+      const shiftMmY=Math.abs(translateY)/pxY;
+      const scaleChange=Math.max(Math.abs(scaleX-1),Math.abs(scaleY-1));
+
+      // If already aligned, preserve the original pixels exactly.
+      if(shiftMmX<.12 && shiftMmY<.12 && scaleChange<.006){
+        return {applied:false,reason:'inner-reg-already-aligned',
+          scaleX:1,scaleY:1,translateX:0,translateY:0,
+          meanEvidence,meanContinuity,L,R,T,B};
+      }
+
+      const src=cv.imread(cropCanvas);
+      const dst=new cv.Mat();
+      const M=cv.matFromArray(2,3,cv.CV_64F,[
+        scaleX,0,translateX,
+        0,scaleY,translateY
+      ]);
+      cv.warpAffine(src,dst,M,new cv.Size(W,H),cv.INTER_LINEAR,cv.BORDER_REPLICATE);
+      cv.imshow(cropCanvas,dst);
+      src.delete(); dst.delete(); M.delete();
+
+      return {
+        applied:true,reason:'PASS',
+        scaleX,scaleY,translateX,translateY,
+        shiftMmX:translateX/pxX,shiftMmY:translateY/pxY,
+        observed:{
+          leftMm:L.pos/pxX,rightMm:R.pos/pxX,
+          topMm:T.pos/pxY,bottomMm:B.pos/pxY,
+          widthMm:obsW/pxX,heightMm:obsH/pxY
+        },
+        target:{grooveLeftMm:5,grooveRightMm:13,grooveTopMm:22,grooveBottomMm:40},
+        meanEvidence,meanContinuity,lrBalance,tbBalance,L,R,T,B
+      };
+    } catch(e){
+      console.warn('v31.94 inner registration failed',e);
+      return {applied:false,reason:'inner-reg-exception'};
+    }
+  }
+
+
+// v31.93: validate an OUTER candidate by asking whether, after perspective warp,
   // the known inner mechanics land where a real 60 x 18 mm cassette says they should.
   // This is a validator/ranker only. It never generates an outer frame.
   function outerInnerStructureScore(srcCanvas, pts, qrCenter, qrPoints) {
@@ -3241,6 +3395,13 @@ function detectOuterFrame(canvas, cropCanvas, options) {
       let qrNorm = null;
       try{
         warpCropToCanvas(canvas,cropCanvas,qrOrientation.points,qrOrientation.applied);
+
+        // v31.94: residual inner registration after the 4-corner perspective warp.
+        // Straight shots should receive ~zero correction; oblique residual error may
+        // receive small X/Y translation and scale correction from the known groove.
+        const innerRegistration=registerInnerGeometry(cropCanvas);
+        best.innerRegistration=innerRegistration;
+
         const qp = Array.isArray(options.qrPoints) ? options.qrPoints : [];
         const qc = options.qrCenter || null;
         const cp = qrOrientation.points; // TL,TR,BR,BL
@@ -3269,6 +3430,17 @@ function detectOuterFrame(canvas, cropCanvas, options) {
           const sideByW=qSrc/wl*outW, sideByH=qSrc/ll*outH;
           qrNorm={cx:across*outW,cy:along*outH,side:(sideByW+sideByH)*0.5,source:'qr-measured-fallback'};
         }
+        // qrNorm was projected from the original outer homography. Keep it consistent
+        // with the second-stage affine registration when that correction was applied.
+        if(qrNorm && innerRegistration && innerRegistration.applied){
+          qrNorm={
+            cx:qrNorm.cx*innerRegistration.scaleX+innerRegistration.translateX,
+            cy:qrNorm.cy*innerRegistration.scaleY+innerRegistration.translateY,
+            side:qrNorm.side*((innerRegistration.scaleX+innerRegistration.scaleY)*0.5),
+            source:(qrNorm.source||'qr')+'+inner-reg-v3194'
+          };
+        }
+
         features=detectInternalFeatures(cropCanvas,qrOrientation.applied,qrNorm);
         if (features) { features.qrOrientation = qrOrientation; best.featureDetail = features; }
       } catch(e){ console.error(e); }
@@ -3304,6 +3476,14 @@ function detectOuterFrame(canvas, cropCanvas, options) {
 let dbg='';
 
 dbg += '<b>Debug Summary</b><br>';
+if(best.innerRegistration){
+  const ir=best.innerRegistration;
+  dbg += `<b>Inner Registration: ${ir.applied?'APPLIED':'NO CHANGE'} / ${ir.reason||'-'}</b><br>`;
+  if(ir.applied){
+    dbg += `Inner correction: sx=${Number(ir.scaleX||1).toFixed(4)}, sy=${Number(ir.scaleY||1).toFixed(4)}, dx=${Number(ir.shiftMmX||0).toFixed(2)}mm, dy=${Number(ir.shiftMmY||0).toFixed(2)}mm<br>`;
+    if(ir.observed) dbg += `Observed groove: L=${Number(ir.observed.leftMm||0).toFixed(1)}, R=${Number(ir.observed.rightMm||0).toFixed(1)}, T=${Number(ir.observed.topMm||0).toFixed(1)}, B=${Number(ir.observed.bottomMm||0).toFixed(1)} mm<br>`;
+  }
+}
 dbg += 'White Mask: generated<br>';
 dbg += 'Edge: generated<br>';
 dbg += 'Bright Foreground: included as candidate source<br>';
