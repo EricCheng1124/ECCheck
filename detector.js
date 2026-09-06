@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v31.91-longedges-bottom-toplast-qr-exclusion';
+  const VERSION = 'v31.92-60x18-centered-strip-ct-safe-zone';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -1431,37 +1431,44 @@
       return best;
     }
 
-    // v31.65：卡匣外框才是 C/T 的幾何基準；QR 只用來確認上下方向。
-    // 卡匣實體長 70 mm。由上邊緣往下 30 mm、由下邊緣往上 30 mm，
-    // 中間固定 10 mm 就是唯一允許分析的試紙區。
-    const CASSETTE_L_MM = 70.0;
-    // v31.81: C/T geometry is referenced ONLY to the detected 70 mm OUTER frame.
-    // The old 30~40 mm window sat too low in real photos. Use a broader physical
-    // analysis band, but restrict C to 24~31 mm; T remains relative to actual C.
-    const STRIP_TOP_MM = 24.0;
-    const STRIP_H_MM = 13.5;
-    const C_SEARCH_TOP_MM = 29.0;
+    // v31.92：CT 改為已確認的卡匣實體結構定位。
+    // Cassette 60x18 mm；中央凹槽 22~40 mm、寬 8 mm；
+    // 試紙位於正中心，長 10 mm、寬 4 mm；CT 保守有效區為中央 8 mm = 27~35 mm。
+    const CASSETTE_L_MM = 60.0;
+    const CASSETTE_W_MM = 18.0;
+    const GROOVE_TOP_MM = 22.0;
+    const GROOVE_H_MM = 18.0;
+    const GROOVE_W_MM = 8.0;
+    const STRIP_TOP_MM = 26.0;
+    const STRIP_H_MM = 10.0;
+    const STRIP_W_MM = 4.0;
+    const CT_SAFE_TOP_MM = 27.0;
+    const CT_SAFE_BOTTOM_MM = 35.0;
+
+    // C 在 CT Safe Zone 上半段尋找；T 必須在實際 C 下方 3~6 mm。
+    const C_SEARCH_TOP_MM = CT_SAFE_TOP_MM;
     const C_SEARCH_BOTTOM_MM = 32.0;
     const T_MIN_GAP_MM = 3.0;
     const T_MAX_GAP_MM = 6.0;
-    const T_FWHM_MIN_MM = 0.15; // 放寬：排除單像素/極尖雜訊
-    const T_FWHM_MAX_MM = 1.50; // 放寬：主要排除寬廣陰影/平台
-    const T_RELATIVE_C_RATIO = 0.10; // T 線強度至少需達 C 線的 10%
+    const T_FWHM_MIN_MM = 0.15;
+    const T_FWHM_MAX_MM = 1.50;
+    const T_RELATIVE_C_RATIO = 0.10;
+
     const pxPerMm = H / CASSETTE_L_MM;
-    const qSide = Math.max(4, H * (14.0 / 70.0)); // 僅供既有平滑/最小間距參數使用，不參與定位
+    const pxPerMmX = W / CASSETTE_W_MM;
+    const qSide = Math.max(4, H * (14.0 / CASSETTE_L_MM));
     const stripCenterX = W * 0.50;
 
-    // X 方向直接以卡匣中心線為基準，避免 QR 左右小誤差帶動 CT zone。
-    const stripHalfWidth = Math.max(4, W * 0.105);
+    // 試紙寬固定 4 mm，而且一定在卡匣中心線上。
+    const stripHalfWidth = Math.max(2, (STRIP_W_MM * pxPerMmX) * 0.5);
     const x0 = clamp(Math.floor(stripCenterX - stripHalfWidth), 0, W-1);
     const x1 = clamp(Math.ceil(stripCenterX + stripHalfWidth), x0 + 1, W);
 
+    // 只對中央 10 mm 試紙做 profile；CT 再限制於中央 8 mm。
     const y0 = clamp(Math.floor(STRIP_TOP_MM * pxPerMm), 0, H-1);
     const y1 = clamp(Math.ceil((STRIP_TOP_MM + STRIP_H_MM) * pxPerMm), y0+1, H);
     const h = Math.max(1, y1-y0);
 
-    // C 位於試紙區上半部；T 位於 C 下方。兩區保留重疊容差，
-    // 但最終仍要求 T 在 refine 後確實位於 C 下方且有最小間距。
     const cExpectedLocalY = ((C_SEARCH_TOP_MM + C_SEARCH_BOTTOM_MM)*0.5 - STRIP_TOP_MM) * pxPerMm;
     let tExpectedLocalY = cExpectedLocalY + 4.5 * pxPerMm;
     const cExpectedAbsY = y0 + cExpectedLocalY;
@@ -1470,11 +1477,13 @@
       start: clamp(Math.floor((C_SEARCH_TOP_MM-STRIP_TOP_MM)*pxPerMm),0,h-1),
       end: clamp(Math.ceil((C_SEARCH_BOTTOM_MM-STRIP_TOP_MM)*pxPerMm),1,h-1)
     };
-    let tSearchRange = { start:0, end:h-1 };
+    let tSearchRange = {
+      start: clamp(Math.floor((CT_SAFE_TOP_MM-STRIP_TOP_MM)*pxPerMm),0,h-1),
+      end: clamp(Math.ceil((CT_SAFE_BOTTOM_MM-STRIP_TOP_MM)*pxPerMm),1,h-1)
+    };
     const bandHalf = h * 0.58;
     const locatorY0 = y0, locatorY1 = y1;
     const cLocatorBest = null, cLocatorHasColor = false;
-
     const topThirdY = H / 3;
     const topThirdPadding = 0;
     const windowInnerTop = win.y;
@@ -1807,9 +1816,9 @@
     );
 
     return {
-      source:'ct-outer-physical-v31-81',
+      source:'ct-physical-structure-v31-92',
       x0, x1, y0, y1, h,
-      zone:{x:x0, y:y0, w:Math.max(1, x1-x0), h:Math.max(1, y1-y0), startRatio:ctStartRatio, endRatio:ctEndRatio, widthRatio:ctEndRatio-ctStartRatio, topThirdY:Math.round(topThirdY), topThirdPadding:topThirdPadding, yLimitedByTopThird:false, coordinateSystem:'outer-70mm-physical', qrSide:qSide, stripCenterX, cExpectedAbsY, tExpectedAbsY, bandHalf, locatorY0, locatorY1, pxPerMm, cassetteMm:CASSETTE_L_MM, stripTopMm:STRIP_TOP_MM, stripHeightMm:STRIP_H_MM, cSearchTopMm:C_SEARCH_TOP_MM, cSearchBottomMm:C_SEARCH_BOTTOM_MM, tMinGapMm:T_MIN_GAP_MM, tMaxGapMm:T_MAX_GAP_MM, tFwhmMinMm:T_FWHM_MIN_MM, tFwhmMaxMm:T_FWHM_MAX_MM, tRelativeCRatio:T_RELATIVE_C_RATIO, ctGapMm, cLocatorAbsY:null, cLocatorHasColor:false},
+      zone:{x:x0, y:y0, w:Math.max(1, x1-x0), h:Math.max(1, y1-y0), startRatio:ctStartRatio, endRatio:ctEndRatio, widthRatio:ctEndRatio-ctStartRatio, topThirdY:Math.round(topThirdY), topThirdPadding:topThirdPadding, yLimitedByTopThird:false, coordinateSystem:'outer-60x18mm-centered-strip', qrSide:qSide, stripCenterX, cExpectedAbsY, tExpectedAbsY, bandHalf, locatorY0, locatorY1, pxPerMm, cassetteMm:CASSETTE_L_MM, cassetteWidthMm:CASSETTE_W_MM, grooveTopMm:GROOVE_TOP_MM, grooveHeightMm:GROOVE_H_MM, grooveWidthMm:GROOVE_W_MM, stripTopMm:STRIP_TOP_MM, stripHeightMm:STRIP_H_MM, stripWidthMm:STRIP_W_MM, ctSafeTopMm:CT_SAFE_TOP_MM, ctSafeBottomMm:CT_SAFE_BOTTOM_MM, cSearchTopMm:C_SEARCH_TOP_MM, cSearchBottomMm:C_SEARCH_BOTTOM_MM, tMinGapMm:T_MIN_GAP_MM, tMaxGapMm:T_MAX_GAP_MM, tFwhmMinMm:T_FWHM_MIN_MM, tFwhmMaxMm:T_FWHM_MAX_MM, tRelativeCRatio:T_RELATIVE_C_RATIO, ctGapMm, cLocatorAbsY:null, cLocatorHasColor:false},
       raw, profile:positive, baseline:bg, rawBaseline, rawMedian, rawMax, pinkMax, darkMax, combinedMax, selectedMode, lumBackground, lumMedian, mean:stat.mean, std:stat.std,
       maxScore, threshold, tThreshold, tcRatio, cStrength, tStrength, tRelativeThreshold, tRelativeRatio:T_RELATIVE_C_RATIO, tWeakHorizontalEvidence,
       tFwhmMm:tFwhm.widthMm, tFwhmPx:tFwhm.widthPx, tFwhmValid:tFwhm.valid, tFwhmOk, tFwhmMinMm:T_FWHM_MIN_MM, tFwhmMaxMm:T_FWHM_MAX_MM, tFwhmPeak:tFwhm.peak, tFwhmBaseline:tFwhm.baseline, tFwhmHalfLevel:tFwhm.halfLevel,
