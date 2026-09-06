@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v31.88-four-line-perspective-outer';
+  const VERSION = 'v31.89-hard70x20-four-line-outer';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -2523,10 +2523,12 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
     try {
       if (!canvas || !Array.isArray(pts) || pts.length !== 4) return null;
 
-      // v31.88:
-      // Do NOT derive 70 mm length from a single image-space width.
-      // Instead, recover four physical border lines and intersect them.
-      // QR only resolves which short side is TOP.
+      // v31.89:
+      // 1) recover LEFT/RIGHT long borders;
+      // 2) enumerate multiple TOP/BOTTOM border candidates;
+      // 3) intersect all four lines;
+      // 4) HARD-CHECK the recovered cassette against the known 70:20 = 3.50 geometry.
+      // QR only resolves which end is TOP and pairs the result to the card.
       const oriented = orientPointsWithQr(pts, qrCenter || null);
       const p = oriented.points; // TL,TR,BR,BL
       if (!p || p.length !== 4) return null;
@@ -2549,26 +2551,25 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
       function dot(a,b){ return a.x*b.x+a.y*b.y; }
       function cross(a,b){ return a.x*b.y-a.y*b.x; }
 
-      // Initial four edges only provide search corridors.
       const top0=[p[0],p[1]], right0=[p[1],p[2]], bottom0=[p[3],p[2]], left0=[p[0],p[3]];
       const c0={x:(p[0].x+p[1].x+p[2].x+p[3].x)/4,
                 y:(p[0].y+p[1].y+p[2].y+p[3].y)/4};
-      const width0=(Math.hypot(p[1].x-p[0].x,p[1].y-p[0].y)+Math.hypot(p[2].x-p[3].x,p[2].y-p[3].y))/2;
-      const len0=(Math.hypot(p[3].x-p[0].x,p[3].y-p[0].y)+Math.hypot(p[2].x-p[1].x,p[2].y-p[1].y))/2;
+
+      const width0=(Math.hypot(p[1].x-p[0].x,p[1].y-p[0].y)+
+                    Math.hypot(p[2].x-p[3].x,p[2].y-p[3].y))/2;
+      const len0=(Math.hypot(p[3].x-p[0].x,p[3].y-p[0].y)+
+                  Math.hypot(p[2].x-p[1].x,p[2].y-p[1].y))/2;
 
       function edgeNormal(a,b){
         const t=norm(sub(b,a));
         let n={x:-t.y,y:t.x};
         const mid=mix(a,b,.5);
-        // normal points from border toward initial cassette center
-        if(dot(sub(c0,mid),n)<0) n=mul(n,-1);
+        if(dot(sub(c0,mid),n)<0) n=mul(n,-1); // inward
         return {t,n};
       }
 
-      // Score a complete line displaced normally from an initial edge.
-      // True outer borders should be continuous over a large fraction of their length.
       function scoreParallelLine(a,b,offset,trim=0.08){
-        const {t,n}=edgeNormal(a,b);
+        const {n}=edgeNormal(a,b);
         const aa=add(a,mul(n,offset)), bb=add(b,mul(n,offset));
         const edgeLen=Math.hypot(bb.x-aa.x,bb.y-aa.y);
         const d=Math.max(2,Math.min(7,edgeLen*0.018));
@@ -2595,42 +2596,30 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
         };
       }
 
-      function bestParallel(a,b,outwardSpan,inwardSpan,trim,preferOutward=false){
-        let best=null;
+      function collectParallel(a,b,outwardSpan,inwardSpan,trim,preferOutward=false,maxKeep=20){
+        const arr=[];
         const span=outwardSpan+inwardSpan;
         const step=Math.max(1,Math.round(Math.max(2,span/90)));
-        // edge normal points inward, therefore negative offset searches outward.
         for(let off=-outwardSpan;off<=inwardSpan;off+=step){
           const m=scoreParallelLine(a,b,off,trim);
           let total=m.score;
-          // Slightly prefer the outermost credible line. This helps avoid QR/slot edges.
-          if(preferOutward) total += Math.max(0,-off/outwardSpan)*2.2;
-          if(!best || total>best.total) best={...m,total};
+          if(preferOutward) total += Math.max(0,-off/Math.max(1,outwardSpan))*2.0;
+          arr.push({...m,total});
         }
-        return best;
+        arr.sort((a,b)=>b.total-a.total);
+
+        // Non-maximum suppression in offset space so QR sticker edges do not
+        // occupy all kept candidates.
+        const kept=[];
+        const minSep=Math.max(2,step*2);
+        for(const c of arr){
+          if(kept.every(k=>Math.abs(k.offset-c.offset)>=minSep)){
+            kept.push(c);
+            if(kept.length>=maxKeep) break;
+          }
+        }
+        return kept;
       }
-
-      // 1) Recover the two long borders independently.
-      // Wide outward corridor is intentional: the seed contour may be inside the real shell.
-      const sideOut=Math.max(8,width0*.55);
-      const sideIn =Math.max(5,width0*.24);
-      const left =bestParallel(left0[0],left0[1],sideOut,sideIn,.12,true);
-      const right=bestParallel(right0[0],right0[1],sideOut,sideIn,.12,true);
-      if(!left||!right) return null;
-
-      // 2) Recover TOP and BOTTOM as real short border lines.
-      // TOP gets a larger outward search because previous builds often clipped the QR end.
-      const topOut=Math.max(width0*1.25,len0*.34);
-      const topIn =Math.max(width0*.32,len0*.09);
-      const botOut=Math.max(width0*.75,len0*.22);
-      const botIn =Math.max(width0*.30,len0*.09);
-      const top   =bestParallel(top0[0],top0[1],topOut,topIn,.12,true);
-      const bottom=bestParallel(bottom0[0],bottom0[1],botOut,botIn,.12,true);
-      if(!top||!bottom) return null;
-
-      // Basic continuity gates only; white-on-white borders can be weak.
-      if(left.continuity<.25 || right.continuity<.25 ||
-         top.continuity<.25 || bottom.continuity<.25) return null;
 
       function lineIntersection(a,b,c,d){
         const r=sub(b,a), ss=sub(d,c);
@@ -2640,43 +2629,130 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
         return add(a,mul(r,t));
       }
 
-      // Four actual line intersections => perspective quadrilateral.
-      const TL=lineIntersection(top.a,top.b,left.a,left.b);
-      const TR=lineIntersection(top.a,top.b,right.a,right.b);
-      const BL=lineIntersection(bottom.a,bottom.b,left.a,left.b);
-      const BR=lineIntersection(bottom.a,bottom.b,right.a,right.b);
-      if(!TL||!TR||!BR||!BL) return null;
-      const np=[TL,TR,BR,BL];
+      // ---- A. Long sides first ----
+      const sideOut=Math.max(8,width0*.55);
+      const sideIn =Math.max(5,width0*.24);
+      const leftList =collectParallel(left0[0],left0[1],sideOut,sideIn,.12,true,8);
+      const rightList=collectParallel(right0[0],right0[1],sideOut,sideIn,.12,true,8);
+      if(!leftList.length||!rightList.length) return null;
 
-      // Geometry sanity. Perspective is allowed, so opposite sides need not have equal px lengths.
-      const wt=Math.hypot(TR.x-TL.x,TR.y-TL.y);
-      const wb=Math.hypot(BR.x-BL.x,BR.y-BL.y);
-      const ll=Math.hypot(BL.x-TL.x,BL.y-TL.y);
-      const lr=Math.hypot(BR.x-TR.x,BR.y-TR.y);
-      const avgW=(wt+wb)/2, avgL=(ll+lr)/2;
-      if(avgW<8 || avgL<avgW*2.25 || avgL>avgW*5.2) return null;
-      if(Math.min(wt,wb)/Math.max(wt,wb)<.45) return null;
-      if(Math.min(ll,lr)/Math.max(ll,lr)<.58) return null;
+      // Choose a compatible long-side pair by width stability + edge evidence.
+      let sidePair=null;
+      for(const left of leftList){
+        for(const right of rightList){
+          const lmid=mix(left.a,left.b,.5), rmid=mix(right.a,right.b,.5);
+          const w=Math.hypot(rmid.x-lmid.x,rmid.y-lmid.y);
+          if(w<width0*.55 || w>width0*1.50) continue;
+          const widthErr=Math.abs(w-width0)/Math.max(1,width0);
+          const sc=left.total+right.total-widthErr*8;
+          if(!sidePair||sc>sidePair.score) sidePair={left,right,width:w,score:sc};
+        }
+      }
+      if(!sidePair) return null;
+      const left=sidePair.left, right=sidePair.right;
 
-      // QR is only a pairing/orientation safety check.
+      // ---- B. TOP/BOTTOM candidates ----
+      const topOut=Math.max(width0*1.45,len0*.42); // deliberately large: recover clipped QR end
+      const topIn =Math.max(width0*.30,len0*.08);
+      const botOut=Math.max(width0*.90,len0*.28);
+      const botIn =Math.max(width0*.28,len0*.08);
+
+      const topList   =collectParallel(top0[0],top0[1],topOut,topIn,.12,true,22);
+      const bottomList=collectParallel(bottom0[0],bottom0[1],botOut,botIn,.12,true,18);
+      if(!topList.length||!bottomList.length) return null;
+
+      // ---- C. HARD 70x20 geometry selection ----
+      // With perspective, raw pixel L/W is not exactly 3.5. Use geometric-mean
+      // opposite-side lengths as a perspective-tolerant proxy, then enforce a
+      // narrow physical band around 3.50. A QR-lower-edge TOP usually makes the
+      // cassette too short and fails this gate.
+      let best=null;
+
+      for(const top of topList){
+        if(top.continuity<.23 || top.mean<1.0) continue;
+        for(const bottom of bottomList){
+          if(bottom.continuity<.23 || bottom.mean<1.0) continue;
+
+          const TL=lineIntersection(top.a,top.b,left.a,left.b);
+          const TR=lineIntersection(top.a,top.b,right.a,right.b);
+          const BL=lineIntersection(bottom.a,bottom.b,left.a,left.b);
+          const BR=lineIntersection(bottom.a,bottom.b,right.a,right.b);
+          if(!TL||!TR||!BR||!BL) continue;
+
+          const wt=Math.hypot(TR.x-TL.x,TR.y-TL.y);
+          const wb=Math.hypot(BR.x-BL.x,BR.y-BL.y);
+          const ll=Math.hypot(BL.x-TL.x,BL.y-TL.y);
+          const lr=Math.hypot(BR.x-TR.x,BR.y-TR.y);
+          if(Math.min(wt,wb,ll,lr)<6) continue;
+
+          const widthGM=Math.sqrt(wt*wb);
+          const lengthGM=Math.sqrt(ll*lr);
+          const physicalRatio=lengthGM/Math.max(1,widthGM);
+
+          // Hard physical gate. Wide enough for moderate perspective, tight enough
+          // to reject a TOP incorrectly placed at the QR sticker's lower edge.
+          const ratioPass=physicalRatio>=3.00 && physicalRatio<=4.05;
+          if(!ratioPass) continue;
+
+          // Perspective sanity: opposite sides may differ, but not arbitrarily.
+          const widthPerspective=Math.min(wt,wb)/Math.max(wt,wb);
+          const lengthPerspective=Math.min(ll,lr)/Math.max(ll,lr);
+          if(widthPerspective<.48 || lengthPerspective<.60) continue;
+
+          const ratioErr=Math.abs(physicalRatio-3.50)/3.50;
+          const edgeScore=top.total+bottom.total+left.total+right.total;
+          const continuity=(top.continuity+bottom.continuity+left.continuity+right.continuity)/4;
+
+          // Geometry dominates edge strength so a strong QR sticker edge cannot win
+          // if it produces a cassette that is physically too short.
+          const total=edgeScore + continuity*12 - ratioErr*55;
+
+          if(!best||total>best.total){
+            best={
+              total,top,bottom,left,right,
+              pts:[TL,TR,BR,BL],
+              wt,wb,ll,lr,widthGM,lengthGM,physicalRatio,
+              widthPerspective,lengthPerspective,ratioErr
+            };
+          }
+        }
+      }
+
+      if(!best) return null;
+
+      const np=best.pts;
+
+      // QR is card pairing/orientation only.
       if(qrCenter && !pointInPolygon(qrCenter,orderPoints(np))) return null;
 
       return {
         pts:np,
-        ratio:avgL/avgW,
-        oldL:len0,oldW:width0,newL:avgL,newW:avgW,
-        left,right,top,bottom,
+        ratio:best.physicalRatio,
+        oldL:len0,oldW:width0,
+        newL:best.lengthGM,newW:best.widthGM,
+        left:best.left,right:best.right,top:best.top,bottom:best.bottom,
         applied:true,
         fourLineOuter:true,
         perspectiveOuter:true,
-        longEdgeFirst:true,
         qrOrientationOnly:true,
+
+        // v31.89 hard physical validation debug
+        hard70x20:true,
+        physicalRatio:best.physicalRatio,
+        physicalRatioTarget:3.50,
+        physicalRatioMin:3.00,
+        physicalRatioMax:4.05,
+        physicalRatioError:best.ratioErr,
+        topPx:best.wt,bottomPx:best.wb,leftPx:best.ll,rightPx:best.lr,
+        widthPerspective:best.widthPerspective,
+        lengthPerspective:best.lengthPerspective,
+
         aspectLocked:false,
         lengthDerivedFromWidth:false,
         bottomDerivedFromTop:false
       };
     } catch(e){
-      console.warn('4-line outer recovery failed',e);
+      console.warn('v31.89 hard 70x20 outer recovery failed',e);
       return null;
     }
   }
@@ -3082,6 +3158,10 @@ if (best && best.qrTemplate) dbg += '<b>QR Direction Hypothesis: ' + best.method
 if (best && best.templateImageSupport) dbg += 'QR Template Image Support: edge=' + Number(best.templateImageSupport.edge||0).toFixed(2) + ' / bright=' + Number(best.templateImageSupport.bright||0).toFixed(2) + ' / score=' + Math.round(best.templateImageSupport.score||0) + '<br>';
 if (best && best.edgeSnap && best.edgeSnap.applied) {
   dbg += 'Edge Snap: APPLIED / L ' + best.edgeSnap.oldL.toFixed(1) + '→' + best.edgeSnap.newL.toFixed(1) + ' / W ' + best.edgeSnap.oldW.toFixed(1) + '→' + best.edgeSnap.newW.toFixed(1) + '<br>';
+  if (best.edgeSnap.hard70x20) {
+    dbg += `<b>70x20 HARD Gate: PASS / ratio=${Number(best.edgeSnap.physicalRatio||0).toFixed(3)} / allowed=${Number(best.edgeSnap.physicalRatioMin||0).toFixed(2)}–${Number(best.edgeSnap.physicalRatioMax||0).toFixed(2)} / target=3.50</b><br>`;
+    dbg += `Perspective Sides: top=${Number(best.edgeSnap.topPx||0).toFixed(1)} / bottom=${Number(best.edgeSnap.bottomPx||0).toFixed(1)} / left=${Number(best.edgeSnap.leftPx||0).toFixed(1)} / right=${Number(best.edgeSnap.rightPx||0).toFixed(1)} px<br>`;
+  }
   if (best.edgeSnap.topAnchored) dbg += '<b>Outer Lock: 4 physical border lines / perspective quadrilateral</b><br>';
   if (best.edgeSnap.longEdgeFirst) dbg += `4-Line Outer: YES / TOP continuity=${Number(best.edgeSnap.top?.continuity||0).toFixed(2)} / outward search=${Number(best.edgeSnap.topSearchOutwardPx||0).toFixed(1)} px<br>`;
 
