@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v31.81-outer-angle-qr-orientation-physical-ct';
+  const VERSION = 'v31.83-outer-first-csearch-down3mm';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -1440,8 +1440,8 @@
     // analysis band, but restrict C to 24~31 mm; T remains relative to actual C.
     const STRIP_TOP_MM = 24.0;
     const STRIP_H_MM = 13.5;
-    const C_SEARCH_TOP_MM = 24.0;
-    const C_SEARCH_BOTTOM_MM = 31.0;
+    const C_SEARCH_TOP_MM = 27.0;
+    const C_SEARCH_BOTTOM_MM = 34.0;
     const T_MIN_GAP_MM = 3.0;
     const T_MAX_GAP_MM = 6.0;
     const T_FWHM_MIN_MM = 0.15; // 放寬：排除單像素/極尖雜訊
@@ -2720,6 +2720,34 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
       reason:pass?'PASS':`QR scale/orientation mismatch L=${longQ.toFixed(2)}Q W=${shortQ.toFixed(2)}Q AR=${aspect.toFixed(2)} angle=${angleDiff.toFixed(1)}`};
   }
 
+
+  // v31.82: Outer contour is accepted from cassette geometry itself.
+  // QR is NOT a scale/position/orientation gate here. It is used only to pair
+  // the detected cassette and later resolve TOP/BOTTOM (180-degree ambiguity).
+  function outerPhysicalMetrics(cand, imgArea) {
+    if (!cand || !cand.rect || !cand.rect.size) return {pass:false,reason:'outer-missing'};
+    const w=Math.max(1,Number(cand.rect.size.width||0));
+    const h=Math.max(1,Number(cand.rect.size.height||0));
+    const ratio=Math.max(w,h)/Math.max(1,Math.min(w,h));
+    const areaRatio=Number(cand.rectArea||w*h)/Math.max(1,imgArea||1);
+    const fill=Number(cand.fill||0);
+
+    // 70/20 = 3.50. Keep tolerance for rounded corners, weak edges and perspective.
+    const ratioOk=ratio>=2.70 && ratio<=4.55;
+    const areaOk=areaRatio>=0.003 && areaRatio<=0.55;
+    const fillOk=fill>=0.035 && fill<=1.08;
+    const ratioErr=Math.abs(ratio-3.5)/3.5;
+    const score=Math.max(0,24000-ratioErr*18000) +
+                Math.min(4500,Math.max(0,areaRatio)*18000) +
+                Math.min(2500,Math.max(0,fill)*2500);
+    return {
+      pass:ratioOk&&areaOk&&fillOk,
+      reason:(ratioOk&&areaOk&&fillOk)?'PASS':
+        `outer geometry mismatch AR=${ratio.toFixed(2)} area=${(areaRatio*100).toFixed(2)}% fill=${fill.toFixed(2)}`,
+      ratio,areaRatio,fill,score
+    };
+  }
+
   function detectOuterFrame(canvas, cropCanvas, options) {
     if (typeof cv === 'undefined' || !cv.Mat) return {version:VERSION,ok:false,reason:'opencv-not-ready'};
     options = Object.assign({ minAreaRatio:0.01, ratioMin:1.20, ratioMax:10.0 }, options||{});
@@ -2733,40 +2761,38 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
     const qrTemplates=buildQrCassetteTemplates(qrPoints,imgArea);
     const qrDirectMode=false;
     let rawQualified=[];
-    for (const c of rawCands) {
-      c.qrEnclosure=qrEnclosureMetrics(c,qrCenter,qrPoints);
-      c.qrGuide=qrGuidedOuterMetrics(c,qrCenter,qrPoints);
-      const poly=orderPoints(c.pts||[]);
-      const otherInside=(options.otherQrCenters||[]).filter(Boolean).some(pt=>pointInPolygon(pt,poly));
-      c.otherQrInside=otherInside;
-      if (c.qrEnclosure.pass && c.qrGuide.pass && !otherInside) rawQualified.push(c);
-    }
-    const allCands=rawQualified.slice();
     const qrRejected=[];
     const enclosingCands=[];
-    for (const c of allCands) {
-      c.qrEnclosure=c.qrEnclosure || qrEnclosureMetrics(c,qrCenter,qrPoints);
-      c.qrGuide=c.qrGuide || qrGuidedOuterMetrics(c,qrCenter,qrPoints);
-      c.qrScale={pass:c.qrGuide.pass,reason:c.qrGuide.reason,qSide:c.qrGuide.qSide,longQ:c.qrGuide.longQ,shortQ:c.qrGuide.shortQ};
-      if (c.qrEnclosure.pass && c.qrGuide.pass) enclosingCands.push(c);
-      else qrRejected.push(c);
-    }
-    // v31.75: if image contour gating rejects the only cassette even though QR is valid,
-    // fall back to the physically known QR->70x20 mm cassette geometry.
-    // This does NOT replace a valid contour candidate; it is used only when none survives.
-    let qrGeometryBackupUsed=false;
-    if (!enclosingCands.length && qrTemplates.length && options.qrGeometryBackup !== false) {
-      for (const t of qrTemplates) {
-        const otherInside=(options.otherQrCenters||[]).filter(Boolean).some(pt=>pointInPolygon(pt,orderPoints(t.pts||[])));
-        if(otherInside) continue;
-        t.qrEnclosure={pass:true,reason:'qr-geometry-backup',minClearance:0};
-        t.qrScale={pass:true,reason:'qr-geometry-backup'};
-        t.qrGuide={pass:true,score:16000,reason:'qr-template-backup',longQ:5.0,shortQ:20/14,aspect:3.5,angleDiff:0,qrFromTop:0.115,lateral:0};
-        t.qrGeometryBackup=true;
-        enclosingCands.push(t);
+
+    for (const c of rawCands) {
+      const poly=orderPoints(c.pts||[]);
+      const ownQrInside=!!(qrCenter && poly.length===4 && pointInPolygon(qrCenter,poly));
+      const otherInside=(options.otherQrCenters||[]).filter(Boolean).some(pt=>pointInPolygon(pt,poly));
+      const outerPhysical=outerPhysicalMetrics(c,imgArea);
+
+      c.qrEnclosure={pass:ownQrInside,reason:ownQrInside?'QR center paired':'QR center outside outer',minClearance:0};
+      c.qrGuide=qrGuidedOuterMetrics(c,qrCenter,qrPoints); // debug/orientation evidence only
+      c.qrScale={pass:true,reason:'not-a-gate-v3182'};
+      c.outerPhysical=outerPhysical;
+      c.otherQrInside=otherInside;
+
+      // Outer-first rule:
+      // 1) cassette itself must look like a 70x20 outer rectangle;
+      // 2) its own QR center must belong to this cassette;
+      // 3) another card's QR center may not be inside the same outer candidate.
+      if (outerPhysical.pass && ownQrInside && !otherInside) {
+        rawQualified.push(c);
+        enclosingCands.push(c);
+      } else {
+        qrRejected.push(c);
       }
-      qrGeometryBackupUsed=true;
     }
+
+    const allCands=rawQualified.slice();
+
+    // v31.82: QR geometry backup is intentionally disabled.
+    // A manually placed QR must never manufacture the cassette outer frame.
+    let qrGeometryBackupUsed=false;
     const scored=[];
     for(const c of enclosingCands.slice(0,18)){
       const geo=outerGeometryScore(c,imgArea,src.cols,src.rows);
@@ -2779,7 +2805,9 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
       // A wrong 90/180 degree hypothesis should have much weaker support on the predicted borders.
       c.templateImageSupport = c.qrTemplate ? qrTemplateImageSupport(canvas,c.pts) : null;
       const templateSupportBonus = c.qrTemplate && c.templateImageSupport ? c.templateImageSupport.score : 0;
-      c.totalScore=(guide.score||0) + geo.score*0.35 + contourBonus + templateSupportBonus;
+      const physical=c.outerPhysical || outerPhysicalMetrics(c,imgArea);
+      const qrPairBonus=(c.qrEnclosure&&c.qrEnclosure.pass)?2200:0;
+      c.totalScore=(physical.score||0) + geo.score*0.35 + contourBonus + qrPairBonus;
       scored.push(c);
     }
     scored.sort((a,b)=>b.totalScore-a.totalScore);
@@ -2791,10 +2819,13 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
       const snap=refineOuterByImageEdges(canvas,best.pts,qrCenter);
       if (snap && snap.applied) {
         const trial={pts:snap.pts,rect:{center:{x:(snap.pts[0].x+snap.pts[2].x)/2,y:(snap.pts[0].y+snap.pts[2].y)/2},size:{width:snap.newW,height:snap.newL},angle:Math.atan2(snap.pts[3].y-snap.pts[0].y,snap.pts[3].x-snap.pts[0].x)*180/Math.PI}};
-        const gm=qrGuidedOuterMetrics(trial,qrCenter,qrPoints);
-        if (gm.pass) {
-          best.edgeSnap=snap; best.pts=snap.pts; best.ratio=snap.ratio; best.rectArea=snap.newL*snap.newW; best.rect=trial.rect; best.qrGuide=gm;
-        } else best.edgeSnap={applied:false,reason:'rejected-by-qr-geometry',attempt:gm};
+        trial.ratio=Math.max(snap.newL,snap.newW)/Math.max(1,Math.min(snap.newL,snap.newW));
+        trial.rectArea=snap.newL*snap.newW;
+        trial.fill=best.fill;
+        const pm=outerPhysicalMetrics(trial,imgArea);
+        if (pm.pass) {
+          best.edgeSnap=snap; best.pts=snap.pts; best.ratio=snap.ratio; best.rectArea=snap.newL*snap.newW; best.rect=trial.rect; best.outerPhysical=pm;
+        } else best.edgeSnap={applied:false,reason:'rejected-by-outer-geometry',attempt:pm};
       }
     }
 
@@ -2851,8 +2882,9 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
       // 因為 S Well 若是 fallback 就被 no-real-window-or-sample 擋掉。
       // 這裡把可信紅線視窗當成可信特徵；S Well 沒找到時仍可判定外框成功，但 UI 會提示 S Well 尚未確認。
       const bestAreaRatio = best.rectArea / Math.max(1, imgArea);
-      const guideFinal = best.qrTemplate ? (best.qrGuide||{pass:true}) : qrGuidedOuterMetrics(best,qrCenter,qrPoints);
-      const bestOuterGeometryOk = !!(guideFinal && guideFinal.pass);
+      const guideFinal = best.qrGuide || qrGuidedOuterMetrics(best,qrCenter,qrPoints); // debug only
+      const physicalFinal = best.outerPhysical || outerPhysicalMetrics(best,imgArea);
+      const bestOuterGeometryOk = !!(physicalFinal && physicalFinal.pass);
       const bestAppearanceOk = true;
       const bestCenterOk = true;
       const bestHasTrustedRedWindow = false;
@@ -2865,7 +2897,7 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
       const partialMessage = false;
 
       let failReason = '';
-      if(!bestOuterGeometryOk) failReason = (guideFinal && guideFinal.reason) ? guideFinal.reason : 'qr-guided-outer-geometry-fail';
+      if(!bestOuterGeometryOk) failReason = (physicalFinal && physicalFinal.reason) ? physicalFinal.reason : 'outer-geometry-fail';
       else failReason = 'PASS';
 
 let dbg='';
@@ -2883,18 +2915,18 @@ else dbg += 'QR Geometry Backup: not needed<br>';
 dbg += 'QR rejected candidates: ' + qrRejected.length + '<br>';
 if (qrRejected.length) dbg += 'QR rejection detail: ' + qrRejected.slice(0,8).map(c=>`${c.method}:${c.qrEnclosure.reason},clear=${c.qrEnclosure.minClearance.toFixed(1)}`).join(' | ') + '<br>';
 dbg += 'Scored Candidates: ' + scored.length + '<br>';
-dbg += '<b>Outer Mode: QR-Guided OpenCV (Window/S well NOT used)</b><br>';
-      dbg += 'Final Gate: QR geometry=' + (bestOuterGeometryOk ? 'PASS' : 'FAIL') + '<br>';
+dbg += '<b>Outer Mode: OpenCV OUTER-FIRST; QR only pairs card + resolves 180°</b><br>';
+      dbg += 'Final Gate: OUTER geometry=' + (bestOuterGeometryOk ? 'PASS' : 'FAIL') + '<br>';
       if (guideFinal) dbg += `QR Guide: L=${Number(guideFinal.longQ||5).toFixed(2)}Q / W=${Number(guideFinal.shortQ||20/14).toFixed(2)}Q / AR=${Number(guideFinal.aspect||3.5).toFixed(2)} / angle=${Number(guideFinal.angleDiff||0).toFixed(1)}° / QR top=${Number(guideFinal.qrFromTop||0.115).toFixed(3)} / lateral=${Number(guideFinal.lateral||0).toFixed(3)}<br>`;
-dbg += 'UI Status: ' + (bestOk ? 'PASS - QR Guided Outer' : 'FAIL') + '<br>';
-dbg += 'Detection Mode: QR gives axis only / 4-direction image check chooses TOP / OpenCV finds OUTER / CT uses physical 70mm coordinate<br>';
+dbg += 'UI Status: ' + (bestOk ? 'PASS - Outer First' : 'FAIL') + '<br>';
+dbg += 'Detection Mode: OpenCV finds OUTER + exact angle / QR orientation resolves TOP-BOTTOM only / CT uses physical 70mm coordinate<br>';
 dbg += 'Outer Anchor: ' + (best && best.qrTemplate ? 'QR template fallback' : 'Contour + image edge snap') + '<br>';
 if (best && best.qrTemplate) dbg += '<b>QR Direction Hypothesis: ' + best.method + '</b><br>';
 if (best && best.templateImageSupport) dbg += 'QR Template Image Support: edge=' + Number(best.templateImageSupport.edge||0).toFixed(2) + ' / bright=' + Number(best.templateImageSupport.bright||0).toFixed(2) + ' / score=' + Math.round(best.templateImageSupport.score||0) + '<br>';
 if (best && best.edgeSnap && best.edgeSnap.applied) dbg += 'Edge Snap: APPLIED / L ' + best.edgeSnap.oldL.toFixed(1) + '→' + best.edgeSnap.newL.toFixed(1) + ' / W ' + best.edgeSnap.oldW.toFixed(1) + '→' + best.edgeSnap.newW.toFixed(1) + '<br>';
 else if (best && best.edgeSnap && best.edgeSnap.reason) dbg += 'Edge Snap: rejected (' + best.edgeSnap.reason + ')<br>';
 else dbg += 'Edge Snap: not applied<br>';
-dbg += 'Final Reason: ' + (bestOk ? 'qr-guided-opencv-outer-ok' : failReason) + '<br>';
+dbg += 'Final Reason: ' + (bestOk ? 'outer-first-opencv-ok' : failReason) + '<br>';
 dbg += 'Final Force: finalGate=' + (forceOkByFinalGate ? 'YES' : 'NO') + ' / strongCandidate=' + (forceOkByStrongCandidate ? 'YES' : 'NO') + ' / outerOnly=' + (outerOnlyOk ? 'YES' : 'NO') + '<br>';
 dbg += 'Best Gate Detail: areaRatio=' + (bestAreaRatio*100).toFixed(2) + '% / ratio=' + best.ratio.toFixed(2) + ' / outerScore=' + Math.round(best.outerScore||0) + ' / appearance=' + (bestAppearanceOk ? 'PASS':'FAIL') + ' / center=' + (bestCenterOk ? 'PASS':'FAIL') + '<br><hr>';
 
@@ -2998,7 +3030,7 @@ scored.forEach((c,i)=>
 result={
     version:VERSION,
     ok:bestOk,
-    reason:bestOk ? ((best.qrGeometryBackup ? 'qr-geometry-backup+' : '') + best.method + '+qr-guided-opencv-pass') : ((best.qrGeometryBackup ? 'qr-geometry-backup+' : '') + failReason),
+    reason:bestOk ? ((best.qrGeometryBackup ? 'qr-geometry-backup+' : '') + best.method + '+outer-first-opencv-pass') : ((best.qrGeometryBackup ? 'qr-geometry-backup+' : '') + failReason),
     ratio:best.ratio,
     areaRatio:best.rectArea/imgArea,
     fill:best.fill,
@@ -3024,7 +3056,7 @@ result={
 
 
     } else {
-      cropCanvas.width=1; cropCanvas.height=1; result={version:VERSION,ok:false,reason:(rawCands.length && !enclosingCands.length)?'no-qr-guided-outer-contour':'no-candidate',candidates:enclosingCands.length,rawCandidates:rawCands.length};
+      cropCanvas.width=1; cropCanvas.height=1; result={version:VERSION,ok:false,reason:(rawCands.length && !enclosingCands.length)?'no-outer-contour-paired-to-qr':'no-candidate',candidates:enclosingCands.length,rawCandidates:rawCands.length};
     }
     src.delete(); return result;
   }

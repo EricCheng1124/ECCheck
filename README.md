@@ -1,4 +1,4 @@
-# ASAP Check v31.81
+# ASAP Check v31.83
 
 ## Architecture
 - QR is used for data and orientation only. Manual QR sticker position is NOT used for precise cassette geometry or C/T coordinates.
@@ -15,3 +15,19 @@
 - Cyan: broad outer-based CT analysis band (24~37.5 mm).
 - Green: C search region (24~31 mm).
 - Purple: dynamic T search region (actual C + 3~6 mm).
+
+
+## v31.83
+- OpenCV outer contour is now the primary gate.
+- QR size, QR sticker position, and QR angle are no longer required to accept an outer contour.
+- QR center is used only to pair a detected outer contour to a card; QR orientation resolves 180-degree TOP/BOTTOM after pairing.
+- Window/slot and S well are not used for outer detection.
+- CT remains based on the warped 70x20 mm cassette physical coordinate; T search remains C + 3–6 mm.
+
+
+## v31.83
+- Only the green C Search window was moved downward by 3 mm.
+- C Search: 24–31 mm -> 27–34 mm from cassette TOP.
+- Cyan CT analysis zone unchanged.
+- Purple T Search unchanged: actual C + 3–6 mm.
+- Outer frame / QR orientation / T/C / FWHM logic unchanged.
