@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v31.95-qr-plane-perspective-reference';
+  const VERSION = 'v31.96-multi-anchor-wide-c-locator';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -1442,12 +1442,20 @@
     const STRIP_TOP_MM = 26.0;
     const STRIP_H_MM = 10.0;
     const STRIP_W_MM = 4.0;
-    const CT_SAFE_TOP_MM = 27.0;
-    const CT_SAFE_BOTTOM_MM = 35.0;
 
-    // C 在 CT Safe Zone 上半段尋找；T 必須在實際 C 下方 3~6 mm。
-    const C_SEARCH_TOP_MM = CT_SAFE_TOP_MM;
-    const C_SEARCH_BOTTOM_MM = 32.0;
+    // v31.96 Multi-Anchor C Locator:
+    // 26~36 mm remains the nominal strip location, but the image locator is allowed
+    // a small guard band because residual registration error must not hide a visible C line.
+    // The nominal geometry is still used as a prior, NOT as a hard lock.
+    const ANALYSIS_TOP_MM = 24.5;
+    const ANALYSIS_BOTTOM_MM = 36.5;
+    const CT_SAFE_TOP_MM = 24.5;
+    const CT_SAFE_BOTTOM_MM = 36.5;
+
+    // Wide C locator. A real C line found by image evidence becomes the anchor;
+    // T is then constrained to C + 3~6 mm.
+    const C_SEARCH_TOP_MM = 24.8;
+    const C_SEARCH_BOTTOM_MM = 32.8;
     const T_MIN_GAP_MM = 3.0;
     const T_MAX_GAP_MM = 6.0;
     const T_FWHM_MIN_MM = 0.15;
@@ -1464,22 +1472,27 @@
     const x0 = clamp(Math.floor(stripCenterX - stripHalfWidth), 0, W-1);
     const x1 = clamp(Math.ceil(stripCenterX + stripHalfWidth), x0 + 1, W);
 
-    // 只對中央 10 mm 試紙做 profile；CT 再限制於中央 8 mm。
-    const y0 = clamp(Math.floor(STRIP_TOP_MM * pxPerMm), 0, H-1);
-    const y1 = clamp(Math.ceil((STRIP_TOP_MM + STRIP_H_MM) * pxPerMm), y0+1, H);
+    // v31.96: profile uses a 12 mm guarded locator band, while X stays on the
+    // known centered 4 mm strip. This prevents a 1~2 mm Y registration error from
+    // excluding an otherwise obvious C line.
+    const y0 = clamp(Math.floor(ANALYSIS_TOP_MM * pxPerMm), 0, H-1);
+    const y1 = clamp(Math.ceil(ANALYSIS_BOTTOM_MM * pxPerMm), y0+1, H);
     const h = Math.max(1, y1-y0);
 
-    const cExpectedLocalY = ((C_SEARCH_TOP_MM + C_SEARCH_BOTTOM_MM)*0.5 - STRIP_TOP_MM) * pxPerMm;
+    // Nominal C prior is kept near the original physical expectation, but it no longer
+    // clips the search. Image evidence is allowed to move the C anchor.
+    const C_NOMINAL_MM = 29.5;
+    const cExpectedLocalY = (C_NOMINAL_MM - ANALYSIS_TOP_MM) * pxPerMm;
     let tExpectedLocalY = cExpectedLocalY + 4.5 * pxPerMm;
     const cExpectedAbsY = y0 + cExpectedLocalY;
     let tExpectedAbsY = y0 + tExpectedLocalY;
     const cSearchRange = {
-      start: clamp(Math.floor((C_SEARCH_TOP_MM-STRIP_TOP_MM)*pxPerMm),0,h-1),
-      end: clamp(Math.ceil((C_SEARCH_BOTTOM_MM-STRIP_TOP_MM)*pxPerMm),1,h-1)
+      start: clamp(Math.floor((C_SEARCH_TOP_MM-ANALYSIS_TOP_MM)*pxPerMm),0,h-1),
+      end: clamp(Math.ceil((C_SEARCH_BOTTOM_MM-ANALYSIS_TOP_MM)*pxPerMm),1,h-1)
     };
     let tSearchRange = {
-      start: clamp(Math.floor((CT_SAFE_TOP_MM-STRIP_TOP_MM)*pxPerMm),0,h-1),
-      end: clamp(Math.ceil((CT_SAFE_BOTTOM_MM-STRIP_TOP_MM)*pxPerMm),1,h-1)
+      start: clamp(Math.floor((CT_SAFE_TOP_MM-ANALYSIS_TOP_MM)*pxPerMm),0,h-1),
+      end: clamp(Math.ceil((CT_SAFE_BOTTOM_MM-ANALYSIS_TOP_MM)*pxPerMm),1,h-1)
     };
     const bandHalf = h * 0.58;
     const locatorY0 = y0, locatorY1 = y1;
@@ -1588,9 +1601,13 @@
       for (let ly=start; ly<=end; ly++) {
         const cont = rowLineContinuity(y0 + ly, mode);
         const ps = positive[ly] || 0;
-        const colorBoost = (cont.redRatio || 0) * 24 + (cont.contrastAvg || 0) * 0.55;
-        const lineBoost = Math.min(12, (cont.run || 0) * 0.45) + (cont.ratio || 0) * 12;
-        const total = (cont.score || 0) + ps * 0.24 + colorBoost + lineBoost;
+        const colorBoost = (cont.redRatio || 0) * 34 + (cont.redAvg || 0) * 0.80 + (cont.contrastAvg || 0) * 0.75;
+        const lineBoost = Math.min(15, (cont.run || 0) * 0.52) + (cont.ratio || 0) * 14;
+        // Expected physical C position is only a soft prior. Max penalty is deliberately
+        // small so a clearly visible C can win even when registration is off by 1~2 mm.
+        const posMm = ANALYSIS_TOP_MM + ly / Math.max(0.0001, pxPerMm);
+        const priorPenalty = mode==='C' ? Math.min(3.0, Math.abs(posMm-C_NOMINAL_MM)*0.55) : 0;
+        const total = (cont.score || 0) + ps * 0.24 + colorBoost + lineBoost - priorPenalty;
         const item = Object.assign({}, cont, {localY:ly, absY:y0+ly, profileScore:ps, totalScore:total});
         if (!best || item.totalScore > best.totalScore) best = item;
       }
@@ -1759,6 +1776,22 @@
 
     const cGeometryOk = !!cCont && cCont.localY >= cSearchRange.start && cCont.localY <= cSearchRange.end;
     const cColorOk = !!cCont && ((cCont.redRatio||0) >= 0.020 || (cCont.redAvg||0) >= 0.95 || (cCont.contrastAvg||0) >= 0.42);
+
+    // Multi-anchor confidence:
+    // geometry = candidate is inside the broad physical locator,
+    // image = horizontal continuity + red/pink evidence,
+    // prior = proximity to nominal physical C position (soft only).
+    const cLocatedMm = cCont ? (ANALYSIS_TOP_MM + cCont.localY / Math.max(0.0001,pxPerMm)) : -1;
+    const cPriorDeltaMm = cCont ? Math.abs(cLocatedMm - C_NOMINAL_MM) : 99;
+    let cLocatorConfidence = 0;
+    if(cCont){
+      cLocatorConfidence += cGeometryOk ? 25 : 0;
+      cLocatorConfidence += cCont.ok ? 30 : Math.min(15,(cCont.ratio||0)*70);
+      cLocatorConfidence += Math.min(25,(cCont.redRatio||0)*180 + (cCont.redAvg||0)*1.8 + (cCont.contrastAvg||0)*2.0);
+      cLocatorConfidence += Math.max(0,20 - cPriorDeltaMm*4);
+    }
+    cLocatorConfidence = Math.max(0,Math.min(100,cLocatorConfidence));
+
     const cDetected = !!(cCont && cCont.ok && cGeometryOk && cColorOk);
 
     const tGeometryOk = !!tCont && tCont.localY >= dynTRange.start && tCont.localY <= dynTRange.end;
@@ -1801,7 +1834,7 @@
 
     cQ.detected = cDetected;
     tQ.detected = tDetected;
-    cQ.reject = !cCont ? 'no-horizontal-line' : !cGeometryOk ? 'outside-middle10-c-band' : !cCont.ok ? 'no-red-continuity' : !cColorOk ? 'weak-color' : 'PASS';
+    cQ.reject = !cCont ? 'no-horizontal-line' : !cGeometryOk ? 'outside-wide-c-locator' : !cCont.ok ? 'no-red-continuity' : !cColorOk ? 'weak-color' : 'PASS';
     tQ.reject = !tCont ? 'no-t-candidate' : !tGeometryOk ? 'outside-middle10-t-band' : !refinedSeparationOk ? 't-gap-outside-3-6mm' : !tRelativeOk ? 'below-10pct-of-c' : !tFwhm.valid ? 'fwhm-no-peak' : !tFwhmOk ? ('fwhm-outside-' + T_FWHM_MIN_MM.toFixed(2) + '-' + T_FWHM_MAX_MM.toFixed(2) + 'mm') : 'PASS';
 
     let result = 'Invalid';
@@ -1816,11 +1849,12 @@
     );
 
     return {
-      source:'ct-physical-structure-v31-95',
+      source:'ct-multi-anchor-wide-c-locator-v31-96',
       x0, x1, y0, y1, h,
-      zone:{x:x0, y:y0, w:Math.max(1, x1-x0), h:Math.max(1, y1-y0), startRatio:ctStartRatio, endRatio:ctEndRatio, widthRatio:ctEndRatio-ctStartRatio, topThirdY:Math.round(topThirdY), topThirdPadding:topThirdPadding, yLimitedByTopThird:false, coordinateSystem:'outer-60x18mm-centered-strip', qrSide:qSide, stripCenterX, cExpectedAbsY, tExpectedAbsY, bandHalf, locatorY0, locatorY1, pxPerMm, cassetteMm:CASSETTE_L_MM, cassetteWidthMm:CASSETTE_W_MM, grooveTopMm:GROOVE_TOP_MM, grooveHeightMm:GROOVE_H_MM, grooveWidthMm:GROOVE_W_MM, stripTopMm:STRIP_TOP_MM, stripHeightMm:STRIP_H_MM, stripWidthMm:STRIP_W_MM, ctSafeTopMm:CT_SAFE_TOP_MM, ctSafeBottomMm:CT_SAFE_BOTTOM_MM, cSearchTopMm:C_SEARCH_TOP_MM, cSearchBottomMm:C_SEARCH_BOTTOM_MM, tMinGapMm:T_MIN_GAP_MM, tMaxGapMm:T_MAX_GAP_MM, tFwhmMinMm:T_FWHM_MIN_MM, tFwhmMaxMm:T_FWHM_MAX_MM, tRelativeCRatio:T_RELATIVE_C_RATIO, ctGapMm, cLocatorAbsY:null, cLocatorHasColor:false},
+      zone:{x:x0, y:y0, w:Math.max(1, x1-x0), h:Math.max(1, y1-y0), startRatio:ctStartRatio, endRatio:ctEndRatio, widthRatio:ctEndRatio-ctStartRatio, topThirdY:Math.round(topThirdY), topThirdPadding:topThirdPadding, yLimitedByTopThird:false, coordinateSystem:'multi-anchor-wide-c-locator-60x18mm', qrSide:qSide, stripCenterX, cExpectedAbsY, tExpectedAbsY, bandHalf, locatorY0, locatorY1, pxPerMm, cassetteMm:CASSETTE_L_MM, cassetteWidthMm:CASSETTE_W_MM, grooveTopMm:GROOVE_TOP_MM, grooveHeightMm:GROOVE_H_MM, grooveWidthMm:GROOVE_W_MM, stripTopMm:STRIP_TOP_MM, stripHeightMm:STRIP_H_MM, stripWidthMm:STRIP_W_MM, ctSafeTopMm:CT_SAFE_TOP_MM, ctSafeBottomMm:CT_SAFE_BOTTOM_MM, cSearchTopMm:C_SEARCH_TOP_MM, cSearchBottomMm:C_SEARCH_BOTTOM_MM, tMinGapMm:T_MIN_GAP_MM, tMaxGapMm:T_MAX_GAP_MM, tFwhmMinMm:T_FWHM_MIN_MM, tFwhmMaxMm:T_FWHM_MAX_MM, tRelativeCRatio:T_RELATIVE_C_RATIO, ctGapMm, cLocatorAbsY:cCont?cCont.absY:null, cLocatorHasColor:cColorOk, cLocatedMm, cPriorDeltaMm, cLocatorConfidence, analysisTopMm:ANALYSIS_TOP_MM, analysisBottomMm:ANALYSIS_BOTTOM_MM},
       raw, profile:positive, baseline:bg, rawBaseline, rawMedian, rawMax, pinkMax, darkMax, combinedMax, selectedMode, lumBackground, lumMedian, mean:stat.mean, std:stat.std,
       maxScore, threshold, tThreshold, tcRatio, cStrength, tStrength, tRelativeThreshold, tRelativeRatio:T_RELATIVE_C_RATIO, tWeakHorizontalEvidence,
+      cLocatedMm, cPriorDeltaMm, cLocatorConfidence,
       tFwhmMm:tFwhm.widthMm, tFwhmPx:tFwhm.widthPx, tFwhmValid:tFwhm.valid, tFwhmOk, tFwhmMinMm:T_FWHM_MIN_MM, tFwhmMaxMm:T_FWHM_MAX_MM, tFwhmPeak:tFwhm.peak, tFwhmBaseline:tFwhm.baseline, tFwhmHalfLevel:tFwhm.halfLevel,
       candidateFloor, minSep,
       cRange, tRange,
