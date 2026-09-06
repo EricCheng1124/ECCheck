@@ -81,7 +81,7 @@
   };
 
   // v31.71: multi-card extension built directly on the stable v31.70 single-card core.
-  const BUILD_VERSION = 'v31.89';
+  const BUILD_VERSION = 'v31.90';
   const MULTI_MAX_CARDS = 8;
 
   function unlock() {
@@ -705,7 +705,7 @@
       poly=clipHalfPlane(poly,nx,ny,k);
     });
 
-    // Also keep work bounded around this QR. Cassette is 70x20 mm, QR ~=14 mm.
+    // Also keep work bounded around this QR. Cassette is 60x18 mm, QR ~=14 mm.
     // Use a generous 6Q square; true Voronoi handles neighboring cards.
     const bound=[
       {x:c.x-3.0*side,y:c.y-1.5*side},{x:c.x+3.0*side,y:c.y-1.5*side},
@@ -1490,7 +1490,7 @@ function renderCombinedDetectionView() {
         return;
       }
 
-      // v31.89 MULTI CARD: do NOT crop/Voronoi the source before OpenCV.
+      // v31.90 MULTI CARD: do NOT crop/Voronoi the source before OpenCV.
       // OpenCV sees the full image for every card; each outer candidate must contain
       // its own QR and must NOT contain another detected QR center. This avoids
       // cutting a rotated/overlapping cassette in half while still preventing one

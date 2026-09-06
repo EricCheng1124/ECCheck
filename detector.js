@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v31.89-hard70x20-four-line-outer';
+  const VERSION = 'v31.90-hard60x18-four-line-outer';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -1242,7 +1242,7 @@
     if (!cropCanvas) return null;
     const W = cropCanvas.width;
     const H = cropCanvas.height;
-    // v31.81: after 70x20 perspective warp, CT geometry is derived from the OUTER frame only.
+    // v31.81: after 60x18 perspective warp, CT geometry is derived from the OUTER frame only.
     // Window/slot detection is no longer a prerequisite. This synthetic ROI is
     // centered on the cassette and uses a physical 24~37.5 mm analysis band; C is restricted to 24~31 mm.
     if (!win) win = {x:W*0.32, y:H*(24/70), w:W*0.36, h:H*(13.5/70), source:'outer-physical-ct-roi'};
@@ -1993,7 +1993,7 @@
     const chosen = makeFixedInternalByDirection(cropCanvas, W, H, directionAnalysis, !!forceQrTop);
 
     // v31.80: Window/slot and S-well are retired from positioning.
-    // Outer warp defines a 70x20 mm cassette; CT ROI is therefore fixed in mm.
+    // Outer warp defines a 60x18 mm cassette; CT ROI is therefore fixed in mm.
     const win = {
       x: Math.round(W*0.32), y: Math.round(H*(24/70)),
       w: Math.round(W*0.36), h: Math.round(H*(10/70)),
@@ -2527,7 +2527,7 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
       // 1) recover LEFT/RIGHT long borders;
       // 2) enumerate multiple TOP/BOTTOM border candidates;
       // 3) intersect all four lines;
-      // 4) HARD-CHECK the recovered cassette against the known 70:20 = 3.50 geometry.
+      // 4) HARD-CHECK the recovered cassette against the known 60:18 = 3.3333 geometry.
       // QR only resolves which end is TOP and pairs the result to the card.
       const oriented = orientPointsWithQr(pts, qrCenter || null);
       const p = oriented.points; // TL,TR,BR,BL
@@ -2661,10 +2661,10 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
       const bottomList=collectParallel(bottom0[0],bottom0[1],botOut,botIn,.12,true,18);
       if(!topList.length||!bottomList.length) return null;
 
-      // ---- C. HARD 70x20 geometry selection ----
+      // ---- C. HARD 60x18 geometry selection ----
       // With perspective, raw pixel L/W is not exactly 3.5. Use geometric-mean
       // opposite-side lengths as a perspective-tolerant proxy, then enforce a
-      // narrow physical band around 3.50. A QR-lower-edge TOP usually makes the
+      // narrow physical band around 3.333. A QR-lower-edge TOP usually makes the
       // cassette too short and fails this gate.
       let best=null;
 
@@ -2691,7 +2691,7 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
 
           // Hard physical gate. Wide enough for moderate perspective, tight enough
           // to reject a TOP incorrectly placed at the QR sticker's lower edge.
-          const ratioPass=physicalRatio>=3.00 && physicalRatio<=4.05;
+          const ratioPass=physicalRatio>=2.88 && physicalRatio<=3.86;
           if(!ratioPass) continue;
 
           // Perspective sanity: opposite sides may differ, but not arbitrarily.
@@ -2699,7 +2699,7 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
           const lengthPerspective=Math.min(ll,lr)/Math.max(ll,lr);
           if(widthPerspective<.48 || lengthPerspective<.60) continue;
 
-          const ratioErr=Math.abs(physicalRatio-3.50)/3.50;
+          const ratioErr=Math.abs(physicalRatio-(60/18))/(60/18);
           const edgeScore=top.total+bottom.total+left.total+right.total;
           const continuity=(top.continuity+bottom.continuity+left.continuity+right.continuity)/4;
 
@@ -2737,11 +2737,11 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
         qrOrientationOnly:true,
 
         // v31.89 hard physical validation debug
-        hard70x20:true,
+        hard60x18:true,
         physicalRatio:best.physicalRatio,
-        physicalRatioTarget:3.50,
-        physicalRatioMin:3.00,
-        physicalRatioMax:4.05,
+        physicalRatioTarget:(60/18),
+        physicalRatioMin:2.88,
+        physicalRatioMax:3.86,
         physicalRatioError:best.ratioErr,
         topPx:best.wt,bottomPx:best.wb,leftPx:best.ll,rightPx:best.lr,
         widthPerspective:best.widthPerspective,
@@ -2752,7 +2752,7 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
         bottomDerivedFromTop:false
       };
     } catch(e){
-      console.warn('v31.89 hard 70x20 outer recovery failed',e);
+      console.warn('v31.89 hard 60x18 outer recovery failed',e);
       return null;
     }
   }
@@ -2760,7 +2760,7 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
 
 
   // v31.79: score a QR-derived cassette template against the actual image.
-  // Higher score means the predicted 70x20 mm rectangle has real image edges
+  // Higher score means the predicted 60x18 mm rectangle has real image edges
   // at its four borders and the inside is reasonably brighter/cleaner than outside.
   // This is direction-agnostic and is used only to choose among the 4 QR hypotheses.
   function qrTemplateImageSupport(canvas, pts) {
@@ -2811,7 +2811,7 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
 
 
   // v31.78: QR-guided OpenCV outer-frame geometry.
-  // QR = 14x14 mm, cassette = 70x20 mm, QR is always at the cassette top.
+  // QR = 14x14 mm, cassette = 60x18 mm, QR is always at the cassette top.
   function qrGuidedOuterMetrics(cand, qrCenter, qrPoints) {
     if (!cand || !Array.isArray(qrPoints) || qrPoints.length < 4)
       return {pass:false, reason:'qr-geometry-missing', score:0};
@@ -2983,7 +2983,7 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
       c.otherQrInside=otherInside;
 
       // Outer-first rule:
-      // 1) cassette itself must look like a 70x20 outer rectangle;
+      // 1) cassette itself must look like a 60x18 outer rectangle;
       // 2) its own QR center must belong to this cassette;
       // 3) another card's QR center may not be inside the same outer candidate.
       if (outerPhysical.pass && ownQrInside && !otherInside) {
@@ -3138,7 +3138,7 @@ dbg += 'Raw Candidates: ' + rawCands.length + '<br>';
 dbg += 'QR template candidates: ' + qrTemplates.length + '<br>';
 dbg += 'All Candidates: ' + allCands.length + '<br>';
 dbg += 'QR-enclosing cassette candidates: ' + enclosingCands.length + '<br>';
-if (qrGeometryBackupUsed) dbg += '<b>QR Geometry Backup: USED (70x20 mm from QR)</b><br>';
+if (qrGeometryBackupUsed) dbg += '<b>QR Geometry Backup: USED (60x18 mm from QR)</b><br>';
 else dbg += 'QR Geometry Backup: not needed<br>';
 dbg += 'QR rejected candidates: ' + qrRejected.length + '<br>';
 if (qrRejected.length) dbg += 'QR rejection detail: ' + qrRejected.slice(0,8).map(c=>`${c.method}:${c.qrEnclosure.reason},clear=${c.qrEnclosure.minClearance.toFixed(1)}`).join(' | ') + '<br>';
@@ -3158,8 +3158,8 @@ if (best && best.qrTemplate) dbg += '<b>QR Direction Hypothesis: ' + best.method
 if (best && best.templateImageSupport) dbg += 'QR Template Image Support: edge=' + Number(best.templateImageSupport.edge||0).toFixed(2) + ' / bright=' + Number(best.templateImageSupport.bright||0).toFixed(2) + ' / score=' + Math.round(best.templateImageSupport.score||0) + '<br>';
 if (best && best.edgeSnap && best.edgeSnap.applied) {
   dbg += 'Edge Snap: APPLIED / L ' + best.edgeSnap.oldL.toFixed(1) + '→' + best.edgeSnap.newL.toFixed(1) + ' / W ' + best.edgeSnap.oldW.toFixed(1) + '→' + best.edgeSnap.newW.toFixed(1) + '<br>';
-  if (best.edgeSnap.hard70x20) {
-    dbg += `<b>70x20 HARD Gate: PASS / ratio=${Number(best.edgeSnap.physicalRatio||0).toFixed(3)} / allowed=${Number(best.edgeSnap.physicalRatioMin||0).toFixed(2)}–${Number(best.edgeSnap.physicalRatioMax||0).toFixed(2)} / target=3.50</b><br>`;
+  if (best.edgeSnap.hard60x18) {
+    dbg += `<b>60x18 HARD Gate: PASS / ratio=${Number(best.edgeSnap.physicalRatio||0).toFixed(3)} / allowed=${Number(best.edgeSnap.physicalRatioMin||0).toFixed(2)}–${Number(best.edgeSnap.physicalRatioMax||0).toFixed(2)} / target=3.333</b><br>`;
     dbg += `Perspective Sides: top=${Number(best.edgeSnap.topPx||0).toFixed(1)} / bottom=${Number(best.edgeSnap.bottomPx||0).toFixed(1)} / left=${Number(best.edgeSnap.leftPx||0).toFixed(1)} / right=${Number(best.edgeSnap.rightPx||0).toFixed(1)} px<br>`;
   }
   if (best.edgeSnap.topAnchored) dbg += '<b>Outer Lock: 4 physical border lines / perspective quadrilateral</b><br>';
