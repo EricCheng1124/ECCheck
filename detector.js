@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v31.96-multi-anchor-wide-c-locator';
+  const VERSION = 'v31.97-multi-anchor-2of3-fallback';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -3481,9 +3481,12 @@ function detectOuterFrame(canvas, cropCanvas, options) {
       const innerStructureBonus=
         Math.min(15000,Math.max(0,c.innerStructure.score||0)*180) +
         (c.innerStructure.pass?4500:-2500);
+      // v31.97: QR perspective is a SOFT confidence signal.
+      // Strong QR geometry helps ranking, but a steep photo / noisy QR corners must not
+      // kill an otherwise consistent Outer + Inner candidate.
       const qrPlaneBonus=
-        Math.min(22000,Math.max(0,c.qrPlaneGeometry.score||0)*95) +
-        (c.qrPlaneGeometry.pass?7000:-6500);
+        Math.min(12000,Math.max(0,c.qrPlaneGeometry.score||0)*55) +
+        (c.qrPlaneGeometry.pass?3500:-1200);
 
       c.totalScore=(physical.score||0) + geo.score*0.35 + contourBonus +
         qrPairBonus + edgeSupportBonus + innerStructureBonus + qrPlaneBonus;
@@ -3514,8 +3517,14 @@ function detectOuterFrame(canvas, cropCanvas, options) {
 
         const beforeQrPlane=best.qrPlaneGeometry || qrPlaneGeometryScore(best.pts,qrPoints);
         const snapQrPlane=qrPlaneGeometryScore(snap.pts,qrPoints);
-        const qrPlaneNotWorse=snapQrPlane.pass &&
-          snapQrPlane.score >= Math.max(20,(beforeQrPlane.score||0)*0.80);
+
+        // v31.97 fallback rule:
+        // - If QR-plane was already LOW/FAIL, it cannot block edge snap.
+        // - If QR-plane was HIGH/PASS, do not allow snap to destroy that good evidence.
+        const qrPlaneNotWorse = !beforeQrPlane.pass || (
+          snapQrPlane.pass &&
+          snapQrPlane.score >= Math.max(20,(beforeQrPlane.score||0)*0.72)
+        );
 
         if (pm.pass && supportNotWorse && innerNotWorse && qrPlaneNotWorse) {
           best.edgeSnap=snap; best.pts=snap.pts; best.ratio=snap.ratio;
@@ -3526,7 +3535,7 @@ function detectOuterFrame(canvas, cropCanvas, options) {
         } else {
           best.edgeSnap={
             applied:false,
-            reason:!pm.pass?'rejected-by-outer-geometry':(!supportNotWorse?'rejected-by-four-edge-support':(!innerNotWorse?'rejected-by-inner-structure':'rejected-by-qr-plane-geometry')),
+            reason:!pm.pass?'rejected-by-outer-geometry':(!supportNotWorse?'rejected-by-four-edge-support':(!innerNotWorse?'rejected-by-inner-structure':'rejected-because-good-qr-plane-would-be-damaged')),
             attempt:pm,
             edgeSupport:snapSupport
           };
@@ -3609,12 +3618,30 @@ function detectOuterFrame(canvas, cropCanvas, options) {
       const physicalFinal = best.outerPhysical || outerPhysicalMetrics(best,imgArea);
       const edgeSupportFinal = best.fourEdgeSupport || outerFourEdgeSupport(canvas,best.pts);
       const qrPlaneFinal = best.qrPlaneGeometry || qrPlaneGeometryScore(best.pts,qrPoints);
-      const qrPlaneRequired = Array.isArray(qrPoints) && qrPoints.length>=4;
+
+      // v31.97 Multi-Anchor Consensus:
+      // Anchor A = real 60x18 OUTER + four-edge support
+      // Anchor B = QR-plane perspective consistency
+      // Anchor C = known inner groove/strip structure
+      //
+      // QR is no longer a hard gate. At least TWO anchors must agree.
+      // We still require the candidate to satisfy the basic physical outer plausibility
+      // because all analysis coordinates originate from a cassette candidate.
+      const outerAnchorPass = !!(
+        physicalFinal && physicalFinal.pass &&
+        edgeSupportFinal && edgeSupportFinal.pass
+      );
+      const qrAnchorPass = !!(qrPlaneFinal && qrPlaneFinal.pass);
+      const innerFinal = best.innerStructure || outerInnerStructureScore(canvas,best.pts,qrCenter,qrPoints);
+      const innerAnchorPass = !!(innerFinal && innerFinal.pass);
+      const anchorVotes = (outerAnchorPass?1:0) + (qrAnchorPass?1:0) + (innerAnchorPass?1:0);
       const bestOuterGeometryOk = !!(
         physicalFinal && physicalFinal.pass &&
-        edgeSupportFinal && edgeSupportFinal.pass &&
-        (!qrPlaneRequired || (qrPlaneFinal && qrPlaneFinal.pass))
+        anchorVotes >= 2
       );
+      const geometryConfidence =
+        anchorVotes===3 ? 'HIGH' :
+        anchorVotes===2 ? 'FALLBACK' : 'LOW';
       const bestAppearanceOk = true;
       const bestCenterOk = true;
       const bestHasTrustedRedWindow = false;
@@ -3630,19 +3657,24 @@ function detectOuterFrame(canvas, cropCanvas, options) {
       if(!bestOuterGeometryOk) {
         if(!(physicalFinal && physicalFinal.pass))
           failReason=(physicalFinal&&physicalFinal.reason)?physicalFinal.reason:'outer-geometry-fail';
-        else if(!(edgeSupportFinal&&edgeSupportFinal.pass))
-          failReason=(edgeSupportFinal&&edgeSupportFinal.reason)?edgeSupportFinal.reason:'outer-edge-support-fail';
         else
-          failReason=(qrPlaneFinal&&qrPlaneFinal.reason)?qrPlaneFinal.reason:'qr-plane-geometry-fail';
-      } else failReason = 'PASS';
+          failReason='multi-anchor-consensus-fail-' + anchorVotes + '-of-3';
+      } else {
+        failReason = anchorVotes===3 ? 'PASS-3-of-3' : 'PASS-2-of-3-FALLBACK';
+      }
 
 let dbg='';
 
 dbg += '<b>Debug Summary</b><br>';
 if(best.qrPlaneGeometry){
   const qpg=best.qrPlaneGeometry;
-  dbg += `<b>QR Perspective Reference: ${qpg.pass?'PASS':'FAIL'}</b><br>`;
+  dbg += `<b>QR Perspective Reference: ${qpg.pass?'PASS':'LOW / FALLBACK ALLOWED'}</b><br>`;
   dbg += `QR-plane ratio=${Number(qpg.ratio||0).toFixed(3)} / target=3.333 / orth=${Number(qpg.orth||0).toFixed(3)} / parallel=${Number(qpg.tbParallel||0).toFixed(3)},${Number(qpg.lrParallel||0).toFixed(3)}<br>`;
+}
+dbg += `<b>Geometry Consensus: ${geometryConfidence} / ${anchorVotes} of 3</b><br>`;
+dbg += `Anchor A OUTER=${outerAnchorPass?'PASS':'FAIL'} / Anchor B QR=${qrAnchorPass?'PASS':'LOW'} / Anchor C INNER=${innerAnchorPass?'PASS':'FAIL'}<br>`;
+if(anchorVotes===2 && !qrAnchorPass){
+  dbg += '<b>Fallback Mode: QR perspective LOW; continuing with OUTER + INNER</b><br>';
 }
 if(best.innerRegistration){
   const ir=best.innerRegistration;
@@ -3665,7 +3697,7 @@ dbg += 'QR rejected candidates: ' + qrRejected.length + '<br>';
 if (qrRejected.length) dbg += 'QR rejection detail: ' + qrRejected.slice(0,8).map(c=>`${c.method}:${c.qrEnclosure.reason},clear=${c.qrEnclosure.minClearance.toFixed(1)}`).join(' | ') + '<br>';
 dbg += 'Scored Candidates: ' + scored.length + '<br>';
 dbg += '<b>Outer Mode: OpenCV OUTER-FIRST; QR only pairs card + resolves 180°</b><br>';
-      dbg += 'Final Gate: OUTER geometry=' + (bestOuterGeometryOk ? 'PASS' : 'FAIL') + '<br>';
+      dbg += 'Final Gate: Multi-Anchor=' + (bestOuterGeometryOk ? ('PASS ('+anchorVotes+'/3)') : ('FAIL ('+anchorVotes+'/3)')) + '<br>';
       if (edgeSupportFinal) {
         const es=(edgeSupportFinal.sides||[]).map(v=>`${v.name}=${Number(v.value||0).toFixed(2)}`).join(' / ');
         dbg += `Four-edge Support: ${edgeSupportFinal.pass?'PASS':'FAIL'} / mean=${Number(edgeSupportFinal.mean||0).toFixed(2)} / min=${Number(edgeSupportFinal.min||0).toFixed(2)} / strong=${Number(edgeSupportFinal.strongSides||0)}/4<br>`;
@@ -3673,7 +3705,7 @@ dbg += '<b>Outer Mode: OpenCV OUTER-FIRST; QR only pairs card + resolves 180°</
       }
       if (guideFinal) dbg += `QR Guide: L=${Number(guideFinal.longQ||5).toFixed(2)}Q / W=${Number(guideFinal.shortQ||20/14).toFixed(2)}Q / AR=${Number(guideFinal.aspect||3.5).toFixed(2)} / angle=${Number(guideFinal.angleDiff||0).toFixed(1)}° / QR top=${Number(guideFinal.qrFromTop||0.115).toFixed(3)} / lateral=${Number(guideFinal.lateral||0).toFixed(3)}<br>`;
 dbg += 'UI Status: ' + (bestOk ? 'PASS - Outer First' : 'FAIL') + '<br>';
-dbg += 'Detection Mode: OpenCV finds OUTER + exact angle / QR orientation resolves TOP-BOTTOM only / CT uses physical 70mm coordinate<br>';
+dbg += 'Detection Mode: OUTER + QR perspective soft confidence + INNER validation / CT uses physical 60x18 mm coordinate<br>';
 dbg += 'Outer Anchor: ' + (best && best.qrTemplate ? 'QR template fallback' : 'Contour + image edge snap') + '<br>';
 if (best && best.qrTemplate) dbg += '<b>QR Direction Hypothesis: ' + best.method + '</b><br>';
 if (best && best.templateImageSupport) dbg += 'QR Template Image Support: edge=' + Number(best.templateImageSupport.edge||0).toFixed(2) + ' / bright=' + Number(best.templateImageSupport.bright||0).toFixed(2) + ' / score=' + Math.round(best.templateImageSupport.score||0) + '<br>';
