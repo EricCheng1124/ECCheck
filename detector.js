@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v31.83-outer-first-csearch-down3mm';
+  const VERSION = 'v31.84-c3mm-t3mm-no-cyan-ct';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -1440,8 +1440,8 @@
     // analysis band, but restrict C to 24~31 mm; T remains relative to actual C.
     const STRIP_TOP_MM = 24.0;
     const STRIP_H_MM = 13.5;
-    const C_SEARCH_TOP_MM = 27.0;
-    const C_SEARCH_BOTTOM_MM = 34.0;
+    const C_SEARCH_TOP_MM = 29.0;
+    const C_SEARCH_BOTTOM_MM = 32.0;
     const T_MIN_GAP_MM = 3.0;
     const T_MAX_GAP_MM = 6.0;
     const T_FWHM_MIN_MM = 0.15; // 放寬：排除單像素/極尖雜訊
@@ -1956,12 +1956,10 @@
     if (f.ctAnalysis && f.ctAnalysis.zone) {
       const z = f.ctAnalysis.zone;
       ctx.save();
-      ctx.strokeStyle = 'rgba(6,182,212,0.98)';
-      ctx.fillStyle = 'rgba(6,182,212,0.98)';
-      ctx.lineWidth = Math.max(1.5, W/210);
-      ctx.strokeRect(z.x, z.y, z.w, z.h);
+      // v31.84: cyan Outer-based CT debug box removed.
+      // The internal analysis buffer is still used, but only C Search (green)
+      // and T Search (purple) are drawn for a cleaner physical-ROI display.
       ctx.font = `${Math.max(8, Math.round(W/34))}px sans-serif`;
-      ctx.fillText('Outer-based CT', z.x + 2, Math.max(10, z.y - 3));
       if (f.ctAnalysis.cRange) {
         const cy0=f.ctAnalysis.y0+f.ctAnalysis.cRange.start, cy1=f.ctAnalysis.y0+f.ctAnalysis.cRange.end;
         ctx.strokeStyle='rgba(34,197,94,0.98)'; ctx.strokeRect(z.x,cy0,z.w,Math.max(1,cy1-cy0));
