@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v31.84-c3mm-t3mm-no-cyan-ct';
+  const VERSION = 'v31.85-four-edge-outer-validation';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -2722,6 +2722,82 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
   // v31.82: Outer contour is accepted from cassette geometry itself.
   // QR is NOT a scale/position/orientation gate here. It is used only to pair
   // the detected cassette and later resolve TOP/BOTTOM (180-degree ambiguity).
+
+  // v31.85: Verify the actual cassette border on all four sides.
+  // This is intentionally independent of C/T, QR sticker position and S-well.
+  // For each candidate side, sample the luminance change across the border.
+  function outerFourEdgeSupport(canvas, pts) {
+    try {
+      if (!canvas || !Array.isArray(pts) || pts.length !== 4)
+        return {pass:false,reason:'edge-support-missing',mean:0,min:0,strongSides:0,sides:[]};
+
+      const p=orderPoints(pts);
+      if (!p || p.length !== 4)
+        return {pass:false,reason:'edge-support-points',mean:0,min:0,strongSides:0,sides:[]};
+
+      const ctx=canvas.getContext('2d',{willReadFrequently:true});
+      const W=canvas.width,H=canvas.height;
+      const im=ctx.getImageData(0,0,W,H).data;
+      const lum=(x,y)=>{
+        const xx=Math.max(0,Math.min(W-1,Math.round(x)));
+        const yy=Math.max(0,Math.min(H-1,Math.round(y)));
+        const i=(yy*W+xx)*4;
+        return 0.299*im[i]+0.587*im[i+1]+0.114*im[i+2];
+      };
+
+      const cx=(p[0].x+p[1].x+p[2].x+p[3].x)/4;
+      const cy=(p[0].y+p[1].y+p[2].y+p[3].y)/4;
+
+      const names=['TOP','RIGHT','BOTTOM','LEFT'];
+      const pairs=[[0,1],[1,2],[3,2],[0,3]];
+      const vals=[];
+
+      for(let si=0;si<4;si++){
+        const a=p[pairs[si][0]], b=p[pairs[si][1]];
+        let tx=b.x-a.x, ty=b.y-a.y;
+        const len=Math.max(1,Math.hypot(tx,ty)); tx/=len; ty/=len;
+
+        // Perpendicular; choose the sign that points toward candidate center.
+        let nx=-ty, ny=tx;
+        const mx=(a.x+b.x)/2, my=(a.y+b.y)/2;
+        if((cx-mx)*nx+(cy-my)*ny < 0){ nx=-nx; ny=-ny; }
+
+        // Offset adapts to candidate size, but stays small enough to measure the real border.
+        const d=Math.max(2,Math.min(7,Math.round(Math.min(
+          Math.hypot(p[1].x-p[0].x,p[1].y-p[0].y),
+          Math.hypot(p[3].x-p[0].x,p[3].y-p[0].y)
+        )*0.035)));
+
+        let sum=0,count=0;
+        // Avoid rounded corners: sample central 72% of each side.
+        for(let k=0;k<17;k++){
+          const f=0.14 + (0.72*k/16);
+          const x=a.x+(b.x-a.x)*f, y=a.y+(b.y-a.y)*f;
+          const inside=lum(x+nx*d,y+ny*d);
+          const outside=lum(x-nx*d,y-ny*d);
+          sum += Math.abs(inside-outside);
+          count++;
+        }
+        vals.push({name:names[si],value:count?sum/count:0});
+      }
+
+      const arr=vals.map(v=>v.value);
+      const mean=arr.reduce((a,b)=>a+b,0)/4;
+      const min=Math.min(...arr);
+      const strongSides=arr.filter(v=>v>=0.8).length;
+
+      // Low hard floor only: mainly reject a rectangle whose one or more "borders"
+      // are actually floating in background. Candidate ranking uses the full score.
+      const pass=mean>=1.6 && strongSides>=3;
+      return {
+        pass,mean,min,strongSides,sides:vals,
+        reason:pass?'PASS':`weak outer edges mean=${mean.toFixed(2)} strong=${strongSides}/4`
+      };
+    } catch(e) {
+      return {pass:false,reason:'edge-support-error:'+String(e),mean:0,min:0,strongSides:0,sides:[]};
+    }
+  }
+
   function outerPhysicalMetrics(cand, imgArea) {
     if (!cand || !cand.rect || !cand.rect.size) return {pass:false,reason:'outer-missing'};
     const w=Math.max(1,Number(cand.rect.size.width||0));
@@ -2805,7 +2881,11 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
       const templateSupportBonus = c.qrTemplate && c.templateImageSupport ? c.templateImageSupport.score : 0;
       const physical=c.outerPhysical || outerPhysicalMetrics(c,imgArea);
       const qrPairBonus=(c.qrEnclosure&&c.qrEnclosure.pass)?2200:0;
-      c.totalScore=(physical.score||0) + geo.score*0.35 + contourBonus + qrPairBonus;
+      c.fourEdgeSupport=outerFourEdgeSupport(canvas,c.pts);
+      const edgeSupportBonus=
+        Math.min(9000,(c.fourEdgeSupport.mean||0)*650) +
+        Math.min(2200,Math.max(0,c.fourEdgeSupport.min||0)*260);
+      c.totalScore=(physical.score||0) + geo.score*0.35 + contourBonus + qrPairBonus + edgeSupportBonus;
       scored.push(c);
     }
     scored.sort((a,b)=>b.totalScore-a.totalScore);
@@ -2821,9 +2901,22 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
         trial.rectArea=snap.newL*snap.newW;
         trial.fill=best.fill;
         const pm=outerPhysicalMetrics(trial,imgArea);
-        if (pm.pass) {
-          best.edgeSnap=snap; best.pts=snap.pts; best.ratio=snap.ratio; best.rectArea=snap.newL*snap.newW; best.rect=trial.rect; best.outerPhysical=pm;
-        } else best.edgeSnap={applied:false,reason:'rejected-by-outer-geometry',attempt:pm};
+        const snapSupport=outerFourEdgeSupport(canvas,snap.pts);
+        const beforeSupport=best.fourEdgeSupport || outerFourEdgeSupport(canvas,best.pts);
+        const supportNotWorse=snapSupport.pass &&
+          snapSupport.mean >= Math.max(1.6,(beforeSupport.mean||0)*0.72);
+        if (pm.pass && supportNotWorse) {
+          best.edgeSnap=snap; best.pts=snap.pts; best.ratio=snap.ratio;
+          best.rectArea=snap.newL*snap.newW; best.rect=trial.rect;
+          best.outerPhysical=pm; best.fourEdgeSupport=snapSupport;
+        } else {
+          best.edgeSnap={
+            applied:false,
+            reason:pm.pass?'rejected-by-four-edge-support':'rejected-by-outer-geometry',
+            attempt:pm,
+            edgeSupport:snapSupport
+          };
+        }
       }
     }
 
@@ -2882,7 +2975,8 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
       const bestAreaRatio = best.rectArea / Math.max(1, imgArea);
       const guideFinal = best.qrGuide || qrGuidedOuterMetrics(best,qrCenter,qrPoints); // debug only
       const physicalFinal = best.outerPhysical || outerPhysicalMetrics(best,imgArea);
-      const bestOuterGeometryOk = !!(physicalFinal && physicalFinal.pass);
+      const edgeSupportFinal = best.fourEdgeSupport || outerFourEdgeSupport(canvas,best.pts);
+      const bestOuterGeometryOk = !!(physicalFinal && physicalFinal.pass && edgeSupportFinal && edgeSupportFinal.pass);
       const bestAppearanceOk = true;
       const bestCenterOk = true;
       const bestHasTrustedRedWindow = false;
@@ -2895,8 +2989,12 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
       const partialMessage = false;
 
       let failReason = '';
-      if(!bestOuterGeometryOk) failReason = (physicalFinal && physicalFinal.reason) ? physicalFinal.reason : 'outer-geometry-fail';
-      else failReason = 'PASS';
+      if(!bestOuterGeometryOk) {
+        if(!(physicalFinal && physicalFinal.pass))
+          failReason=(physicalFinal&&physicalFinal.reason)?physicalFinal.reason:'outer-geometry-fail';
+        else
+          failReason=(edgeSupportFinal&&edgeSupportFinal.reason)?edgeSupportFinal.reason:'outer-edge-support-fail';
+      } else failReason = 'PASS';
 
 let dbg='';
 
@@ -2915,6 +3013,11 @@ if (qrRejected.length) dbg += 'QR rejection detail: ' + qrRejected.slice(0,8).ma
 dbg += 'Scored Candidates: ' + scored.length + '<br>';
 dbg += '<b>Outer Mode: OpenCV OUTER-FIRST; QR only pairs card + resolves 180°</b><br>';
       dbg += 'Final Gate: OUTER geometry=' + (bestOuterGeometryOk ? 'PASS' : 'FAIL') + '<br>';
+      if (edgeSupportFinal) {
+        const es=(edgeSupportFinal.sides||[]).map(v=>`${v.name}=${Number(v.value||0).toFixed(2)}`).join(' / ');
+        dbg += `Four-edge Support: ${edgeSupportFinal.pass?'PASS':'FAIL'} / mean=${Number(edgeSupportFinal.mean||0).toFixed(2)} / min=${Number(edgeSupportFinal.min||0).toFixed(2)} / strong=${Number(edgeSupportFinal.strongSides||0)}/4<br>`;
+        if(es) dbg += `Outer Edge Detail: ${es}<br>`;
+      }
       if (guideFinal) dbg += `QR Guide: L=${Number(guideFinal.longQ||5).toFixed(2)}Q / W=${Number(guideFinal.shortQ||20/14).toFixed(2)}Q / AR=${Number(guideFinal.aspect||3.5).toFixed(2)} / angle=${Number(guideFinal.angleDiff||0).toFixed(1)}° / QR top=${Number(guideFinal.qrFromTop||0.115).toFixed(3)} / lateral=${Number(guideFinal.lateral||0).toFixed(3)}<br>`;
 dbg += 'UI Status: ' + (bestOk ? 'PASS - Outer First' : 'FAIL') + '<br>';
 dbg += 'Detection Mode: OpenCV finds OUTER + exact angle / QR orientation resolves TOP-BOTTOM only / CT uses physical 70mm coordinate<br>';
@@ -2940,7 +3043,8 @@ scored.forEach((c,i)=>
     Method=${c.method}<br>
     Candidate Score=${Math.round(c.totalScore)} / QRTemplate=${c.qrTemplate ? 'YES':'NO'} / CBonus=${Math.round(c.cLineBonus||0)} / TBonus=${Math.round(c.tLineBonus||0)}<br>
     QR/Outer Direction=${c.method} / OtherQRInside=${c.otherQrInside ? 'YES':'NO'} / TemplateSupport=${c.templateImageSupport ? Math.round(c.templateImageSupport.score||0) : 0}<br>
-    Outer Score=${Math.round(c.outerScore||0)}<br>
+    Outer Score=${Math.round(c.outerScore||0)}<br>    Four-edge=${c.fourEdgeSupport ? `${c.fourEdgeSupport.pass?'PASS':'FAIL'} mean=${Number(c.fourEdgeSupport.mean||0).toFixed(2)} min=${Number(c.fourEdgeSupport.min||0).toFixed(2)} strong=${Number(c.fourEdgeSupport.strongSides||0)}/4` : '-'}<br>
+
     Feature Score=${Math.round(c.featureScore||0)}<br>
     No Real S Penalty=${Math.round(c.noRealSamplePenalty||0)}<br>
     No Trusted Feature Penalty=${Math.round(c.noTrustedFeaturePenalty||0)}<br>

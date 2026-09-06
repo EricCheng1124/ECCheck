@@ -1,4 +1,4 @@
-# ASAP Check v31.84
+# ASAP Check v31.85
 
 ## Architecture
 - QR is used for data and orientation only. Manual QR sticker position is NOT used for precise cassette geometry or C/T coordinates.
@@ -17,7 +17,7 @@
 - Purple: dynamic T search region (actual C + 3~6 mm).
 
 
-## v31.84
+## v31.85
 - OpenCV outer contour is now the primary gate.
 - QR size, QR sticker position, and QR angle are no longer required to accept an outer contour.
 - QR center is used only to pair a detected outer contour to a card; QR orientation resolves 180-degree TOP/BOTTOM after pairing.
@@ -25,7 +25,7 @@
 - CT remains based on the warped 70x20 mm cassette physical coordinate; T search remains C + 3–6 mm.
 
 
-## v31.84
+## v31.85
 - Only the green C Search window was moved downward by 3 mm.
 - C Search: 24–31 mm -> 27–34 mm from cassette TOP.
 - Cyan CT analysis zone unchanged.
@@ -33,8 +33,17 @@
 - Outer frame / QR orientation / T/C / FWHM logic unchanged.
 
 
-## v31.84
+## v31.85
 - Cyan Outer-based CT debug box is no longer drawn.
 - Green C Search is now 3 mm high: 29–32 mm from cassette TOP.
 - Purple T Search remains 3 mm high: actual C + 3–6 mm.
 - Outer frame, QR orientation, T/C threshold, and FWHM logic are unchanged.
+
+
+## v31.85
+- Only Outer Frame reliability was changed.
+- Added independent TOP / RIGHT / BOTTOM / LEFT border-support measurements.
+- Border support participates in outer-candidate ranking and the final outer gate.
+- Edge Snap is rejected if it weakens the real four-side border evidence.
+- C Search stays 29–32 mm; T Search stays actual C + 3–6 mm.
+- T/C, FWHM, QR orientation and CT thresholds are unchanged.
