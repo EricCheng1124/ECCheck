@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v31.92-60x18-centered-strip-ct-safe-zone';
+  const VERSION = 'v31.93-inner-structure-validated-outer';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -3005,7 +3005,111 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
     };
   }
 
-  function detectOuterFrame(canvas, cropCanvas, options) {
+  
+  // v31.93: validate an OUTER candidate by asking whether, after perspective warp,
+  // the known inner mechanics land where a real 60 x 18 mm cassette says they should.
+  // This is a validator/ranker only. It never generates an outer frame.
+  function outerInnerStructureScore(srcCanvas, pts, qrCenter, qrPoints) {
+    try {
+      if(!srcCanvas || !Array.isArray(pts) || pts.length!==4)
+        return {pass:false,score:0,reason:'inner-structure-missing'};
+
+      const oriented=orientPointsWithQr(pts,qrCenter||null,qrPoints||[]);
+      if(!oriented || !oriented.points || oriented.points.length!==4)
+        return {pass:false,score:0,reason:'inner-orientation-failed'};
+
+      const tmp=document.createElement('canvas');
+      warpCropToCanvas(srcCanvas,tmp,oriented.points,oriented.applied);
+      const W=tmp.width,H=tmp.height;
+      if(W<40 || H<100) return {pass:false,score:0,reason:'inner-warp-too-small'};
+
+      const ctx=tmp.getContext('2d',{willReadFrequently:true});
+      const d=ctx.getImageData(0,0,W,H).data;
+      const lum=(x,y)=>{
+        const xx=Math.max(0,Math.min(W-1,Math.round(x)));
+        const yy=Math.max(0,Math.min(H-1,Math.round(y)));
+        const i=(yy*W+xx)*4;
+        return .299*d[i]+.587*d[i+1]+.114*d[i+2];
+      };
+
+      const pxX=W/18.0, pxY=H/60.0;
+      const cx=W*0.5;
+
+      function verticalEdgeScore(x,y0,y1,spanMm=.35){
+        const off=Math.max(1.5,spanMm*pxX);
+        const N=31; let sum=0,good=0;
+        for(let i=0;i<N;i++){
+          const y=y0+(y1-y0)*(i/(N-1));
+          const v=Math.abs(lum(x-off,y)-lum(x+off,y));
+          sum+=v; if(v>=3.0) good++;
+        }
+        return {mean:sum/N,continuity:good/N};
+      }
+      function horizontalEdgeScore(y,x0,x1,spanMm=.35){
+        const off=Math.max(1.5,spanMm*pxY);
+        const N=25; let sum=0,good=0;
+        for(let i=0;i<N;i++){
+          const x=x0+(x1-x0)*(i/(N-1));
+          const v=Math.abs(lum(x,y-off)-lum(x,y+off));
+          sum+=v; if(v>=3.0) good++;
+        }
+        return {mean:sum/N,continuity:good/N};
+      }
+
+      // Known mechanics:
+      // groove: y 22..40 mm, width 8 mm => x center ±4 mm
+      // strip : y 26..36 mm, width 4 mm => x center ±2 mm
+      const gy0=22*pxY, gy1=40*pxY;
+      const sy0=26*pxY, sy1=36*pxY;
+      const gxL=cx-4*pxX, gxR=cx+4*pxX;
+      const sxL=cx-2*pxX, sxR=cx+2*pxX;
+
+      const gL=verticalEdgeScore(gxL,gy0,gy1,.28);
+      const gR=verticalEdgeScore(gxR,gy0,gy1,.28);
+      const gT=horizontalEdgeScore(gy0,cx-3.7*pxX,cx+3.7*pxX,.28);
+      const gB=horizontalEdgeScore(gy1,cx-3.7*pxX,cx+3.7*pxX,.28);
+
+      const sL=verticalEdgeScore(sxL,sy0,sy1,.22);
+      const sR=verticalEdgeScore(sxR,sy0,sy1,.22);
+
+      const grooveMean=(gL.mean+gR.mean+gT.mean+gB.mean)/4;
+      const grooveCont=(gL.continuity+gR.continuity+gT.continuity+gB.continuity)/4;
+      const stripMean=(sL.mean+sR.mean)/2;
+      const stripCont=(sL.continuity+sR.continuity)/2;
+
+      // Centering check: left/right matching is important. A badly warped outer frame
+      // tends to shift one expected structure edge away from the real groove/strip.
+      const grooveBalance=Math.min(gL.mean,gR.mean)/Math.max(1,Math.max(gL.mean,gR.mean));
+      const stripBalance=Math.min(sL.mean,sR.mean)/Math.max(1,Math.max(sL.mean,sR.mean));
+
+      // Groove is stronger/more reliable than strip edges, so it dominates.
+      const score=
+        grooveMean*1.55 + grooveCont*22 +
+        stripMean*.70 + stripCont*8 +
+        grooveBalance*10 + stripBalance*4;
+
+      // Deliberately soft gate: use primarily for ranking. We only reject candidates
+      // whose expected internal structure is essentially absent.
+      const pass=grooveMean>=1.6 && grooveCont>=.20 &&
+                 Math.max(gL.mean,gR.mean)>=2.0;
+
+      return {
+        pass,score,reason:pass?'PASS':'weak-known-inner-geometry',
+        grooveMean,grooveContinuity:grooveCont,grooveBalance,
+        stripMean,stripContinuity:stripCont,stripBalance,
+        expected:{
+          cassette:'60x18mm',groove:'22..40mm / 8mm',
+          strip:'26..36mm / 4mm centered',ctSafe:'27..35mm'
+        }
+      };
+    } catch(e){
+      console.warn('v31.93 inner structure validation failed',e);
+      return {pass:false,score:0,reason:'inner-structure-exception'};
+    }
+  }
+
+
+function detectOuterFrame(canvas, cropCanvas, options) {
     if (typeof cv === 'undefined' || !cv.Mat) return {version:VERSION,ok:false,reason:'opencv-not-ready'};
     options = Object.assign({ minAreaRatio:0.01, ratioMin:1.20, ratioMax:10.0 }, options||{});
     const ctx=canvas.getContext('2d'); const src=cv.imread(canvas); const imgArea=src.cols*src.rows;
@@ -3065,10 +3169,21 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
       const physical=c.outerPhysical || outerPhysicalMetrics(c,imgArea);
       const qrPairBonus=(c.qrEnclosure&&c.qrEnclosure.pass)?2200:0;
       c.fourEdgeSupport=outerFourEdgeSupport(canvas,c.pts);
+
+      // v31.93: after a candidate is warped, known internal mechanics must appear
+      // near their physical locations. This strongly separates a true oblique outer
+      // frame from a geometrically plausible but shifted/skewed rectangle.
+      c.innerStructure=outerInnerStructureScore(canvas,c.pts,qrCenter,qrPoints);
+
       const edgeSupportBonus=
         Math.min(9000,(c.fourEdgeSupport.mean||0)*650) +
         Math.min(2200,Math.max(0,c.fourEdgeSupport.min||0)*260);
-      c.totalScore=(physical.score||0) + geo.score*0.35 + contourBonus + qrPairBonus + edgeSupportBonus;
+      const innerStructureBonus=
+        Math.min(15000,Math.max(0,c.innerStructure.score||0)*180) +
+        (c.innerStructure.pass?4500:-2500);
+
+      c.totalScore=(physical.score||0) + geo.score*0.35 + contourBonus +
+        qrPairBonus + edgeSupportBonus + innerStructureBonus;
       scored.push(c);
     }
     scored.sort((a,b)=>b.totalScore-a.totalScore);
@@ -3088,14 +3203,21 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
         const beforeSupport=best.fourEdgeSupport || outerFourEdgeSupport(canvas,best.pts);
         const supportNotWorse=snapSupport.pass &&
           snapSupport.mean >= Math.max(1.6,(beforeSupport.mean||0)*0.72);
-        if (pm.pass && supportNotWorse) {
+
+        const beforeInner=best.innerStructure || outerInnerStructureScore(canvas,best.pts,qrCenter,qrPoints);
+        const snapInner=outerInnerStructureScore(canvas,snap.pts,qrCenter,qrPoints);
+        const innerNotWorse=snapInner.pass &&
+          snapInner.score >= Math.max(8,(beforeInner.score||0)*0.72);
+
+        if (pm.pass && supportNotWorse && innerNotWorse) {
           best.edgeSnap=snap; best.pts=snap.pts; best.ratio=snap.ratio;
           best.rectArea=snap.newL*snap.newW; best.rect=trial.rect;
           best.outerPhysical=pm; best.fourEdgeSupport=snapSupport;
+          best.innerStructure=snapInner;
         } else {
           best.edgeSnap={
             applied:false,
-            reason:pm.pass?'rejected-by-four-edge-support':'rejected-by-outer-geometry',
+            reason:!pm.pass?'rejected-by-outer-geometry':(!supportNotWorse?'rejected-by-four-edge-support':'rejected-by-inner-structure'),
             attempt:pm,
             edgeSupport:snapSupport
           };

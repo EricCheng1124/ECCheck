@@ -1,4 +1,4 @@
-# ASAP Check v31.92
+# ASAP Check v31.93
 
 ## Architecture
 - QR is used for data and orientation only. Manual QR sticker position is NOT used for precise cassette geometry or C/T coordinates.
@@ -17,7 +17,7 @@
 - Purple: dynamic T search region (actual C + 3~6 mm).
 
 
-## v31.92
+## v31.93
 - OpenCV outer contour is now the primary gate.
 - QR size, QR sticker position, and QR angle are no longer required to accept an outer contour.
 - QR center is used only to pair a detected outer contour to a card; QR orientation resolves 180-degree TOP/BOTTOM after pairing.
@@ -25,7 +25,7 @@
 - CT remains based on the warped 60x18 mm cassette physical coordinate; T search remains C + 3–6 mm.
 
 
-## v31.92
+## v31.93
 - Only the green C Search window was moved downward by 3 mm.
 - C Search: 24–31 mm -> 27–34 mm from cassette TOP.
 - Cyan CT analysis zone unchanged.
@@ -33,14 +33,14 @@
 - Outer frame / QR orientation / T/C / FWHM logic unchanged.
 
 
-## v31.92
+## v31.93
 - Cyan Outer-based CT debug box is no longer drawn.
 - Green C Search is now 3 mm high: 29–32 mm from cassette TOP.
 - Purple T Search remains 3 mm high: actual C + 3–6 mm.
 - Outer frame, QR orientation, T/C threshold, and FWHM logic are unchanged.
 
 
-## v31.92
+## v31.93
 - Only Outer Frame reliability was changed.
 - Added independent TOP / RIGHT / BOTTOM / LEFT border-support measurements.
 - Border support participates in outer-candidate ranking and the final outer gate.
@@ -49,7 +49,7 @@
 - T/C, FWHM, QR orientation and CT thresholds are unchanged.
 
 
-## v31.92
+## v31.93
 - Warp geometry only was changed; C/T parameters are untouched.
 - Left/right outer edges measure cassette width.
 - Cassette length is forced to Width x 3.333 (70/20).
@@ -58,7 +58,7 @@
 - C Search remains 29-32 mm; T Search remains actual C + 3-6 mm.
 
 
-## v31.92
+## v31.93
 - Outer reconstruction changed to LONG-EDGE FIRST.
 - The two cassette long sides determine angle and physical 20 mm width.
 - TOP is searched over a much larger range toward the QR end and must have across-width edge continuity.
@@ -67,7 +67,7 @@
 - C Search remains 29-32 mm; T Search remains actual C + 3-6 mm. No CT thresholds changed.
 
 
-## v31.92 Four-Line Perspective Outer
+## v31.93 Four-Line Perspective Outer
 - Removed image-space Length = Width x 3.333 outer reconstruction.
 - OpenCV-style edge analysis now recovers LEFT, RIGHT, TOP and BOTTOM physical border lines independently.
 - Final cassette corners are intersections of the four recovered border lines.
@@ -77,7 +77,7 @@
 - C Search remains 29-32 mm; T Search remains actual C + 3-6 mm; CT thresholds unchanged.
 
 
-## v31.92 Hard 60x18 Outer
+## v31.93 Hard 60x18 Outer
 - Four physical border lines are still recovered independently.
 - TOP/BOTTOM are no longer chosen by edge strength alone; multiple candidates are enumerated.
 - Every four-line combination is checked against cassette 60:18 = 3.333 geometry.
@@ -87,7 +87,7 @@
 - C Search remains 29-32 mm; T Search remains actual C + 3-6 mm; CT thresholds unchanged.
 
 
-## v31.92 Physical Size Correction
+## v31.93 Physical Size Correction
 - Cassette physical size corrected to 60 x 18 mm.
 - Target outer ratio = 60/18 = 3.3333.
 - Perspective-tolerant hard ratio gate adjusted to 2.88-3.86.
@@ -96,7 +96,7 @@
 - No C/T threshold, FWHM, QR orientation, or capture logic changed.
 
 
-## v31.92 Outer Detection Architecture
+## v31.93 Outer Detection Architecture
 - QR is used only for identity/TOP direction; QR position does not define cassette geometry.
 - LEFT/RIGHT long shell edges are selected first.
 - BOTTOM is selected second.
@@ -106,7 +106,7 @@
 - C Search remains 29-32 mm and T Search remains actual C + 3-6 mm.
 
 
-## v31.92 Physical Inner Geometry
+## v31.93 Physical Inner Geometry
 - Outer detection is unchanged from v31.91.
 - Cassette: 60 x 18 mm.
 - Center groove: y=22..40 mm, length 18 mm, width 8 mm.
@@ -114,3 +114,14 @@
 - Conservative CT safe zone: y=27..35 mm.
 - C searches upper part of safe zone (27..32 mm); T remains actual C + 3..6 mm and is clipped to safe zone.
 - T/C=10% and FWHM thresholds are unchanged.
+
+
+## v31.93 Inner-Structure Validated Outer
+- Keeps v31.91/v31.92 outer and CT geometry.
+- Every outer candidate is perspective-warped and checked against known internal mechanics.
+- Groove expected at y=22..40 mm, width=8 mm, centered.
+- Strip expected at y=26..36 mm, width=4 mm, centered.
+- Internal-geometry score is added strongly to outer-candidate ranking.
+- Edge snap is rejected if it destroys the expected inner geometry.
+- This specifically targets oblique shots whose outer quadrilateral looks plausible but warps internal structures to wrong positions.
+- CT algorithm/thresholds are unchanged from v31.92.
