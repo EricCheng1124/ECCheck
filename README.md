@@ -1,4 +1,4 @@
-# ASAP Check v31.99
+# ASAP Check v32.00
 
 ## Architecture
 - QR is used for data and orientation only. Manual QR sticker position is NOT used for precise cassette geometry or C/T coordinates.
@@ -17,7 +17,7 @@
 - Purple: dynamic T search region (actual C + 3~6 mm).
 
 
-## v31.99
+## v32.00
 - OpenCV outer contour is now the primary gate.
 - QR size, QR sticker position, and QR angle are no longer required to accept an outer contour.
 - QR center is used only to pair a detected outer contour to a card; QR orientation resolves 180-degree TOP/BOTTOM after pairing.
@@ -25,7 +25,7 @@
 - CT remains based on the warped 60x18 mm cassette physical coordinate; T search remains C + 3–6 mm.
 
 
-## v31.99
+## v32.00
 - Only the green C Search window was moved downward by 3 mm.
 - C Search: 24–31 mm -> 27–34 mm from cassette TOP.
 - Cyan CT analysis zone unchanged.
@@ -33,14 +33,14 @@
 - Outer frame / QR orientation / T/C / FWHM logic unchanged.
 
 
-## v31.99
+## v32.00
 - Cyan Outer-based CT debug box is no longer drawn.
 - Green C Search is now 3 mm high: 29–32 mm from cassette TOP.
 - Purple T Search remains 3 mm high: actual C + 3–6 mm.
 - Outer frame, QR orientation, T/C threshold, and FWHM logic are unchanged.
 
 
-## v31.99
+## v32.00
 - Only Outer Frame reliability was changed.
 - Added independent TOP / RIGHT / BOTTOM / LEFT border-support measurements.
 - Border support participates in outer-candidate ranking and the final outer gate.
@@ -49,7 +49,7 @@
 - T/C, FWHM, QR orientation and CT thresholds are unchanged.
 
 
-## v31.99
+## v32.00
 - Warp geometry only was changed; C/T parameters are untouched.
 - Left/right outer edges measure cassette width.
 - Cassette length is forced to Width x 3.333 (70/20).
@@ -58,7 +58,7 @@
 - C Search remains 29-32 mm; T Search remains actual C + 3-6 mm.
 
 
-## v31.99
+## v32.00
 - Outer reconstruction changed to LONG-EDGE FIRST.
 - The two cassette long sides determine angle and physical 20 mm width.
 - TOP is searched over a much larger range toward the QR end and must have across-width edge continuity.
@@ -67,7 +67,7 @@
 - C Search remains 29-32 mm; T Search remains actual C + 3-6 mm. No CT thresholds changed.
 
 
-## v31.99 Four-Line Perspective Outer
+## v32.00 Four-Line Perspective Outer
 - Removed image-space Length = Width x 3.333 outer reconstruction.
 - OpenCV-style edge analysis now recovers LEFT, RIGHT, TOP and BOTTOM physical border lines independently.
 - Final cassette corners are intersections of the four recovered border lines.
@@ -77,7 +77,7 @@
 - C Search remains 29-32 mm; T Search remains actual C + 3-6 mm; CT thresholds unchanged.
 
 
-## v31.99 Hard 60x18 Outer
+## v32.00 Hard 60x18 Outer
 - Four physical border lines are still recovered independently.
 - TOP/BOTTOM are no longer chosen by edge strength alone; multiple candidates are enumerated.
 - Every four-line combination is checked against cassette 60:18 = 3.333 geometry.
@@ -87,7 +87,7 @@
 - C Search remains 29-32 mm; T Search remains actual C + 3-6 mm; CT thresholds unchanged.
 
 
-## v31.99 Physical Size Correction
+## v32.00 Physical Size Correction
 - Cassette physical size corrected to 60 x 18 mm.
 - Target outer ratio = 60/18 = 3.3333.
 - Perspective-tolerant hard ratio gate adjusted to 2.88-3.86.
@@ -96,7 +96,7 @@
 - No C/T threshold, FWHM, QR orientation, or capture logic changed.
 
 
-## v31.99 Outer Detection Architecture
+## v32.00 Outer Detection Architecture
 - QR is used only for identity/TOP direction; QR position does not define cassette geometry.
 - LEFT/RIGHT long shell edges are selected first.
 - BOTTOM is selected second.
@@ -106,7 +106,7 @@
 - C Search remains 29-32 mm and T Search remains actual C + 3-6 mm.
 
 
-## v31.99 Physical Inner Geometry
+## v32.00 Physical Inner Geometry
 - Outer detection is unchanged from v31.91.
 - Cassette: 60 x 18 mm.
 - Center groove: y=22..40 mm, length 18 mm, width 8 mm.
@@ -116,7 +116,7 @@
 - T/C=10% and FWHM thresholds are unchanged.
 
 
-## v31.99 Inner-Structure Validated Outer
+## v32.00 Inner-Structure Validated Outer
 - Keeps v31.91/v31.92 outer and CT geometry.
 - Every outer candidate is perspective-warped and checked against known internal mechanics.
 - Groove expected at y=22..40 mm, width=8 mm, centered.
@@ -127,7 +127,7 @@
 - CT algorithm/thresholds are unchanged from v31.92.
 
 
-## v31.99 Second-Stage Inner Registration
+## v32.00 Second-Stage Inner Registration
 - Stage 1 remains the v31.93 four-corner perspective warp.
 - Stage 2 measures the known centered groove after warp: y=22..40 mm, width=8 mm.
 - Only small X/Y translation and X/Y scale correction are permitted; no rotation, shear, or free deformation.
@@ -136,7 +136,7 @@
 - The 60x18 cassette, 4 mm centered strip, CT safe zone, T/C and FWHM logic remain unchanged.
 
 
-## v31.99 QR Plane Perspective Reference
+## v32.00 QR Plane Perspective Reference
 - QR is confirmed flat and square, so its four corners are used as a projective reference for the cassette plane.
 - QR sticker POSITION is still never used to place cassette TOP/BOTTOM/LEFT/RIGHT.
 - Each outer candidate is transformed into QR-rectified plane coordinates and must look like a 60x18 rectangle there.
@@ -147,7 +147,7 @@
 - C/T geometry and thresholds are unchanged.
 
 
-## v31.99 Multi-Anchor + Wide C Locator
+## v32.00 Multi-Anchor + Wide C Locator
 - Phone orientation sensors are intentionally NOT used.
 - QR remains a perspective/identity/orientation reference; QR sticker position does not locate C/T.
 - Outer remains 60x18 mm and v31.95 QR-plane validation is preserved.
@@ -160,7 +160,7 @@
 - Added C locator confidence and physical C position debug values.
 
 
-## v31.99 Multi-Anchor 2-of-3 Fallback
+## v32.00 Multi-Anchor 2-of-3 Fallback
 - QR perspective is no longer a hard final gate.
 - Geometry uses three anchors: OUTER, QR-plane, INNER structure.
 - Final geometry passes when at least 2 of 3 anchors agree, while the cassette candidate still passes basic physical plausibility.
@@ -171,7 +171,7 @@
 - Phone orientation sensors are still not used.
 
 
-## v31.99 Actual Groove Anchor
+## v32.00 Actual Groove Anchor
 - C/T ROI no longer uses crop width/18 and crop height/60 as the primary coordinate source.
 - After the outer warp, the actual observed 8x18 mm groove is detected again.
 - Measured groove left/right define local X center and X mm scale.
@@ -183,7 +183,7 @@
 - v31.97 2-of-3 geometry fallback remains unchanged.
 
 
-## v31.99 Logic Cleanup / Single-Warp Geometry
+## v32.00 Logic Cleanup / Single-Warp Geometry
 - Active cassette geometry normalized to 60x18 mm (aspect 3.3333); stale 70-based active formulas were corrected.
 - Only one image resampling stage remains: outer perspective warp. Residual inner registration is measurement-only; no second warpAffine is applied.
 - Actual Groove gate now requires individual L/R and T/B evidence, side balance, center plausibility, size plausibility, continuity, and confidence >=58.
@@ -191,3 +191,15 @@
 - Final T requires weak chromatic/horizontal evidence in addition to C+3..6 mm, T/C>=10%, and FWHM 0.15..1.50 mm.
 - UI/debug window now uses the exact CT analysis ROI, avoiding stale window mismatch.
 - Phone orientation sensors remain unused.
+
+
+## v32.00 Confirmed Physical Geometry
+- Confirmed cassette outer size: 70 x 20 mm (aspect 3.500).
+- QR code physical square: 14 x 14 mm. QR square geometry is used for perspective/orientation; sticker position is not used to derive C/T position.
+- Reagent groove starts 25 mm from cassette TOP and is 19 mm long: 25..44 mm.
+- Strip region starts 29 mm from cassette TOP and is 12 mm long: 29..41 mm.
+- C nominal center: about 32 mm from TOP (soft image-search prior).
+- T nominal center: about 37 mm from TOP. Dynamic T remains anchored to detected C with 3.5..6.5 mm separation tolerance.
+- C/T line width is approximately <=2 mm; T FWHM maximum updated to 2.00 mm.
+- Previous known groove width 8 mm and centered-strip width 4 mm are retained because this update did not redefine their widths.
+- Single-warp policy, actual-groove confidence gate, true 2-of-3 consensus, T color evidence gate, and UI/analysis ROI synchronization are retained.

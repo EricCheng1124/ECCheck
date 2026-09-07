@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v31.99-logic-cleanup-single-warp';
+  const VERSION = 'v32.00-physical-70x20';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -1241,7 +1241,7 @@
 
   // v31.98: locate the ACTUAL groove on the already-warped cassette.
   // This does not move the image. It creates a local physical coordinate system
-  // directly from the observed 8 x 18 mm groove:
+  // directly from the observed 8 x 19 mm groove:
   //   groove left/right  -> X scale + center
   //   groove top/bottom  -> Y scale + origin
   // If confidence is insufficient, callers fall back to the outer-derived coordinates.
@@ -1253,7 +1253,7 @@
       const W=cropCanvas.width,H=cropCanvas.height;
       const ctx=cropCanvas.getContext('2d',{willReadFrequently:true});
       const data=ctx.getImageData(0,0,W,H).data;
-      const outerPxX=W/18.0, outerPxY=H/60.0;
+      const outerPxX=W/20.0, outerPxY=H/70.0;
       const cx=W*0.5;
 
       function lum(x,y){
@@ -1296,13 +1296,13 @@
 
       // Expected only seeds the search; final ROI uses measured edges.
       const expL=cx-4*outerPxX, expR=cx+4*outerPxX;
-      const expT=22*outerPxY, expB=40*outerPxY;
+      const expT=25*outerPxY, expB=44*outerPxY;
 
       // Search wider than v31.94 registration so a residual outer error can still be recovered.
       const xRad=2.4*outerPxX;
       const yRad=3.2*outerPxY;
 
-      const sideY0=23.5*outerPxY, sideY1=38.5*outerPxY;
+      const sideY0=27.0*outerPxY, sideY1=42.0*outerPxY;
       const L=best1D(expL,xRad,W,x=>vMetric(x,sideY0,sideY1));
       const R=best1D(expR,xRad,W,x=>vMetric(x,sideY0,sideY1));
 
@@ -1324,7 +1324,7 @@
       // Plausibility is intentionally tolerant; measured geometry then becomes the local scale.
       const sizePass=
         widthMmOuter>=6.6 && widthMmOuter<=9.4 &&
-        heightMmOuter>=15.2 && heightMmOuter<=20.8;
+        heightMmOuter>=16.0 && heightMmOuter<=22.0;
 
       const sideEvidence=(L.mean+R.mean)*0.5;
       const endEvidence=(T.mean+B.mean)*0.5;
@@ -1396,19 +1396,19 @@
     const H = cropCanvas.height;
 
     // v31.98: use the ACTUAL observed groove as the primary local coordinate system.
-    // Outer-derived 60x18 coordinates are fallback only.
+    // Outer-derived 70x20 coordinates are fallback only.
     const actualGroove = locateActualGroove(cropCanvas);
 
-    const outerPxX = W / 18.0;
-    const outerPxY = H / 60.0;
+    const outerPxX = W / 20.0;
+    const outerPxY = H / 70.0;
     const groovePxX = (actualGroove && actualGroove.pass) ? actualGroove.widthPx / 8.0 : outerPxX;
-    const groovePxY = (actualGroove && actualGroove.pass) ? actualGroove.heightPx / 18.0 : outerPxY;
+    const groovePxY = (actualGroove && actualGroove.pass) ? actualGroove.heightPx / 19.0 : outerPxY;
     const grooveCenterX = (actualGroove && actualGroove.pass) ? actualGroove.centerX : W*0.5;
     const grooveTopPx = (actualGroove && actualGroove.pass) ? actualGroove.top : 22.0*outerPxY;
 
     // Map cassette physical Y millimetres through the measured groove:
-    // groove top is 22 mm, groove bottom is 40 mm.
-    const physicalY0Px = grooveTopPx - 22.0 * groovePxY;
+    // groove top is 25 mm, groove bottom is 44 mm.
+    const physicalY0Px = grooveTopPx - 25.0 * groovePxY;
     const mmToY = mm => physicalY0Px + mm * groovePxY;
 
     // Actual 4 mm strip is centered inside the measured 8 mm groove.
@@ -1611,34 +1611,34 @@
     }
 
     // v31.92：CT 改為已確認的卡匣實體結構定位。
-    // Cassette 60x18 mm；中央凹槽 22~40 mm、寬 8 mm；
+    // Cassette 70x20 mm；中央凹槽 22~40 mm、寬 8 mm；
     // 試紙位於正中心，長 10 mm、寬 4 mm；CT 保守有效區為中央 8 mm = 27~35 mm。
-    const CASSETTE_L_MM = 60.0;
-    const CASSETTE_W_MM = 18.0;
-    const GROOVE_TOP_MM = 22.0;
-    const GROOVE_H_MM = 18.0;
+    const CASSETTE_L_MM = 70.0;
+    const CASSETTE_W_MM = 20.0;
+    const GROOVE_TOP_MM = 25.0;
+    const GROOVE_H_MM = 19.0;
     const GROOVE_W_MM = 8.0;
-    const STRIP_TOP_MM = 26.0;
-    const STRIP_H_MM = 10.0;
+    const STRIP_TOP_MM = 29.0;
+    const STRIP_H_MM = 12.0;
     const STRIP_W_MM = 4.0;
 
     // v31.96 Multi-Anchor C Locator:
     // 26~36 mm remains the nominal strip location, but the image locator is allowed
     // a small guard band because residual registration error must not hide a visible C line.
     // The nominal geometry is still used as a prior, NOT as a hard lock.
-    const ANALYSIS_TOP_MM = 24.5;
-    const ANALYSIS_BOTTOM_MM = 36.5;
-    const CT_SAFE_TOP_MM = 24.5;
-    const CT_SAFE_BOTTOM_MM = 36.5;
+    const ANALYSIS_TOP_MM = 29.0;
+    const ANALYSIS_BOTTOM_MM = 41.0;
+    const CT_SAFE_TOP_MM = 29.0;
+    const CT_SAFE_BOTTOM_MM = 41.0;
 
     // Wide C locator. A real C line found by image evidence becomes the anchor;
     // T is then constrained to C + 3~6 mm.
-    const C_SEARCH_TOP_MM = 24.8;
-    const C_SEARCH_BOTTOM_MM = 32.8;
-    const T_MIN_GAP_MM = 3.0;
-    const T_MAX_GAP_MM = 6.0;
+    const C_SEARCH_TOP_MM = 29.5;
+    const C_SEARCH_BOTTOM_MM = 34.5;
+    const T_MIN_GAP_MM = 3.5;
+    const T_MAX_GAP_MM = 6.5;
     const T_FWHM_MIN_MM = 0.15;
-    const T_FWHM_MAX_MM = 1.50;
+    const T_FWHM_MAX_MM = 2.00;
     const T_RELATIVE_C_RATIO = 0.10;
 
     // v31.98: mm scale and origin come from ACTUAL groove when available.
@@ -1657,10 +1657,11 @@
     const y1 = clamp(Math.ceil(mmToY(ANALYSIS_BOTTOM_MM)), y0+1, H);
     const h = Math.max(1, y1-y0);
 
-    const C_NOMINAL_MM = 29.5;
+    const C_NOMINAL_MM = 32.0;
+    const T_NOMINAL_MM = 37.0;
     const cExpectedAbsY = mmToY(C_NOMINAL_MM);
     const cExpectedLocalY = cExpectedAbsY - y0;
-    let tExpectedLocalY = cExpectedLocalY + 4.5 * pxPerMm;
+    let tExpectedLocalY = (mmToY(T_NOMINAL_MM) - y0);
     let tExpectedAbsY = y0 + tExpectedLocalY;
 
     const cSearchRange = {
@@ -2042,9 +2043,9 @@
     );
 
     return {
-      source:'ct-actual-groove-anchor-v31-99',
+      source:'ct-physical-70x20-v32-00',
       x0, x1, y0, y1, h,
-      zone:{x:x0, y:y0, w:Math.max(1, x1-x0), h:Math.max(1, y1-y0), startRatio:ctStartRatio, endRatio:ctEndRatio, widthRatio:ctEndRatio-ctStartRatio, topThirdY:Math.round(topThirdY), topThirdPadding:topThirdPadding, yLimitedByTopThird:false, coordinateSystem:'multi-anchor-wide-c-locator-60x18mm', qrSide:qSide, stripCenterX, cExpectedAbsY, tExpectedAbsY, bandHalf, locatorY0, locatorY1, pxPerMm, cassetteMm:CASSETTE_L_MM, cassetteWidthMm:CASSETTE_W_MM, grooveTopMm:GROOVE_TOP_MM, grooveHeightMm:GROOVE_H_MM, grooveWidthMm:GROOVE_W_MM, stripTopMm:STRIP_TOP_MM, stripHeightMm:STRIP_H_MM, stripWidthMm:STRIP_W_MM, ctSafeTopMm:CT_SAFE_TOP_MM, ctSafeBottomMm:CT_SAFE_BOTTOM_MM, cSearchTopMm:C_SEARCH_TOP_MM, cSearchBottomMm:C_SEARCH_BOTTOM_MM, tMinGapMm:T_MIN_GAP_MM, tMaxGapMm:T_MAX_GAP_MM, tFwhmMinMm:T_FWHM_MIN_MM, tFwhmMaxMm:T_FWHM_MAX_MM, tRelativeCRatio:T_RELATIVE_C_RATIO, ctGapMm, cLocatorAbsY:cCont?cCont.absY:null, cLocatorHasColor:cColorOk, cLocatedMm, cPriorDeltaMm, cLocatorConfidence, analysisTopMm:ANALYSIS_TOP_MM, analysisBottomMm:ANALYSIS_BOTTOM_MM,
+      zone:{x:x0, y:y0, w:Math.max(1, x1-x0), h:Math.max(1, y1-y0), startRatio:ctStartRatio, endRatio:ctEndRatio, widthRatio:ctEndRatio-ctStartRatio, topThirdY:Math.round(topThirdY), topThirdPadding:topThirdPadding, yLimitedByTopThird:false, coordinateSystem:'physical-70x20-groove25-44-strip29-41-v3200', qrSide:qSide, stripCenterX, cExpectedAbsY, tExpectedAbsY, bandHalf, locatorY0, locatorY1, pxPerMm, cassetteMm:CASSETTE_L_MM, cassetteWidthMm:CASSETTE_W_MM, grooveTopMm:GROOVE_TOP_MM, grooveHeightMm:GROOVE_H_MM, grooveWidthMm:GROOVE_W_MM, stripTopMm:STRIP_TOP_MM, stripHeightMm:STRIP_H_MM, stripWidthMm:STRIP_W_MM, ctSafeTopMm:CT_SAFE_TOP_MM, ctSafeBottomMm:CT_SAFE_BOTTOM_MM, cSearchTopMm:C_SEARCH_TOP_MM, cSearchBottomMm:C_SEARCH_BOTTOM_MM, tMinGapMm:T_MIN_GAP_MM, tMaxGapMm:T_MAX_GAP_MM, tFwhmMinMm:T_FWHM_MIN_MM, tFwhmMaxMm:T_FWHM_MAX_MM, tRelativeCRatio:T_RELATIVE_C_RATIO, ctGapMm, cLocatorAbsY:cCont?cCont.absY:null, cLocatorHasColor:cColorOk, cLocatedMm, cPriorDeltaMm, cLocatorConfidence, analysisTopMm:ANALYSIS_TOP_MM, analysisBottomMm:ANALYSIS_BOTTOM_MM,
         grooveAnchorUsed:!!(actualGroove&&actualGroove.pass),
         grooveConfidence:actualGroove?actualGroove.confidence:0,
         grooveLeftPx:actualGroove&&actualGroove.pass?actualGroove.left:null,
@@ -2236,10 +2237,10 @@
     const chosen = makeFixedInternalByDirection(cropCanvas, W, H, directionAnalysis, !!forceQrTop);
 
     // v31.80: Window/slot and S-well are retired from positioning.
-    // Outer warp defines a 60x18 mm cassette; CT ROI is therefore fixed in mm.
+    // Outer warp defines a 70x20 mm cassette; CT ROI is therefore fixed in mm.
     const win = {
-      x: Math.round(W*0.32), y: Math.round(H*(24/60)),
-      w: Math.round(W*0.36), h: Math.round(H*(10/60)),
+      x: Math.round(W*0.32), y: Math.round(H*(29/70)),
+      w: Math.round(W*0.36), h: Math.round(H*(12/70)),
       source:'fixed-physical-ct-roi'
     };
     const sample = null;
@@ -2713,7 +2714,7 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
       {x:-ux,y:-uy,name:'qr-dir-body-u-'}
     ];
     // v31.64: use measured physical geometry instead of empirical cassette/Q ratios.
-    // Cassette = 60 x 18 mm, QR = 14 x 14 mm.
+    // Cassette = 70 x 20 mm, QR = 14 x 14 mm.
     const QR_MM=14.0;
     const CASSETTE_L_MM=70.0;
     const CASSETTE_W_MM=20.0;
@@ -2781,7 +2782,7 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
       // QR = identity + TOP direction only.
       // Frame priority = LEFT/RIGHT long borders -> BOTTOM -> TOP last.
       // QR/sticker-area edges are explicitly forbidden as TOP candidates.
-      // 60 x 18 mm is used only as a final plausibility constraint.
+      // 70 x 20 mm is used only as a final plausibility constraint.
       const oriented = orientPointsWithQr(pts, qrCenter || null, qrPoints || []);
       const p = oriented.points; // TL,TR,BR,BL, already oriented toward QR end
       if (!p || p.length !== 4) return null;
@@ -2957,7 +2958,7 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
       if(!topList.length) return null;
 
       // 4) Combine only after long sides + bottom are established.
-      const TARGET=60/18; // 3.3333
+      const TARGET=70/20; // 3.3333
       let best=null;
       for(const bottom of bottomList){
         const BL=lineIntersection(bottom.a,bottom.b,left.a,left.b);
@@ -3035,7 +3036,7 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
         qrOrientationOnly:true,
         qrTopExclusion:true,
         qrMaskedTopFraction:best.qrMaskedTopFraction,
-        hard60x18:true,
+        hard70x20:true,
         physicalRatio:best.ratio,
         physicalRatioTarget:TARGET,
         physicalRatioMin:2.95,
@@ -3056,7 +3057,7 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
 
 
   // v31.79: score a QR-derived cassette template against the actual image.
-  // Higher score means the predicted 60x18 mm rectangle has real image edges
+  // Higher score means the predicted 70x20 mm rectangle has real image edges
   // at its four borders and the inside is reasonably brighter/cleaner than outside.
   // This is direction-agnostic and is used only to choose among the 4 QR hypotheses.
   function qrTemplateImageSupport(canvas, pts) {
@@ -3107,7 +3108,7 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
 
 
   // v31.78: QR-guided OpenCV outer-frame geometry.
-  // QR = 14x14 mm, cassette = 60x18 mm, QR is always at the cassette top.
+  // QR = 14x14 mm, cassette = 70x20 mm, QR is always at the cassette top.
   function qrGuidedOuterMetrics(cand, qrCenter, qrPoints) {
     if (!cand || !Array.isArray(qrPoints) || qrPoints.length < 4)
       return {pass:false, reason:'qr-geometry-missing', score:0};
@@ -3138,7 +3139,7 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
     const angleDiff=Math.acos(Math.abs(dot))*180/Math.PI;
     const longQ=L/qSide, shortQ=W/qSide, aspect=L/W;
     const eL=Math.abs(longQ-5.0)/5.0;
-    const eW=Math.abs(shortQ-(18/14))/(18/14);
+    const eW=Math.abs(shortQ-(20/14))/(20/14);
     const eA=Math.abs(aspect-3.5)/3.5;
     const pass=longQ>=3.9&&longQ<=6.35&&shortQ>=1.05&&shortQ<=2.0&&aspect>=2.8&&aspect<=4.35&&angleDiff<=20;
     const score=Math.max(0,30000-eL*11000-eW*9000-eA*7000-Math.min(1,angleDiff/20)*3000);
@@ -3238,7 +3239,7 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
     const ratioOk=ratio>=2.70 && ratio<=4.55;
     const areaOk=areaRatio>=0.003 && areaRatio<=0.55;
     const fillOk=fill>=0.035 && fill<=1.08;
-    const ratioErr=Math.abs(ratio-(60.0/18.0))/(60.0/18.0);
+    const ratioErr=Math.abs(ratio-(70.0/20.0))/(70.0/20.0);
     const score=Math.max(0,24000-ratioErr*18000) +
                 Math.min(4500,Math.max(0,areaRatio)*18000) +
                 Math.min(2500,Math.max(0,fill)*2500);
@@ -3254,7 +3255,7 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
   
   // v31.94: second-stage INNER REGISTRATION.
   // The first stage is the 4-corner perspective warp. This second stage measures
-  // the known centered groove (22..40 mm, 8 mm wide) in the warped image and only
+  // the known centered groove (25..44 mm, 8 mm wide) in the warped image and only
   // permits a SMALL X/Y translation + X/Y scale correction. No rotation/shear and
   // no free-form deformation are allowed.
   function registerInnerGeometry(cropCanvas) {
@@ -3265,7 +3266,7 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
       const W=cropCanvas.width,H=cropCanvas.height;
       const ctx=cropCanvas.getContext('2d',{willReadFrequently:true});
       const img=ctx.getImageData(0,0,W,H).data;
-      const pxX=W/18.0, pxY=H/60.0;
+      const pxX=W/20.0, pxY=H/70.0;
       const cx=W*.5;
 
       function lum(x,y){
@@ -3306,13 +3307,13 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
         return best;
       }
 
-      // Known groove geometry in the already-warped 60x18 coordinate system.
+      // Known groove geometry in the already-warped 70x20 coordinate system.
       const expLeft =cx-4*pxX, expRight=cx+4*pxX;
-      const expTop  =22*pxY,   expBottom=40*pxY;
+      const expTop  =25*pxY,   expBottom=44*pxY;
 
       // Side edges are sampled mainly through the straight middle portion of the groove,
       // avoiding the bevels at its top/bottom.
-      const sideY0=24.2*pxY, sideY1=37.8*pxY;
+      const sideY0=27.0*pxY, sideY1=42.0*pxY;
       const sxL=(x)=>vScore(x,sideY0,sideY1); sxL.axis='x';
       const sxR=(x)=>vScore(x,sideY0,sideY1); sxR.axis='x';
 
@@ -3329,13 +3330,13 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
       if(!L||!R||!T||!B) return {applied:false,reason:'inner-reg-edge-missing'};
 
       const obsW=R.pos-L.pos, obsH=B.pos-T.pos;
-      const targetW=8*pxX, targetH=18*pxY;
+      const targetW=8*pxX, targetH=19*pxY;
       if(obsW<targetW*.70 || obsW>targetW*1.30 ||
          obsH<targetH*.78 || obsH>targetH*1.22)
         return {applied:false,reason:'inner-reg-size-outlier',L,R,T,B};
 
       const obsCx=(L.pos+R.pos)*.5, obsCy=(T.pos+B.pos)*.5;
-      const targetCx=cx, targetCy=31*pxY; // midpoint of 22..40 mm
+      const targetCx=cx, targetCy=34.5*pxY; // midpoint of 25..44 mm
 
       let scaleX=targetW/obsW, scaleY=targetH/obsH;
       // This is a residual correction, not a new warp. Keep it deliberately small.
@@ -3389,7 +3390,7 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
           topMm:T.pos/pxY,bottomMm:B.pos/pxY,
           widthMm:obsW/pxX,heightMm:obsH/pxY
         },
-        target:{grooveLeftMm:5,grooveRightMm:13,grooveTopMm:22,grooveBottomMm:40},
+        target:{grooveLeftMm:6,grooveRightMm:14,grooveTopMm:25,grooveBottomMm:44},
         meanEvidence,meanContinuity,lrBalance,tbBalance,L,R,T,B
       };
     } catch(e){
@@ -3400,7 +3401,7 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
 
 
 // v31.93: validate an OUTER candidate by asking whether, after perspective warp,
-  // the known inner mechanics land where a real 60 x 18 mm cassette says they should.
+  // the known inner mechanics land where a real 70 x 20 mm cassette says they should.
   // This is a validator/ranker only. It never generates an outer frame.
   function outerInnerStructureScore(srcCanvas, pts, qrCenter, qrPoints) {
     try {
@@ -3425,7 +3426,7 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
         return .299*d[i]+.587*d[i+1]+.114*d[i+2];
       };
 
-      const pxX=W/18.0, pxY=H/60.0;
+      const pxX=W/20.0, pxY=H/70.0;
       const cx=W*0.5;
 
       function verticalEdgeScore(x,y0,y1,spanMm=.35){
@@ -3450,9 +3451,9 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
       }
 
       // Known mechanics:
-      // groove: y 22..40 mm, width 8 mm => x center ±4 mm
+      // groove: y 25..44 mm, width 8 mm => x center ±4 mm
       // strip : y 26..36 mm, width 4 mm => x center ±2 mm
-      const gy0=22*pxY, gy1=40*pxY;
+      const gy0=25*pxY, gy1=44*pxY;
       const sy0=26*pxY, sy1=36*pxY;
       const gxL=cx-4*pxX, gxR=cx+4*pxX;
       const sxL=cx-2*pxX, sxR=cx+2*pxX;
@@ -3491,7 +3492,7 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
         grooveMean,grooveContinuity:grooveCont,grooveBalance,
         stripMean,stripContinuity:stripCont,stripBalance,
         expected:{
-          cassette:'60x18mm',groove:'22..40mm / 8mm',
+          cassette:'70x20mm',groove:'25..44mm / 8mm',
           strip:'26..36mm / 4mm centered',ctSafe:'27..35mm'
         }
       };
@@ -3564,7 +3565,7 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
       const wt=len(top), wb=len(bottom), ll=len(left), lr=len(right);
       const avgW=(wt+wb)/2, avgL=(ll+lr)/2;
       const ratio=avgL/Math.max(1,avgW);
-      const target=60/18;
+      const target=70/20;
 
       // After QR-plane rectification a true cassette should be close to a Euclidean rectangle.
       const topBottomParallel=1-cosine(top,bottom);   // 1 = parallel ignoring sign
@@ -3583,7 +3584,7 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
       // Hard-enough gate to reject a perspective-plausible but physically wrong outer,
       // while leaving tolerance for QR corner noise / lens distortion.
       const pass=
-        ratio>=2.95 && ratio<=3.72 &&
+        ratio>=3.10 && ratio<=3.90 &&
         tbParallel>=0.94 &&
         lrParallel>=0.94 &&
         orth>=0.86 &&
@@ -3640,7 +3641,7 @@ function detectOuterFrame(canvas, cropCanvas, options) {
       c.otherQrInside=otherInside;
 
       // Outer-first rule:
-      // 1) cassette itself must look like a 60x18 outer rectangle;
+      // 1) cassette itself must look like a 70x20 outer rectangle;
       // 2) its own QR center must belong to this cassette;
       // 3) another card's QR center may not be inside the same outer candidate.
       if (outerPhysical.pass && ownQrInside && !otherInside) {
@@ -3674,7 +3675,7 @@ function detectOuterFrame(canvas, cropCanvas, options) {
 
       // v31.95: QR is a perspective reference only. Its manually placed POSITION
       // never determines cassette TOP/LEFT/etc. The QR square projectively rectifies
-      // the plane, then the candidate must look like a 60x18 rectangle in that plane.
+      // the plane, then the candidate must look like a 70x20 rectangle in that plane.
       c.qrPlaneGeometry=qrPlaneGeometryScore(c.pts,qrPoints);
 
       // v31.93: known internal mechanics remain a second independent validator.
@@ -3777,8 +3778,8 @@ function detectOuterFrame(canvas, cropCanvas, options) {
         const outW=cropCanvas.width, outH=cropCanvas.height;
 
         if (best.qrTemplate && qp.length >= 4) {
-          const sideByW=outW/(18.0/14.0);
-          const sideByH=outH/(60.0/14.0);
+          const sideByW=outW/(20.0/14.0);
+          const sideByH=outH/(70.0/14.0);
           qrNorm={
             cx:outW*0.50,
             cy:outH*0.115,
@@ -3825,7 +3826,7 @@ function detectOuterFrame(canvas, cropCanvas, options) {
       const qrPlaneFinal = best.qrPlaneGeometry || qrPlaneGeometryScore(best.pts,qrPoints);
 
       // v31.97 Multi-Anchor Consensus:
-      // Anchor A = real 60x18 OUTER + four-edge support
+      // Anchor A = real 70x20 OUTER + four-edge support
       // Anchor B = QR-plane perspective consistency
       // Anchor C = known inner groove/strip structure
       //
@@ -3896,7 +3897,7 @@ dbg += 'Raw Candidates: ' + rawCands.length + '<br>';
 dbg += 'QR template candidates: ' + qrTemplates.length + '<br>';
 dbg += 'All Candidates: ' + allCands.length + '<br>';
 dbg += 'QR-enclosing cassette candidates: ' + enclosingCands.length + '<br>';
-if (qrGeometryBackupUsed) dbg += '<b>QR Geometry Backup: USED (60x18 mm from QR)</b><br>';
+if (qrGeometryBackupUsed) dbg += '<b>QR Geometry Backup: USED (70x20 mm from QR)</b><br>';
 else dbg += 'QR Geometry Backup: not needed<br>';
 dbg += 'QR rejected candidates: ' + qrRejected.length + '<br>';
 if (qrRejected.length) dbg += 'QR rejection detail: ' + qrRejected.slice(0,8).map(c=>`${c.method}:${c.qrEnclosure.reason},clear=${c.qrEnclosure.minClearance.toFixed(1)}`).join(' | ') + '<br>';
@@ -3908,16 +3909,16 @@ dbg += '<b>Outer Mode: OpenCV OUTER-FIRST; QR only pairs card + resolves 180°</
         dbg += `Four-edge Support: ${edgeSupportFinal.pass?'PASS':'FAIL'} / mean=${Number(edgeSupportFinal.mean||0).toFixed(2)} / min=${Number(edgeSupportFinal.min||0).toFixed(2)} / strong=${Number(edgeSupportFinal.strongSides||0)}/4<br>`;
         if(es) dbg += `Outer Edge Detail: ${es}<br>`;
       }
-      if (guideFinal) dbg += `QR Guide: L=${Number(guideFinal.longQ||5).toFixed(2)}Q / W=${Number(guideFinal.shortQ||18/14).toFixed(2)}Q / AR=${Number(guideFinal.aspect||(60/18)).toFixed(2)} / angle=${Number(guideFinal.angleDiff||0).toFixed(1)}° / QR top=${Number(guideFinal.qrFromTop||0.115).toFixed(3)} / lateral=${Number(guideFinal.lateral||0).toFixed(3)}<br>`;
+      if (guideFinal) dbg += `QR Guide: L=${Number(guideFinal.longQ||5).toFixed(2)}Q / W=${Number(guideFinal.shortQ||20/14).toFixed(2)}Q / AR=${Number(guideFinal.aspect||(70/20)).toFixed(2)} / angle=${Number(guideFinal.angleDiff||0).toFixed(1)}° / QR top=${Number(guideFinal.qrFromTop||0.115).toFixed(3)} / lateral=${Number(guideFinal.lateral||0).toFixed(3)}<br>`;
 dbg += 'UI Status: ' + (bestOk ? 'PASS - Outer First' : 'FAIL') + '<br>';
-dbg += 'Detection Mode: OUTER + QR perspective soft confidence + INNER validation / CT uses physical 60x18 mm coordinate<br>';
+dbg += 'Detection Mode: OUTER + QR perspective soft confidence + INNER validation / CT uses physical 70x20 mm coordinate<br>';
 dbg += 'Outer Anchor: ' + (best && best.qrTemplate ? 'QR template fallback' : 'Contour + image edge snap') + '<br>';
 if (best && best.qrTemplate) dbg += '<b>QR Direction Hypothesis: ' + best.method + '</b><br>';
 if (best && best.templateImageSupport) dbg += 'QR Template Image Support: edge=' + Number(best.templateImageSupport.edge||0).toFixed(2) + ' / bright=' + Number(best.templateImageSupport.bright||0).toFixed(2) + ' / score=' + Math.round(best.templateImageSupport.score||0) + '<br>';
 if (best && best.edgeSnap && best.edgeSnap.applied) {
   dbg += 'Edge Snap: APPLIED / L ' + best.edgeSnap.oldL.toFixed(1) + '→' + best.edgeSnap.newL.toFixed(1) + ' / W ' + best.edgeSnap.oldW.toFixed(1) + '→' + best.edgeSnap.newW.toFixed(1) + '<br>';
-  if (best.edgeSnap.hard60x18) {
-    dbg += `<b>60x18 HARD Gate: PASS / ratio=${Number(best.edgeSnap.physicalRatio||0).toFixed(3)} / allowed=${Number(best.edgeSnap.physicalRatioMin||0).toFixed(2)}–${Number(best.edgeSnap.physicalRatioMax||0).toFixed(2)} / target=3.333</b><br>`;
+  if (best.edgeSnap.hard70x20) {
+    dbg += `<b>70x20 HARD Gate: PASS / ratio=${Number(best.edgeSnap.physicalRatio||0).toFixed(3)} / allowed=${Number(best.edgeSnap.physicalRatioMin||0).toFixed(2)}–${Number(best.edgeSnap.physicalRatioMax||0).toFixed(2)} / target=3.333</b><br>`;
     dbg += `Perspective Sides: top=${Number(best.edgeSnap.topPx||0).toFixed(1)} / bottom=${Number(best.edgeSnap.bottomPx||0).toFixed(1)} / left=${Number(best.edgeSnap.leftPx||0).toFixed(1)} / right=${Number(best.edgeSnap.rightPx||0).toFixed(1)} px<br>`;
   }
   if (best.edgeSnap.outerArchitecture) {
