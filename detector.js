@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v31.98-actual-groove-anchor';
+  const VERSION = 'v31.99-logic-cleanup-single-warp';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -1323,8 +1323,8 @@
 
       // Plausibility is intentionally tolerant; measured geometry then becomes the local scale.
       const sizePass=
-        widthMmOuter>=6.3 && widthMmOuter<=9.7 &&
-        heightMmOuter>=14.5 && heightMmOuter<=21.5;
+        widthMmOuter>=6.6 && widthMmOuter<=9.4 &&
+        heightMmOuter>=15.2 && heightMmOuter<=20.8;
 
       const sideEvidence=(L.mean+R.mean)*0.5;
       const endEvidence=(T.mean+B.mean)*0.5;
@@ -1332,23 +1332,47 @@
       const lrBalance=Math.min(L.mean,R.mean)/Math.max(1,Math.max(L.mean,R.mean));
       const tbBalance=Math.min(T.mean,B.mean)/Math.max(1,Math.max(T.mean,B.mean));
 
-      const evidencePass=
-        sideEvidence>=1.7 &&
-        endEvidence>=1.25 &&
-        continuity>=0.16 &&
-        Math.max(L.mean,R.mean)>=2.0;
+      const eachSidePass =
+        L.mean>=1.45 && R.mean>=1.45 &&
+        L.continuity>=0.10 && R.continuity>=0.10;
+      const eachEndPass = T.mean>=0.95 && B.mean>=0.95;
+      const balancePass = lrBalance>=0.34 && tbBalance>=0.22;
 
-      const pass=sizePass && evidencePass;
+      const centerMmOuter=((L.pos+R.pos)*0.5-cx)/Math.max(0.0001,outerPxX);
+      const centerPass=Math.abs(centerMmOuter)<=1.8;
+
+      const evidencePass=
+        sideEvidence>=1.75 &&
+        endEvidence>=1.20 &&
+        continuity>=0.16 &&
+        eachSidePass &&
+        eachEndPass &&
+        balancePass &&
+        centerPass;
+
       const confidence=Math.max(0,Math.min(100,
-        (sizePass?30:0) +
-        Math.min(30,sideEvidence*5.2) +
-        Math.min(20,endEvidence*4.0) +
-        Math.min(20,continuity*55)
+        (sizePass?24:0) +
+        (eachSidePass?18:0) +
+        (eachEndPass?12:0) +
+        (balancePass?12:0) +
+        (centerPass?10:0) +
+        Math.min(12,sideEvidence*2.5) +
+        Math.min(7,endEvidence*1.8) +
+        Math.min(5,continuity*20)
       ));
+
+      const confidencePass=confidence>=58;
+      const pass=sizePass && evidencePass && confidencePass;
 
       return {
         pass,
-        reason:pass?'PASS':(!sizePass?'actual-groove-size-fail':'actual-groove-evidence-low'),
+        reason:pass?'PASS':
+          (!sizePass?'actual-groove-size-fail':
+           (!eachSidePass?'actual-groove-side-evidence-fail':
+            (!eachEndPass?'actual-groove-end-evidence-fail':
+             (!balancePass?'actual-groove-balance-fail':
+              (!centerPass?'actual-groove-center-fail':
+               (!confidencePass?'actual-groove-confidence-low':'actual-groove-evidence-low')))))),
         confidence,
         left:L.pos,right:R.pos,top:T.pos,bottom:B.pos,
         centerX:(L.pos+R.pos)*0.5,
@@ -1356,6 +1380,7 @@
         widthPx:gw,heightPx:gh,
         widthMmOuter,heightMmOuter,
         sideEvidence,endEvidence,continuity,lrBalance,tbBalance,
+        eachSidePass,eachEndPass,balancePass,centerPass,centerMmOuter,confidencePass,
         L,R,T,B
       };
     } catch(e) {
@@ -1968,7 +1993,16 @@
       (tCont.contrastAvg || 0) >= 0.10
     );
 
-    const tDetected = !!(cDetected && tCont && tGeometryOk && refinedSeparationOk && tRelativeOk && tFwhmOk);
+    // v31.99: prevent narrow gray slot/shadow peaks from becoming Positive.
+    const tDetected = !!(
+      cDetected &&
+      tCont &&
+      tGeometryOk &&
+      refinedSeparationOk &&
+      tRelativeOk &&
+      tFwhmOk &&
+      tWeakHorizontalEvidence
+    );
 
     const tColorOk = tWeakHorizontalEvidence; // 保留既有 debug 欄位相容性
     const cSelected = !!cCont;
@@ -1987,7 +2021,14 @@
     cQ.detected = cDetected;
     tQ.detected = tDetected;
     cQ.reject = !cCont ? 'no-horizontal-line' : !cGeometryOk ? 'outside-wide-c-locator' : !cCont.ok ? 'no-red-continuity' : !cColorOk ? 'weak-color' : 'PASS';
-    tQ.reject = !tCont ? 'no-t-candidate' : !tGeometryOk ? 'outside-middle10-t-band' : !refinedSeparationOk ? 't-gap-outside-3-6mm' : !tRelativeOk ? 'below-10pct-of-c' : !tFwhm.valid ? 'fwhm-no-peak' : !tFwhmOk ? ('fwhm-outside-' + T_FWHM_MIN_MM.toFixed(2) + '-' + T_FWHM_MAX_MM.toFixed(2) + 'mm') : 'PASS';
+    tQ.reject = !tCont ? 'no-t-candidate' :
+      !tGeometryOk ? 'outside-c-plus-3-6mm' :
+      !refinedSeparationOk ? 't-gap-outside-3-6mm' :
+      !tRelativeOk ? 'below-10pct-of-c' :
+      !tFwhm.valid ? 'fwhm-no-peak' :
+      !tFwhmOk ? ('fwhm-outside-' + T_FWHM_MIN_MM.toFixed(2) + '-' + T_FWHM_MAX_MM.toFixed(2) + 'mm') :
+      !tWeakHorizontalEvidence ? 'no-chromatic-horizontal-evidence' :
+      'PASS';
 
     let result = 'Invalid';
     if (cDetected && tDetected) result = 'Positive';
@@ -2001,7 +2042,7 @@
     );
 
     return {
-      source:'ct-actual-groove-anchor-v31-98',
+      source:'ct-actual-groove-anchor-v31-99',
       x0, x1, y0, y1, h,
       zone:{x:x0, y:y0, w:Math.max(1, x1-x0), h:Math.max(1, y1-y0), startRatio:ctStartRatio, endRatio:ctEndRatio, widthRatio:ctEndRatio-ctStartRatio, topThirdY:Math.round(topThirdY), topThirdPadding:topThirdPadding, yLimitedByTopThird:false, coordinateSystem:'multi-anchor-wide-c-locator-60x18mm', qrSide:qSide, stripCenterX, cExpectedAbsY, tExpectedAbsY, bandHalf, locatorY0, locatorY1, pxPerMm, cassetteMm:CASSETTE_L_MM, cassetteWidthMm:CASSETTE_W_MM, grooveTopMm:GROOVE_TOP_MM, grooveHeightMm:GROOVE_H_MM, grooveWidthMm:GROOVE_W_MM, stripTopMm:STRIP_TOP_MM, stripHeightMm:STRIP_H_MM, stripWidthMm:STRIP_W_MM, ctSafeTopMm:CT_SAFE_TOP_MM, ctSafeBottomMm:CT_SAFE_BOTTOM_MM, cSearchTopMm:C_SEARCH_TOP_MM, cSearchBottomMm:C_SEARCH_BOTTOM_MM, tMinGapMm:T_MIN_GAP_MM, tMaxGapMm:T_MAX_GAP_MM, tFwhmMinMm:T_FWHM_MIN_MM, tFwhmMaxMm:T_FWHM_MAX_MM, tRelativeCRatio:T_RELATIVE_C_RATIO, ctGapMm, cLocatorAbsY:cCont?cCont.absY:null, cLocatorHasColor:cColorOk, cLocatedMm, cPriorDeltaMm, cLocatorConfidence, analysisTopMm:ANALYSIS_TOP_MM, analysisBottomMm:ANALYSIS_BOTTOM_MM,
         grooveAnchorUsed:!!(actualGroove&&actualGroove.pass),
@@ -2197,8 +2238,8 @@
     // v31.80: Window/slot and S-well are retired from positioning.
     // Outer warp defines a 60x18 mm cassette; CT ROI is therefore fixed in mm.
     const win = {
-      x: Math.round(W*0.32), y: Math.round(H*(24/70)),
-      w: Math.round(W*0.36), h: Math.round(H*(10/70)),
+      x: Math.round(W*0.32), y: Math.round(H*(24/60)),
+      w: Math.round(W*0.36), h: Math.round(H*(10/60)),
       source:'fixed-physical-ct-roi'
     };
     const sample = null;
@@ -2216,8 +2257,19 @@
 
     const ctAnalysis = analyzeCTLines(cropCanvas, win, qrNorm);
 
+    // v31.99: UI/debug uses the exact ROI that CT analysis actually used.
+    const analysisWindow = (ctAnalysis && ctAnalysis.zone) ? {
+      x:ctAnalysis.zone.x,
+      y:ctAnalysis.y0,
+      w:ctAnalysis.zone.w,
+      h:Math.max(1,ctAnalysis.y1-ctAnalysis.y0),
+      source:ctAnalysis.zone.grooveAnchorUsed ?
+        'actual-groove-ct-window-v3199' :
+        'outer-fallback-ct-window-v3199'
+    } : win;
+
     const out = {
-      window: win,
+      window: analysisWindow,
       sample,
       ctAnalysis,
       ctResult: ctAnalysis ? ctAnalysis.result : '-',
@@ -2661,7 +2713,7 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
       {x:-ux,y:-uy,name:'qr-dir-body-u-'}
     ];
     // v31.64: use measured physical geometry instead of empirical cassette/Q ratios.
-    // Cassette = 70 x 20 mm, QR = 14 x 14 mm.
+    // Cassette = 60 x 18 mm, QR = 14 x 14 mm.
     const QR_MM=14.0;
     const CASSETTE_L_MM=70.0;
     const CASSETTE_W_MM=20.0;
@@ -3086,7 +3138,7 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
     const angleDiff=Math.acos(Math.abs(dot))*180/Math.PI;
     const longQ=L/qSide, shortQ=W/qSide, aspect=L/W;
     const eL=Math.abs(longQ-5.0)/5.0;
-    const eW=Math.abs(shortQ-(20/14))/(20/14);
+    const eW=Math.abs(shortQ-(18/14))/(18/14);
     const eA=Math.abs(aspect-3.5)/3.5;
     const pass=longQ>=3.9&&longQ<=6.35&&shortQ>=1.05&&shortQ<=2.0&&aspect>=2.8&&aspect<=4.35&&angleDiff<=20;
     const score=Math.max(0,30000-eL*11000-eW*9000-eA*7000-Math.min(1,angleDiff/20)*3000);
@@ -3186,7 +3238,7 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
     const ratioOk=ratio>=2.70 && ratio<=4.55;
     const areaOk=areaRatio>=0.003 && areaRatio<=0.55;
     const fillOk=fill>=0.035 && fill<=1.08;
-    const ratioErr=Math.abs(ratio-3.5)/3.5;
+    const ratioErr=Math.abs(ratio-(60.0/18.0))/(60.0/18.0);
     const score=Math.max(0,24000-ratioErr*18000) +
                 Math.min(4500,Math.max(0,areaRatio)*18000) +
                 Math.min(2500,Math.max(0,fill)*2500);
@@ -3324,19 +3376,13 @@ function candidateFeatureScore(srcCanvas, cand, qrCenter)
           meanEvidence,meanContinuity,L,R,T,B};
       }
 
-      const src=cv.imread(cropCanvas);
-      const dst=new cv.Mat();
-      const M=cv.matFromArray(2,3,cv.CV_64F,[
-        scaleX,0,translateX,
-        0,scaleY,translateY
-      ]);
-      cv.warpAffine(src,dst,M,new cv.Size(W,H),cv.INTER_LINEAR,cv.BORDER_REPLICATE);
-      cv.imshow(cropCanvas,dst);
-      src.delete(); dst.delete(); M.delete();
-
+      // v31.99: single-warp policy. Measure residual error but do NOT resample again.
+      // Actual groove coordinates below will absorb the residual without a second warpAffine.
       return {
-        applied:true,reason:'PASS',
-        scaleX,scaleY,translateX,translateY,
+        applied:false,reason:'measured-only-no-second-warp',
+        suggestedScaleX:scaleX,suggestedScaleY:scaleY,
+        suggestedTranslateX:translateX,suggestedTranslateY:translateY,
+        scaleX:1,scaleY:1,translateX:0,translateY:0,
         shiftMmX:translateX/pxX,shiftMmY:translateY/pxY,
         observed:{
           leftMm:L.pos/pxX,rightMm:R.pos/pxX,
@@ -3731,8 +3777,8 @@ function detectOuterFrame(canvas, cropCanvas, options) {
         const outW=cropCanvas.width, outH=cropCanvas.height;
 
         if (best.qrTemplate && qp.length >= 4) {
-          const sideByW=outW/(20.0/14.0);
-          const sideByH=outH/(70.0/14.0);
+          const sideByW=outW/(18.0/14.0);
+          const sideByH=outH/(60.0/14.0);
           qrNorm={
             cx:outW*0.50,
             cy:outH*0.115,
@@ -3794,9 +3840,12 @@ function detectOuterFrame(canvas, cropCanvas, options) {
       const innerFinal = best.innerStructure || outerInnerStructureScore(canvas,best.pts,qrCenter,qrPoints);
       const innerAnchorPass = !!(innerFinal && innerFinal.pass);
       const anchorVotes = (outerAnchorPass?1:0) + (qrAnchorPass?1:0) + (innerAnchorPass?1:0);
+      // v31.99: true 2-of-3 consensus.
+      // At least one accepted anchor must be image geometry (OUTER or INNER).
+      const hasImageGeometryAnchor = outerAnchorPass || innerAnchorPass;
       const bestOuterGeometryOk = !!(
-        physicalFinal && physicalFinal.pass &&
-        anchorVotes >= 2
+        anchorVotes >= 2 &&
+        hasImageGeometryAnchor
       );
       const geometryConfidence =
         anchorVotes===3 ? 'HIGH' :
@@ -3814,10 +3863,7 @@ function detectOuterFrame(canvas, cropCanvas, options) {
 
       let failReason = '';
       if(!bestOuterGeometryOk) {
-        if(!(physicalFinal && physicalFinal.pass))
-          failReason=(physicalFinal&&physicalFinal.reason)?physicalFinal.reason:'outer-geometry-fail';
-        else
-          failReason='multi-anchor-consensus-fail-' + anchorVotes + '-of-3';
+        failReason='multi-anchor-consensus-fail-' + anchorVotes + '-of-3';
       } else {
         failReason = anchorVotes===3 ? 'PASS-3-of-3' : 'PASS-2-of-3-FALLBACK';
       }
@@ -3862,7 +3908,7 @@ dbg += '<b>Outer Mode: OpenCV OUTER-FIRST; QR only pairs card + resolves 180°</
         dbg += `Four-edge Support: ${edgeSupportFinal.pass?'PASS':'FAIL'} / mean=${Number(edgeSupportFinal.mean||0).toFixed(2)} / min=${Number(edgeSupportFinal.min||0).toFixed(2)} / strong=${Number(edgeSupportFinal.strongSides||0)}/4<br>`;
         if(es) dbg += `Outer Edge Detail: ${es}<br>`;
       }
-      if (guideFinal) dbg += `QR Guide: L=${Number(guideFinal.longQ||5).toFixed(2)}Q / W=${Number(guideFinal.shortQ||20/14).toFixed(2)}Q / AR=${Number(guideFinal.aspect||3.5).toFixed(2)} / angle=${Number(guideFinal.angleDiff||0).toFixed(1)}° / QR top=${Number(guideFinal.qrFromTop||0.115).toFixed(3)} / lateral=${Number(guideFinal.lateral||0).toFixed(3)}<br>`;
+      if (guideFinal) dbg += `QR Guide: L=${Number(guideFinal.longQ||5).toFixed(2)}Q / W=${Number(guideFinal.shortQ||18/14).toFixed(2)}Q / AR=${Number(guideFinal.aspect||(60/18)).toFixed(2)} / angle=${Number(guideFinal.angleDiff||0).toFixed(1)}° / QR top=${Number(guideFinal.qrFromTop||0.115).toFixed(3)} / lateral=${Number(guideFinal.lateral||0).toFixed(3)}<br>`;
 dbg += 'UI Status: ' + (bestOk ? 'PASS - Outer First' : 'FAIL') + '<br>';
 dbg += 'Detection Mode: OUTER + QR perspective soft confidence + INNER validation / CT uses physical 60x18 mm coordinate<br>';
 dbg += 'Outer Anchor: ' + (best && best.qrTemplate ? 'QR template fallback' : 'Contour + image edge snap') + '<br>';
