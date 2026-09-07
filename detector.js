@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v32.00-physical-70x20';
+  const VERSION = 'v32.01-outerY-locked';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -1402,14 +1402,14 @@
     const outerPxX = W / 20.0;
     const outerPxY = H / 70.0;
     const groovePxX = (actualGroove && actualGroove.pass) ? actualGroove.widthPx / 8.0 : outerPxX;
-    const groovePxY = (actualGroove && actualGroove.pass) ? actualGroove.heightPx / 19.0 : outerPxY;
     const grooveCenterX = (actualGroove && actualGroove.pass) ? actualGroove.centerX : W*0.5;
-    const grooveTopPx = (actualGroove && actualGroove.pass) ? actualGroove.top : 22.0*outerPxY;
 
-    // Map cassette physical Y millimetres through the measured groove:
-    // groove top is 25 mm, groove bottom is 44 mm.
-    const physicalY0Px = grooveTopPx - 25.0 * groovePxY;
-    const mmToY = mm => physicalY0Px + mm * groovePxY;
+    // v32.01: absolute Y is locked to the physical cassette outer.
+    // OUTER TOP = 0 mm; OUTER BOTTOM = 70 mm.
+    // Groove bevel/edge detection may validate geometry and align X, but never redefines Y.
+    const groovePxY = outerPxY;
+    const physicalY0Px = 0;
+    const mmToY = mm => mm * outerPxY;
 
     // Actual 4 mm strip is centered inside the measured 8 mm groove.
     const stripHalfPx = Math.max(2, 2.0 * groovePxX);
@@ -1419,9 +1419,9 @@
     // Give row-line continuity a real strip/window position rather than an outer-derived synthetic window.
     win = {
       x:actualStripX0,
-      y:clamp(Math.floor(mmToY(24.5)),0,H-1),
+      y:clamp(Math.floor(mmToY(29.0)),0,H-1),
       w:Math.max(1,actualStripX1-actualStripX0),
-      h:Math.max(1,clamp(Math.ceil(mmToY(36.5)),1,H)-clamp(Math.floor(mmToY(24.5)),0,H-1)),
+      h:Math.max(1,clamp(Math.ceil(mmToY(41.0)),1,H)-clamp(Math.floor(mmToY(29.0)),0,H-1)),
       source:(actualGroove&&actualGroove.pass)?'actual-groove-strip-v3198':'outer-fallback-strip-v3198'
     };
 
@@ -1633,7 +1633,7 @@
 
     // Wide C locator. A real C line found by image evidence becomes the anchor;
     // T is then constrained to C + 3~6 mm.
-    const C_SEARCH_TOP_MM = 29.5;
+    const C_SEARCH_TOP_MM = 30.0;
     const C_SEARCH_BOTTOM_MM = 34.5;
     const T_MIN_GAP_MM = 3.5;
     const T_MAX_GAP_MM = 6.5;
@@ -1978,6 +1978,12 @@
     const refinedSeparationOk = !!(cCont && tCont &&
       ctGapMm >= T_MIN_GAP_MM && ctGapMm <= T_MAX_GAP_MM);
 
+    // Independent absolute-position guards from OUTER TOP.
+    const cAbsoluteMm = cCont ? (cCont.absY / Math.max(0.0001, outerPxY)) : -1;
+    const tAbsoluteMm = tCont ? (tCont.absY / Math.max(0.0001, outerPxY)) : -1;
+    const cAbsolutePositionOk = !!(cCont && cAbsoluteMm >= 30.0 && cAbsoluteMm <= 34.5);
+    const tAbsolutePositionOk = !!(tCont && tAbsoluteMm >= 35.0 && tAbsoluteMm <= 39.5);
+
     const cStrength = cCont ? bandStrength(cCont.localY) : 0;
     const tStrength = tCont ? bandStrength(tCont.localY) : 0;
     const tRelativeThreshold = cStrength * T_RELATIVE_C_RATIO;
@@ -2000,6 +2006,7 @@
       tCont &&
       tGeometryOk &&
       refinedSeparationOk &&
+      tAbsolutePositionOk &&
       tRelativeOk &&
       tFwhmOk &&
       tWeakHorizontalEvidence
@@ -2043,9 +2050,11 @@
     );
 
     return {
-      source:'ct-physical-70x20-v32-00',
+      source:'ct-outerY-physical-v32-01',
       x0, x1, y0, y1, h,
-      zone:{x:x0, y:y0, w:Math.max(1, x1-x0), h:Math.max(1, y1-y0), startRatio:ctStartRatio, endRatio:ctEndRatio, widthRatio:ctEndRatio-ctStartRatio, topThirdY:Math.round(topThirdY), topThirdPadding:topThirdPadding, yLimitedByTopThird:false, coordinateSystem:'physical-70x20-groove25-44-strip29-41-v3200', qrSide:qSide, stripCenterX, cExpectedAbsY, tExpectedAbsY, bandHalf, locatorY0, locatorY1, pxPerMm, cassetteMm:CASSETTE_L_MM, cassetteWidthMm:CASSETTE_W_MM, grooveTopMm:GROOVE_TOP_MM, grooveHeightMm:GROOVE_H_MM, grooveWidthMm:GROOVE_W_MM, stripTopMm:STRIP_TOP_MM, stripHeightMm:STRIP_H_MM, stripWidthMm:STRIP_W_MM, ctSafeTopMm:CT_SAFE_TOP_MM, ctSafeBottomMm:CT_SAFE_BOTTOM_MM, cSearchTopMm:C_SEARCH_TOP_MM, cSearchBottomMm:C_SEARCH_BOTTOM_MM, tMinGapMm:T_MIN_GAP_MM, tMaxGapMm:T_MAX_GAP_MM, tFwhmMinMm:T_FWHM_MIN_MM, tFwhmMaxMm:T_FWHM_MAX_MM, tRelativeCRatio:T_RELATIVE_C_RATIO, ctGapMm, cLocatorAbsY:cCont?cCont.absY:null, cLocatorHasColor:cColorOk, cLocatedMm, cPriorDeltaMm, cLocatorConfidence, analysisTopMm:ANALYSIS_TOP_MM, analysisBottomMm:ANALYSIS_BOTTOM_MM,
+      zone:{x:x0, y:y0, w:Math.max(1, x1-x0), h:Math.max(1, y1-y0), startRatio:ctStartRatio, endRatio:ctEndRatio, widthRatio:ctEndRatio-ctStartRatio, topThirdY:Math.round(topThirdY), topThirdPadding:topThirdPadding, yLimitedByTopThird:false, coordinateSystem:'outerY70mm-grooveX-strip29-41-v3201', qrSide:qSide, stripCenterX, cExpectedAbsY, tExpectedAbsY, bandHalf, locatorY0, locatorY1, pxPerMm, cassetteMm:CASSETTE_L_MM, cassetteWidthMm:CASSETTE_W_MM, grooveTopMm:GROOVE_TOP_MM, grooveHeightMm:GROOVE_H_MM, grooveWidthMm:GROOVE_W_MM, stripTopMm:STRIP_TOP_MM, stripHeightMm:STRIP_H_MM, stripWidthMm:STRIP_W_MM, ctSafeTopMm:CT_SAFE_TOP_MM, ctSafeBottomMm:CT_SAFE_BOTTOM_MM, cSearchTopMm:C_SEARCH_TOP_MM, cSearchBottomMm:C_SEARCH_BOTTOM_MM, tMinGapMm:T_MIN_GAP_MM, tMaxGapMm:T_MAX_GAP_MM, tFwhmMinMm:T_FWHM_MIN_MM, tFwhmMaxMm:T_FWHM_MAX_MM, tRelativeCRatio:T_RELATIVE_C_RATIO, ctGapMm, cLocatorAbsY:cCont?cCont.absY:null, cLocatorHasColor:cColorOk, cLocatedMm, cPriorDeltaMm, cLocatorConfidence,
+        cAbsoluteMm, tAbsoluteMm, cAbsolutePositionOk, tAbsolutePositionOk,
+        absoluteYAnchor:'OUTER-TOP-0MM', analysisTopMm:ANALYSIS_TOP_MM, analysisBottomMm:ANALYSIS_BOTTOM_MM,
         grooveAnchorUsed:!!(actualGroove&&actualGroove.pass),
         grooveConfidence:actualGroove?actualGroove.confidence:0,
         grooveLeftPx:actualGroove&&actualGroove.pass?actualGroove.left:null,
