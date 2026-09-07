@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v31.97-multi-anchor-2of3-fallback';
+  const VERSION = 'v31.98-actual-groove-anchor';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -1238,14 +1238,168 @@
     };
   }
 
+
+  // v31.98: locate the ACTUAL groove on the already-warped cassette.
+  // This does not move the image. It creates a local physical coordinate system
+  // directly from the observed 8 x 18 mm groove:
+  //   groove left/right  -> X scale + center
+  //   groove top/bottom  -> Y scale + origin
+  // If confidence is insufficient, callers fall back to the outer-derived coordinates.
+  function locateActualGroove(cropCanvas) {
+    try {
+      if(!cropCanvas || cropCanvas.width<40 || cropCanvas.height<100)
+        return {pass:false,reason:'actual-groove-small-canvas'};
+
+      const W=cropCanvas.width,H=cropCanvas.height;
+      const ctx=cropCanvas.getContext('2d',{willReadFrequently:true});
+      const data=ctx.getImageData(0,0,W,H).data;
+      const outerPxX=W/18.0, outerPxY=H/60.0;
+      const cx=W*0.5;
+
+      function lum(x,y){
+        const xx=Math.max(0,Math.min(W-1,Math.round(x)));
+        const yy=Math.max(0,Math.min(H-1,Math.round(y)));
+        const i=(yy*W+xx)*4;
+        return .299*data[i]+.587*data[i+1]+.114*data[i+2];
+      }
+      function vMetric(x,y0,y1){
+        const off=Math.max(1.2,.24*outerPxX);
+        const N=43; let sum=0,strong=0;
+        for(let i=0;i<N;i++){
+          const y=y0+(y1-y0)*(i/(N-1));
+          const g=Math.abs(lum(x-off,y)-lum(x+off,y));
+          sum+=g; if(g>=2.7) strong++;
+        }
+        return {mean:sum/N,continuity:strong/N};
+      }
+      function hMetric(y,x0,x1){
+        const off=Math.max(1.2,.24*outerPxY);
+        const N=35; let sum=0,strong=0;
+        for(let i=0;i<N;i++){
+          const x=x0+(x1-x0)*(i/(N-1));
+          const g=Math.abs(lum(x,y-off)-lum(x,y+off));
+          sum+=g; if(g>=2.7) strong++;
+        }
+        return {mean:sum/N,continuity:strong/N};
+      }
+      function best1D(center,radius,maxPos,fn){
+        let best=null;
+        const a=Math.max(1,Math.floor(center-radius));
+        const b=Math.min(maxPos-2,Math.ceil(center+radius));
+        for(let p=a;p<=b;p++){
+          const m=fn(p);
+          const score=m.mean + m.continuity*9;
+          if(!best || score>best.score) best={pos:p,score,...m};
+        }
+        return best;
+      }
+
+      // Expected only seeds the search; final ROI uses measured edges.
+      const expL=cx-4*outerPxX, expR=cx+4*outerPxX;
+      const expT=22*outerPxY, expB=40*outerPxY;
+
+      // Search wider than v31.94 registration so a residual outer error can still be recovered.
+      const xRad=2.4*outerPxX;
+      const yRad=3.2*outerPxY;
+
+      const sideY0=23.5*outerPxY, sideY1=38.5*outerPxY;
+      const L=best1D(expL,xRad,W,x=>vMetric(x,sideY0,sideY1));
+      const R=best1D(expR,xRad,W,x=>vMetric(x,sideY0,sideY1));
+
+      if(!L||!R) return {pass:false,reason:'actual-groove-side-missing'};
+      const provisionalCx=(L.pos+R.pos)*0.5;
+      const provisionalW=R.pos-L.pos;
+      if(provisionalW<=0) return {pass:false,reason:'actual-groove-width-invalid'};
+
+      const x0=provisionalCx-provisionalW*0.44;
+      const x1=provisionalCx+provisionalW*0.44;
+      const T=best1D(expT,yRad,H,y=>hMetric(y,x0,x1));
+      const B=best1D(expB,yRad,H,y=>hMetric(y,x0,x1));
+      if(!T||!B) return {pass:false,reason:'actual-groove-top-bottom-missing'};
+
+      const gw=R.pos-L.pos, gh=B.pos-T.pos;
+      const widthMmOuter=gw/outerPxX;
+      const heightMmOuter=gh/outerPxY;
+
+      // Plausibility is intentionally tolerant; measured geometry then becomes the local scale.
+      const sizePass=
+        widthMmOuter>=6.3 && widthMmOuter<=9.7 &&
+        heightMmOuter>=14.5 && heightMmOuter<=21.5;
+
+      const sideEvidence=(L.mean+R.mean)*0.5;
+      const endEvidence=(T.mean+B.mean)*0.5;
+      const continuity=(L.continuity+R.continuity+T.continuity+B.continuity)/4;
+      const lrBalance=Math.min(L.mean,R.mean)/Math.max(1,Math.max(L.mean,R.mean));
+      const tbBalance=Math.min(T.mean,B.mean)/Math.max(1,Math.max(T.mean,B.mean));
+
+      const evidencePass=
+        sideEvidence>=1.7 &&
+        endEvidence>=1.25 &&
+        continuity>=0.16 &&
+        Math.max(L.mean,R.mean)>=2.0;
+
+      const pass=sizePass && evidencePass;
+      const confidence=Math.max(0,Math.min(100,
+        (sizePass?30:0) +
+        Math.min(30,sideEvidence*5.2) +
+        Math.min(20,endEvidence*4.0) +
+        Math.min(20,continuity*55)
+      ));
+
+      return {
+        pass,
+        reason:pass?'PASS':(!sizePass?'actual-groove-size-fail':'actual-groove-evidence-low'),
+        confidence,
+        left:L.pos,right:R.pos,top:T.pos,bottom:B.pos,
+        centerX:(L.pos+R.pos)*0.5,
+        centerY:(T.pos+B.pos)*0.5,
+        widthPx:gw,heightPx:gh,
+        widthMmOuter,heightMmOuter,
+        sideEvidence,endEvidence,continuity,lrBalance,tbBalance,
+        L,R,T,B
+      };
+    } catch(e) {
+      console.warn('v31.98 actual groove locator failed',e);
+      return {pass:false,reason:'actual-groove-exception'};
+    }
+  }
+
+
   function analyzeCTLines(cropCanvas, win, qrNorm) {
     if (!cropCanvas) return null;
     const W = cropCanvas.width;
     const H = cropCanvas.height;
-    // v31.81: after 60x18 perspective warp, CT geometry is derived from the OUTER frame only.
-    // Window/slot detection is no longer a prerequisite. This synthetic ROI is
-    // centered on the cassette and uses a physical 24~37.5 mm analysis band; C is restricted to 24~31 mm.
-    if (!win) win = {x:W*0.32, y:H*(24/70), w:W*0.36, h:H*(13.5/70), source:'outer-physical-ct-roi'};
+
+    // v31.98: use the ACTUAL observed groove as the primary local coordinate system.
+    // Outer-derived 60x18 coordinates are fallback only.
+    const actualGroove = locateActualGroove(cropCanvas);
+
+    const outerPxX = W / 18.0;
+    const outerPxY = H / 60.0;
+    const groovePxX = (actualGroove && actualGroove.pass) ? actualGroove.widthPx / 8.0 : outerPxX;
+    const groovePxY = (actualGroove && actualGroove.pass) ? actualGroove.heightPx / 18.0 : outerPxY;
+    const grooveCenterX = (actualGroove && actualGroove.pass) ? actualGroove.centerX : W*0.5;
+    const grooveTopPx = (actualGroove && actualGroove.pass) ? actualGroove.top : 22.0*outerPxY;
+
+    // Map cassette physical Y millimetres through the measured groove:
+    // groove top is 22 mm, groove bottom is 40 mm.
+    const physicalY0Px = grooveTopPx - 22.0 * groovePxY;
+    const mmToY = mm => physicalY0Px + mm * groovePxY;
+
+    // Actual 4 mm strip is centered inside the measured 8 mm groove.
+    const stripHalfPx = Math.max(2, 2.0 * groovePxX);
+    const actualStripX0 = clamp(Math.floor(grooveCenterX-stripHalfPx),0,W-1);
+    const actualStripX1 = clamp(Math.ceil(grooveCenterX+stripHalfPx),actualStripX0+1,W);
+
+    // Give row-line continuity a real strip/window position rather than an outer-derived synthetic window.
+    win = {
+      x:actualStripX0,
+      y:clamp(Math.floor(mmToY(24.5)),0,H-1),
+      w:Math.max(1,actualStripX1-actualStripX0),
+      h:Math.max(1,clamp(Math.ceil(mmToY(36.5)),1,H)-clamp(Math.floor(mmToY(24.5)),0,H-1)),
+      source:(actualGroove&&actualGroove.pass)?'actual-groove-strip-v3198':'outer-fallback-strip-v3198'
+    };
+
     const ctx = cropCanvas.getContext('2d', {willReadFrequently:true});
     const data = ctx.getImageData(0,0,W,H).data;
 
@@ -1462,37 +1616,35 @@
     const T_FWHM_MAX_MM = 1.50;
     const T_RELATIVE_C_RATIO = 0.10;
 
-    const pxPerMm = H / CASSETTE_L_MM;
-    const pxPerMmX = W / CASSETTE_W_MM;
+    // v31.98: mm scale and origin come from ACTUAL groove when available.
+    const pxPerMm = groovePxY;
+    const pxPerMmX = groovePxX;
     const qSide = Math.max(4, H * (14.0 / CASSETTE_L_MM));
-    const stripCenterX = W * 0.50;
+    const stripCenterX = grooveCenterX;
 
-    // 試紙寬固定 4 mm，而且一定在卡匣中心線上。
+    // 4 mm strip width = 1/2 of the measured 8 mm groove width.
     const stripHalfWidth = Math.max(2, (STRIP_W_MM * pxPerMmX) * 0.5);
     const x0 = clamp(Math.floor(stripCenterX - stripHalfWidth), 0, W-1);
     const x1 = clamp(Math.ceil(stripCenterX + stripHalfWidth), x0 + 1, W);
 
-    // v31.96: profile uses a 12 mm guarded locator band, while X stays on the
-    // known centered 4 mm strip. This prevents a 1~2 mm Y registration error from
-    // excluding an otherwise obvious C line.
-    const y0 = clamp(Math.floor(ANALYSIS_TOP_MM * pxPerMm), 0, H-1);
-    const y1 = clamp(Math.ceil(ANALYSIS_BOTTOM_MM * pxPerMm), y0+1, H);
+    // Y coordinates are mapped from the measured groove's top/bottom, not from crop H/60.
+    const y0 = clamp(Math.floor(mmToY(ANALYSIS_TOP_MM)), 0, H-1);
+    const y1 = clamp(Math.ceil(mmToY(ANALYSIS_BOTTOM_MM)), y0+1, H);
     const h = Math.max(1, y1-y0);
 
-    // Nominal C prior is kept near the original physical expectation, but it no longer
-    // clips the search. Image evidence is allowed to move the C anchor.
     const C_NOMINAL_MM = 29.5;
-    const cExpectedLocalY = (C_NOMINAL_MM - ANALYSIS_TOP_MM) * pxPerMm;
+    const cExpectedAbsY = mmToY(C_NOMINAL_MM);
+    const cExpectedLocalY = cExpectedAbsY - y0;
     let tExpectedLocalY = cExpectedLocalY + 4.5 * pxPerMm;
-    const cExpectedAbsY = y0 + cExpectedLocalY;
     let tExpectedAbsY = y0 + tExpectedLocalY;
+
     const cSearchRange = {
-      start: clamp(Math.floor((C_SEARCH_TOP_MM-ANALYSIS_TOP_MM)*pxPerMm),0,h-1),
-      end: clamp(Math.ceil((C_SEARCH_BOTTOM_MM-ANALYSIS_TOP_MM)*pxPerMm),1,h-1)
+      start: clamp(Math.floor(mmToY(C_SEARCH_TOP_MM)-y0),0,h-1),
+      end: clamp(Math.ceil(mmToY(C_SEARCH_BOTTOM_MM)-y0),1,h-1)
     };
     let tSearchRange = {
-      start: clamp(Math.floor((CT_SAFE_TOP_MM-ANALYSIS_TOP_MM)*pxPerMm),0,h-1),
-      end: clamp(Math.ceil((CT_SAFE_BOTTOM_MM-ANALYSIS_TOP_MM)*pxPerMm),1,h-1)
+      start: clamp(Math.floor(mmToY(CT_SAFE_TOP_MM)-y0),0,h-1),
+      end: clamp(Math.ceil(mmToY(CT_SAFE_BOTTOM_MM)-y0),1,h-1)
     };
     const bandHalf = h * 0.58;
     const locatorY0 = y0, locatorY1 = y1;
@@ -1605,7 +1757,7 @@
         const lineBoost = Math.min(15, (cont.run || 0) * 0.52) + (cont.ratio || 0) * 14;
         // Expected physical C position is only a soft prior. Max penalty is deliberately
         // small so a clearly visible C can win even when registration is off by 1~2 mm.
-        const posMm = ANALYSIS_TOP_MM + ly / Math.max(0.0001, pxPerMm);
+        const posMm = (y0 + ly - physicalY0Px) / Math.max(0.0001, pxPerMm);
         const priorPenalty = mode==='C' ? Math.min(3.0, Math.abs(posMm-C_NOMINAL_MM)*0.55) : 0;
         const total = (cont.score || 0) + ps * 0.24 + colorBoost + lineBoost - priorPenalty;
         const item = Object.assign({}, cont, {localY:ly, absY:y0+ly, profileScore:ps, totalScore:total});
@@ -1781,7 +1933,7 @@
     // geometry = candidate is inside the broad physical locator,
     // image = horizontal continuity + red/pink evidence,
     // prior = proximity to nominal physical C position (soft only).
-    const cLocatedMm = cCont ? (ANALYSIS_TOP_MM + cCont.localY / Math.max(0.0001,pxPerMm)) : -1;
+    const cLocatedMm = cCont ? ((cCont.absY - physicalY0Px) / Math.max(0.0001,pxPerMm)) : -1;
     const cPriorDeltaMm = cCont ? Math.abs(cLocatedMm - C_NOMINAL_MM) : 99;
     let cLocatorConfidence = 0;
     if(cCont){
@@ -1849,12 +2001,19 @@
     );
 
     return {
-      source:'ct-multi-anchor-wide-c-locator-v31-96',
+      source:'ct-actual-groove-anchor-v31-98',
       x0, x1, y0, y1, h,
-      zone:{x:x0, y:y0, w:Math.max(1, x1-x0), h:Math.max(1, y1-y0), startRatio:ctStartRatio, endRatio:ctEndRatio, widthRatio:ctEndRatio-ctStartRatio, topThirdY:Math.round(topThirdY), topThirdPadding:topThirdPadding, yLimitedByTopThird:false, coordinateSystem:'multi-anchor-wide-c-locator-60x18mm', qrSide:qSide, stripCenterX, cExpectedAbsY, tExpectedAbsY, bandHalf, locatorY0, locatorY1, pxPerMm, cassetteMm:CASSETTE_L_MM, cassetteWidthMm:CASSETTE_W_MM, grooveTopMm:GROOVE_TOP_MM, grooveHeightMm:GROOVE_H_MM, grooveWidthMm:GROOVE_W_MM, stripTopMm:STRIP_TOP_MM, stripHeightMm:STRIP_H_MM, stripWidthMm:STRIP_W_MM, ctSafeTopMm:CT_SAFE_TOP_MM, ctSafeBottomMm:CT_SAFE_BOTTOM_MM, cSearchTopMm:C_SEARCH_TOP_MM, cSearchBottomMm:C_SEARCH_BOTTOM_MM, tMinGapMm:T_MIN_GAP_MM, tMaxGapMm:T_MAX_GAP_MM, tFwhmMinMm:T_FWHM_MIN_MM, tFwhmMaxMm:T_FWHM_MAX_MM, tRelativeCRatio:T_RELATIVE_C_RATIO, ctGapMm, cLocatorAbsY:cCont?cCont.absY:null, cLocatorHasColor:cColorOk, cLocatedMm, cPriorDeltaMm, cLocatorConfidence, analysisTopMm:ANALYSIS_TOP_MM, analysisBottomMm:ANALYSIS_BOTTOM_MM},
+      zone:{x:x0, y:y0, w:Math.max(1, x1-x0), h:Math.max(1, y1-y0), startRatio:ctStartRatio, endRatio:ctEndRatio, widthRatio:ctEndRatio-ctStartRatio, topThirdY:Math.round(topThirdY), topThirdPadding:topThirdPadding, yLimitedByTopThird:false, coordinateSystem:'multi-anchor-wide-c-locator-60x18mm', qrSide:qSide, stripCenterX, cExpectedAbsY, tExpectedAbsY, bandHalf, locatorY0, locatorY1, pxPerMm, cassetteMm:CASSETTE_L_MM, cassetteWidthMm:CASSETTE_W_MM, grooveTopMm:GROOVE_TOP_MM, grooveHeightMm:GROOVE_H_MM, grooveWidthMm:GROOVE_W_MM, stripTopMm:STRIP_TOP_MM, stripHeightMm:STRIP_H_MM, stripWidthMm:STRIP_W_MM, ctSafeTopMm:CT_SAFE_TOP_MM, ctSafeBottomMm:CT_SAFE_BOTTOM_MM, cSearchTopMm:C_SEARCH_TOP_MM, cSearchBottomMm:C_SEARCH_BOTTOM_MM, tMinGapMm:T_MIN_GAP_MM, tMaxGapMm:T_MAX_GAP_MM, tFwhmMinMm:T_FWHM_MIN_MM, tFwhmMaxMm:T_FWHM_MAX_MM, tRelativeCRatio:T_RELATIVE_C_RATIO, ctGapMm, cLocatorAbsY:cCont?cCont.absY:null, cLocatorHasColor:cColorOk, cLocatedMm, cPriorDeltaMm, cLocatorConfidence, analysisTopMm:ANALYSIS_TOP_MM, analysisBottomMm:ANALYSIS_BOTTOM_MM,
+        grooveAnchorUsed:!!(actualGroove&&actualGroove.pass),
+        grooveConfidence:actualGroove?actualGroove.confidence:0,
+        grooveLeftPx:actualGroove&&actualGroove.pass?actualGroove.left:null,
+        grooveRightPx:actualGroove&&actualGroove.pass?actualGroove.right:null,
+        grooveTopPx:actualGroove&&actualGroove.pass?actualGroove.top:null,
+        grooveBottomPx:actualGroove&&actualGroove.pass?actualGroove.bottom:null},
       raw, profile:positive, baseline:bg, rawBaseline, rawMedian, rawMax, pinkMax, darkMax, combinedMax, selectedMode, lumBackground, lumMedian, mean:stat.mean, std:stat.std,
       maxScore, threshold, tThreshold, tcRatio, cStrength, tStrength, tRelativeThreshold, tRelativeRatio:T_RELATIVE_C_RATIO, tWeakHorizontalEvidence,
       cLocatedMm, cPriorDeltaMm, cLocatorConfidence,
+      actualGroove,
       tFwhmMm:tFwhm.widthMm, tFwhmPx:tFwhm.widthPx, tFwhmValid:tFwhm.valid, tFwhmOk, tFwhmMinMm:T_FWHM_MIN_MM, tFwhmMaxMm:T_FWHM_MAX_MM, tFwhmPeak:tFwhm.peak, tFwhmBaseline:tFwhm.baseline, tFwhmHalfLevel:tFwhm.halfLevel,
       candidateFloor, minSep,
       cRange, tRange,
