@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v32.01-outerY-locked';
+  const VERSION = 'v32.02-ct-crossvalidated';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -1970,7 +1970,21 @@
     }
     cLocatorConfidence = Math.max(0,Math.min(100,cLocatorConfidence));
 
-    const cDetected = !!(cCont && cCont.ok && cGeometryOk && cColorOk);
+    // v32.02: absolute physical guards are calculated BEFORE final C/T decisions.
+    // OUTER TOP = 0 mm is the absolute Y reference.
+    const cAbsoluteMm = cCont ? (cCont.absY / Math.max(0.0001, outerPxY)) : -1;
+    const tAbsoluteMm = tCont ? (tCont.absY / Math.max(0.0001, outerPxY)) : -1;
+    const cAbsolutePositionOk = !!(cCont && cAbsoluteMm >= 30.0 && cAbsoluteMm <= 34.5);
+    const tAbsolutePositionOk = !!(tCont && tAbsoluteMm >= 35.0 && tAbsoluteMm <= 39.5);
+
+    // C must satisfy image evidence AND the confirmed physical C region.
+    const cDetected = !!(
+      cCont &&
+      cCont.ok &&
+      cGeometryOk &&
+      cColorOk &&
+      cAbsolutePositionOk
+    );
 
     const tGeometryOk = !!tCont && tCont.localY >= dynTRange.start && tCont.localY <= dynTRange.end;
     const ctGapPx = (cCont && tCont) ? (tCont.absY - cCont.absY) : -1;
@@ -1978,11 +1992,25 @@
     const refinedSeparationOk = !!(cCont && tCont &&
       ctGapMm >= T_MIN_GAP_MM && ctGapMm <= T_MAX_GAP_MM);
 
-    // Independent absolute-position guards from OUTER TOP.
-    const cAbsoluteMm = cCont ? (cCont.absY / Math.max(0.0001, outerPxY)) : -1;
-    const tAbsoluteMm = tCont ? (tCont.absY / Math.max(0.0001, outerPxY)) : -1;
-    const cAbsolutePositionOk = !!(cCont && cAbsoluteMm >= 30.0 && cAbsoluteMm <= 34.5);
-    const tAbsolutePositionOk = !!(tCont && tAbsoluteMm >= 35.0 && tAbsoluteMm <= 39.5);
+    // v32.02: Groove is NOT allowed to move Y. It only cross-checks OUTER-derived Y.
+    // Check only when the groove detector itself passed. If groove detection is unavailable,
+    // do not reject a valid card merely because the validator has no evidence.
+    const grooveYConsistencyAvailable = !!(actualGroove && actualGroove.pass);
+    const grooveTopMmObserved = grooveYConsistencyAvailable ?
+      (actualGroove.top / Math.max(0.0001, outerPxY)) : -1;
+    const grooveBottomMmObserved = grooveYConsistencyAvailable ?
+      (actualGroove.bottom / Math.max(0.0001, outerPxY)) : -1;
+    const grooveTopErrorMm = grooveYConsistencyAvailable ? grooveTopMmObserved - 25.0 : 0;
+    const grooveBottomErrorMm = grooveYConsistencyAvailable ? grooveBottomMmObserved - 44.0 : 0;
+
+    // Bevel edges are not perfectly sharp, so use a deliberately tolerant consistency gate.
+    // A >3.5 mm disagreement means OUTER and trusted inner geometry do not agree enough
+    // to issue Positive/Negative safely.
+    const grooveYConsistencyOk = !grooveYConsistencyAvailable || (
+      Math.abs(grooveTopErrorMm) <= 3.5 &&
+      Math.abs(grooveBottomErrorMm) <= 3.5
+    );
+    const geometryReliableForCT = grooveYConsistencyOk;
 
     const cStrength = cCont ? bandStrength(cCont.localY) : 0;
     const tStrength = tCont ? bandStrength(tCont.localY) : 0;
@@ -1990,17 +2018,19 @@
     const tcStrengthRatio = cStrength > 0 ? (tStrength / cStrength) : 0;
     const tRelativeOk = !!(cDetected && tCont && cStrength > 0 && tStrength >= tRelativeThreshold);
 
-    // 只保留非常寬鬆的「像一條水平線」保護，避免純大面積陰影。
-    // 這不是固定顏色門檻；真正 Positive/Negative 的主要門檻是 T/C >= 10%。
-    const tWeakHorizontalEvidence = !!tCont && (
+    // v32.02: T must satisfy BOTH weak horizontal continuity AND weak chromatic evidence.
+    // This blocks gray slot/shadow edges while retaining faint pink positives.
+    const tHorizontalEvidence = !!tCont && (
       (tCont.run || 0) >= Math.max(2, Math.floor((tCont.minRun || 2) * 0.35)) ||
-      (tCont.ratio || 0) >= 0.040 ||
-      (tCont.redRatio || 0) >= 0.006 ||
-      (tCont.redAvg || 0) >= 0.25 ||
-      (tCont.contrastAvg || 0) >= 0.10
+      (tCont.ratio || 0) >= 0.035
     );
+    const tWeakChromaticEvidence = !!tCont && (
+      (tCont.redRatio || 0) >= 0.004 ||
+      (tCont.redAvg || 0) >= 0.20 ||
+      (tCont.contrastAvg || 0) >= 0.08
+    );
+    const tWeakHorizontalEvidence = tHorizontalEvidence && tWeakChromaticEvidence;
 
-    // v31.99: prevent narrow gray slot/shadow peaks from becoming Positive.
     const tDetected = !!(
       cDetected &&
       tCont &&
@@ -2009,10 +2039,11 @@
       tAbsolutePositionOk &&
       tRelativeOk &&
       tFwhmOk &&
-      tWeakHorizontalEvidence
+      tHorizontalEvidence &&
+      tWeakChromaticEvidence
     );
 
-    const tColorOk = tWeakHorizontalEvidence; // 保留既有 debug 欄位相容性
+    const tColorOk = tWeakChromaticEvidence;
     const cSelected = !!cCont;
     const tSelected = !!tCont;
     const selected = [cQ,tQ].filter((q,i)=>i===0?cSelected:tSelected);
@@ -2028,19 +2059,29 @@
 
     cQ.detected = cDetected;
     tQ.detected = tDetected;
-    cQ.reject = !cCont ? 'no-horizontal-line' : !cGeometryOk ? 'outside-wide-c-locator' : !cCont.ok ? 'no-red-continuity' : !cColorOk ? 'weak-color' : 'PASS';
+    cQ.reject = !cCont ? 'no-horizontal-line' :
+      !cGeometryOk ? 'outside-wide-c-locator' :
+      !cCont.ok ? 'no-red-continuity' :
+      !cColorOk ? 'weak-color' :
+      !cAbsolutePositionOk ? 'c-outside-30.0-34.5mm' :
+      'PASS';
+
     tQ.reject = !tCont ? 'no-t-candidate' :
-      !tGeometryOk ? 'outside-c-plus-3-6mm' :
-      !refinedSeparationOk ? 't-gap-outside-3-6mm' :
+      !tGeometryOk ? 'outside-c-plus-3.5-6.5mm' :
+      !refinedSeparationOk ? 't-gap-outside-3.5-6.5mm' :
+      !tAbsolutePositionOk ? 't-outside-35.0-39.5mm' :
       !tRelativeOk ? 'below-10pct-of-c' :
       !tFwhm.valid ? 'fwhm-no-peak' :
       !tFwhmOk ? ('fwhm-outside-' + T_FWHM_MIN_MM.toFixed(2) + '-' + T_FWHM_MAX_MM.toFixed(2) + 'mm') :
-      !tWeakHorizontalEvidence ? 'no-chromatic-horizontal-evidence' :
+      !tHorizontalEvidence ? 'no-horizontal-evidence' :
+      !tWeakChromaticEvidence ? 'no-weak-chromatic-evidence' :
       'PASS';
 
     let result = 'Invalid';
-    if (cDetected && tDetected) result = 'Positive';
-    else if (cDetected && !tDetected) result = 'Negative';
+    if (geometryReliableForCT) {
+      if (cDetected && tDetected) result = 'Positive';
+      else if (cDetected && !tDetected) result = 'Negative';
+    }
 
     const cRange = {start:cRefineRange.start, end:cRefineRange.end};
     const tRange = {start:tRefineRange.start, end:tRefineRange.end};
@@ -2050,10 +2091,14 @@
     );
 
     return {
-      source:'ct-outerY-physical-v32-01',
+      source:'ct-outerY-crossvalidated-v32-02',
       x0, x1, y0, y1, h,
-      zone:{x:x0, y:y0, w:Math.max(1, x1-x0), h:Math.max(1, y1-y0), startRatio:ctStartRatio, endRatio:ctEndRatio, widthRatio:ctEndRatio-ctStartRatio, topThirdY:Math.round(topThirdY), topThirdPadding:topThirdPadding, yLimitedByTopThird:false, coordinateSystem:'outerY70mm-grooveX-strip29-41-v3201', qrSide:qSide, stripCenterX, cExpectedAbsY, tExpectedAbsY, bandHalf, locatorY0, locatorY1, pxPerMm, cassetteMm:CASSETTE_L_MM, cassetteWidthMm:CASSETTE_W_MM, grooveTopMm:GROOVE_TOP_MM, grooveHeightMm:GROOVE_H_MM, grooveWidthMm:GROOVE_W_MM, stripTopMm:STRIP_TOP_MM, stripHeightMm:STRIP_H_MM, stripWidthMm:STRIP_W_MM, ctSafeTopMm:CT_SAFE_TOP_MM, ctSafeBottomMm:CT_SAFE_BOTTOM_MM, cSearchTopMm:C_SEARCH_TOP_MM, cSearchBottomMm:C_SEARCH_BOTTOM_MM, tMinGapMm:T_MIN_GAP_MM, tMaxGapMm:T_MAX_GAP_MM, tFwhmMinMm:T_FWHM_MIN_MM, tFwhmMaxMm:T_FWHM_MAX_MM, tRelativeCRatio:T_RELATIVE_C_RATIO, ctGapMm, cLocatorAbsY:cCont?cCont.absY:null, cLocatorHasColor:cColorOk, cLocatedMm, cPriorDeltaMm, cLocatorConfidence,
+      zone:{x:x0, y:y0, w:Math.max(1, x1-x0), h:Math.max(1, y1-y0), startRatio:ctStartRatio, endRatio:ctEndRatio, widthRatio:ctEndRatio-ctStartRatio, topThirdY:Math.round(topThirdY), topThirdPadding:topThirdPadding, yLimitedByTopThird:false, coordinateSystem:'outerY70mm-grooveY-validator-v3202', qrSide:qSide, stripCenterX, cExpectedAbsY, tExpectedAbsY, bandHalf, locatorY0, locatorY1, pxPerMm, cassetteMm:CASSETTE_L_MM, cassetteWidthMm:CASSETTE_W_MM, grooveTopMm:GROOVE_TOP_MM, grooveHeightMm:GROOVE_H_MM, grooveWidthMm:GROOVE_W_MM, stripTopMm:STRIP_TOP_MM, stripHeightMm:STRIP_H_MM, stripWidthMm:STRIP_W_MM, ctSafeTopMm:CT_SAFE_TOP_MM, ctSafeBottomMm:CT_SAFE_BOTTOM_MM, cSearchTopMm:C_SEARCH_TOP_MM, cSearchBottomMm:C_SEARCH_BOTTOM_MM, tMinGapMm:T_MIN_GAP_MM, tMaxGapMm:T_MAX_GAP_MM, tFwhmMinMm:T_FWHM_MIN_MM, tFwhmMaxMm:T_FWHM_MAX_MM, tRelativeCRatio:T_RELATIVE_C_RATIO, ctGapMm, cLocatorAbsY:cCont?cCont.absY:null, cLocatorHasColor:cColorOk, cLocatedMm, cPriorDeltaMm, cLocatorConfidence,
         cAbsoluteMm, tAbsoluteMm, cAbsolutePositionOk, tAbsolutePositionOk,
+        tHorizontalEvidence, tWeakChromaticEvidence,
+        grooveYConsistencyAvailable, grooveTopMmObserved, grooveBottomMmObserved,
+        grooveTopErrorMm, grooveBottomErrorMm, grooveYConsistencyOk,
+        geometryReliableForCT,
         absoluteYAnchor:'OUTER-TOP-0MM', analysisTopMm:ANALYSIS_TOP_MM, analysisBottomMm:ANALYSIS_BOTTOM_MM,
         grooveAnchorUsed:!!(actualGroove&&actualGroove.pass),
         grooveConfidence:actualGroove?actualGroove.confidence:0,
