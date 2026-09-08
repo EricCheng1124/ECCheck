@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = 'v32.02-ct-crossvalidated';
+  const VERSION = 'v32.04-rotation-topology-qr-corners';
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
@@ -90,10 +90,13 @@
     const bottomW = dist(ordered[3], ordered[2]);
     const leftH = dist(ordered[0], ordered[3]);
     const rightH = dist(ordered[1], ordered[2]);
-    let outW = Math.round(Math.max(topW, bottomW));
-    let outH = Math.round(Math.max(leftH, rightH));
-    if (outW > outH) { const t = outW; outW = outH; outH = t; }
-    outW = clamp(outW, 90, 900); outH = clamp(outH, 180, 1500);
+    // v32.03 ROTATION-INVARIANT NORMALIZATION:
+    // Every accepted 70 x 20 mm cassette is rectified to the SAME canvas.
+    // Do not derive output W/H from screen-space side lengths; those vary with
+    // rotation/perspective and previously changed the physical C/T coordinate map.
+    const PX_PER_MM = 20;
+    const outW = 20 * PX_PER_MM;   // 400 px = 20 mm
+    const outH = 70 * PX_PER_MM;   // 1400 px = 70 mm
     const src = cv.imread(srcCanvas);
     const srcTri = cv.matFromArray(4, 1, cv.CV_32FC2, [ordered[0].x,ordered[0].y, ordered[1].x,ordered[1].y, ordered[2].x,ordered[2].y, ordered[3].x,ordered[3].y]);
     const dstTri = cv.matFromArray(4, 1, cv.CV_32FC2, [0,0, outW-1,0, outW-1,outH-1, 0,outH-1]);
@@ -105,57 +108,52 @@
   }
 
   function orientPointsWithQr(pts, qrCenter, qrPoints) {
-    const p = pts.slice();
-    if (p.length !== 4) return { points:orderPoints(p), applied:false, rotated180:false };
+    const raw=pts.slice();
+    if(raw.length!==4) return {points:orderPoints(raw),applied:false,rotated180:false,orientationReliable:false,orientationSource:'invalid-outer'};
 
-    // Find the two short ends from the OUTER frame itself. This gives the precise
-    // cassette long-axis angle independent of the QR sticker position.
-    const pairs=[];
-    for(let i=0;i<4;i++) for(let j=i+1;j<4;j++) pairs.push({i,j,d:dist(p[i],p[j])});
-    pairs.sort((a,b)=>a.d-b.d);
-    const endA=pairs[0];
-    const endB=pairs.find(q=>q.i!==endA.i&&q.i!==endA.j&&q.j!==endA.i&&q.j!==endA.j);
-    if(!endB) return {points:orderPoints(p),applied:false,rotated180:false};
-    const centerOf=pair=>({x:(p[pair.i].x+p[pair.j].x)/2,y:(p[pair.i].y+p[pair.j].y)/2});
-    const cA=centerOf(endA), cB=centerOf(endB);
+    // v32.04: use quadrilateral topology, not globally shortest point-pairs.
+    const cyc=orderPoints(raw);
+    const edges=[
+      {a:0,b:1,len:dist(cyc[0],cyc[1])},{a:1,b:2,len:dist(cyc[1],cyc[2])},
+      {a:2,b:3,len:dist(cyc[2],cyc[3])},{a:3,b:0,len:dist(cyc[3],cyc[0])}
+    ];
+    const famA=(edges[0].len+edges[2].len)*0.5;
+    const famB=(edges[1].len+edges[3].len)*0.5;
+    const ends=famA<=famB?[edges[0],edges[2]]:[edges[1],edges[3]];
+    const center=e=>({x:(cyc[e.a].x+cyc[e.b].x)*0.5,y:(cyc[e.a].y+cyc[e.b].y)*0.5});
+    let topEdge=ends[0],bottomEdge=ends[1],topCenter=center(ends[0]),bottomCenter=center(ends[1]);
 
-    // QR is manually positioned, so QR CENTER is not used for precise geometry.
-    // QR CORNER ORIENTATION is used only to resolve the 180-degree ambiguity.
-    // Decoder corner order gives a QR local down vector (top edge -> bottom edge).
+    // QR CENTER never decides TOP/BOTTOM. Only QR corner orientation resolves 180°.
     let qdx=0,qdy=0,haveQrDir=false;
-    if(Array.isArray(qrPoints) && qrPoints.length>=4){
+    if(Array.isArray(qrPoints)&&qrPoints.length>=4){
       const q=qrPoints.slice(0,4);
       qdx=((q[3].x-q[0].x)+(q[2].x-q[1].x))*0.5;
       qdy=((q[3].y-q[0].y)+(q[2].y-q[1].y))*0.5;
       const n=Math.hypot(qdx,qdy);
       if(n>3){qdx/=n;qdy/=n;haveQrDir=true;}
     }
-
-    let topPair=endA,bottomPair=endB;
-    let topCenter=cA,bottomCenter=cB;
     if(haveQrDir){
-      const abx=cB.x-cA.x, aby=cB.y-cA.y;
-      // Choose top->bottom outer direction that agrees with QR's decoded down direction.
-      if(abx*qdx + aby*qdy < 0){
-        topPair=endB; bottomPair=endA; topCenter=cB; bottomCenter=cA;
-      }
-    } else if(qrCenter){
-      // Fallback only when corner orientation is unavailable.
-      if(dist(qrCenter,cB) < dist(qrCenter,cA)){
-        topPair=endB; bottomPair=endA; topCenter=cB; bottomCenter=cA;
+      const abx=bottomCenter.x-topCenter.x,aby=bottomCenter.y-topCenter.y;
+      if(abx*qdx+aby*qdy<0){
+        [topEdge,bottomEdge]=[bottomEdge,topEdge];
+        [topCenter,bottomCenter]=[bottomCenter,topCenter];
       }
     }
+    // No qrCenter fallback. Unresolved physical direction is rejected later.
 
-    const vx=bottomCenter.x-topCenter.x, vy=bottomCenter.y-topCenter.y;
+    const vx=bottomCenter.x-topCenter.x,vy=bottomCenter.y-topCenter.y;
     const right={x:vy,y:-vx};
-    const projection=pt=>pt.x*right.x+pt.y*right.y;
-    const sortLR=pair=>[p[pair.i],p[pair.j]].sort((a,b)=>projection(a)-projection(b));
-    const topLR=sortLR(topPair), bottomLR=sortLR(bottomPair);
+    const proj=p=>p.x*right.x+p.y*right.y;
+    const lr=e=>[cyc[e.a],cyc[e.b]].sort((a,b)=>proj(a)-proj(b));
+    const t=lr(topEdge),b=lr(bottomEdge);
     const axisAngle=Math.atan2(vy,vx)*180/Math.PI;
     return {
-      points:[topLR[0],topLR[1],bottomLR[1],bottomLR[0]],
-      applied:true, rotated180:false, axisAngle, correctionAngle:90-axisAngle,
-      topCenter,bottomCenter, orientationSource:haveQrDir?'qr-corner-orientation':'qr-center-fallback'
+      points:[t[0],t[1],b[1],b[0]],applied:true,rotated180:false,
+      axisAngle,correctionAngle:90-axisAngle,topCenter,bottomCenter,
+      orientationReliable:haveQrDir,
+      orientationSource:haveQrDir?'qr-corner-orientation':'outer-topology-180-unresolved',
+      topologySource:'opposite-edge-families',
+      oppositeFamilyLengths:{familyA:famA,familyB:famB}
     };
   }
 
@@ -1395,8 +1393,8 @@
     const W = cropCanvas.width;
     const H = cropCanvas.height;
 
-    // v31.98: use the ACTUAL observed groove as the primary local coordinate system.
-    // Outer-derived 70x20 coordinates are fallback only.
+    // v32.03: OUTER is the absolute 70x20 physical coordinate system.
+    // Actual groove may align X / validate geometry, but never redefines absolute Y.
     const actualGroove = locateActualGroove(cropCanvas);
 
     const outerPxX = W / 20.0;
@@ -2091,15 +2089,18 @@
     );
 
     return {
-      source:'ct-outerY-crossvalidated-v32-02',
+      source:'ct-rotation-topology-qr-corners-v32-04',
       x0, x1, y0, y1, h,
-      zone:{x:x0, y:y0, w:Math.max(1, x1-x0), h:Math.max(1, y1-y0), startRatio:ctStartRatio, endRatio:ctEndRatio, widthRatio:ctEndRatio-ctStartRatio, topThirdY:Math.round(topThirdY), topThirdPadding:topThirdPadding, yLimitedByTopThird:false, coordinateSystem:'outerY70mm-grooveY-validator-v3202', qrSide:qSide, stripCenterX, cExpectedAbsY, tExpectedAbsY, bandHalf, locatorY0, locatorY1, pxPerMm, cassetteMm:CASSETTE_L_MM, cassetteWidthMm:CASSETTE_W_MM, grooveTopMm:GROOVE_TOP_MM, grooveHeightMm:GROOVE_H_MM, grooveWidthMm:GROOVE_W_MM, stripTopMm:STRIP_TOP_MM, stripHeightMm:STRIP_H_MM, stripWidthMm:STRIP_W_MM, ctSafeTopMm:CT_SAFE_TOP_MM, ctSafeBottomMm:CT_SAFE_BOTTOM_MM, cSearchTopMm:C_SEARCH_TOP_MM, cSearchBottomMm:C_SEARCH_BOTTOM_MM, tMinGapMm:T_MIN_GAP_MM, tMaxGapMm:T_MAX_GAP_MM, tFwhmMinMm:T_FWHM_MIN_MM, tFwhmMaxMm:T_FWHM_MAX_MM, tRelativeCRatio:T_RELATIVE_C_RATIO, ctGapMm, cLocatorAbsY:cCont?cCont.absY:null, cLocatorHasColor:cColorOk, cLocatedMm, cPriorDeltaMm, cLocatorConfidence,
+      zone:{x:x0, y:y0, w:Math.max(1, x1-x0), h:Math.max(1, y1-y0), startRatio:ctStartRatio, endRatio:ctEndRatio, widthRatio:ctEndRatio-ctStartRatio, topThirdY:Math.round(topThirdY), topThirdPadding:topThirdPadding, yLimitedByTopThird:false, coordinateSystem:'fixed400x1400-outerY70mm-v3204', qrSide:qSide, stripCenterX, cExpectedAbsY, tExpectedAbsY, bandHalf, locatorY0, locatorY1, pxPerMm, cassetteMm:CASSETTE_L_MM, cassetteWidthMm:CASSETTE_W_MM, grooveTopMm:GROOVE_TOP_MM, grooveHeightMm:GROOVE_H_MM, grooveWidthMm:GROOVE_W_MM, stripTopMm:STRIP_TOP_MM, stripHeightMm:STRIP_H_MM, stripWidthMm:STRIP_W_MM, ctSafeTopMm:CT_SAFE_TOP_MM, ctSafeBottomMm:CT_SAFE_BOTTOM_MM, cSearchTopMm:C_SEARCH_TOP_MM, cSearchBottomMm:C_SEARCH_BOTTOM_MM, tMinGapMm:T_MIN_GAP_MM, tMaxGapMm:T_MAX_GAP_MM, tFwhmMinMm:T_FWHM_MIN_MM, tFwhmMaxMm:T_FWHM_MAX_MM, tRelativeCRatio:T_RELATIVE_C_RATIO, ctGapMm, cLocatorAbsY:cCont?cCont.absY:null, cLocatorHasColor:cColorOk, cLocatedMm, cPriorDeltaMm, cLocatorConfidence,
         cAbsoluteMm, tAbsoluteMm, cAbsolutePositionOk, tAbsolutePositionOk,
         tHorizontalEvidence, tWeakChromaticEvidence,
         grooveYConsistencyAvailable, grooveTopMmObserved, grooveBottomMmObserved,
         grooveTopErrorMm, grooveBottomErrorMm, grooveYConsistencyOk,
         geometryReliableForCT,
-        absoluteYAnchor:'OUTER-TOP-0MM', analysisTopMm:ANALYSIS_TOP_MM, analysisBottomMm:ANALYSIS_BOTTOM_MM,
+        absoluteYAnchor:'OUTER-TOP-0MM',
+        normalizedCanvasPx:{width:W,height:H,pxPerMmX:outerPxX,pxPerMmY:outerPxY},
+        rotationInvariantNormalization:(W===400 && H===1400),
+        analysisTopMm:ANALYSIS_TOP_MM, analysisBottomMm:ANALYSIS_BOTTOM_MM,
         grooveAnchorUsed:!!(actualGroove&&actualGroove.pass),
         grooveConfidence:actualGroove?actualGroove.confidence:0,
         grooveLeftPx:actualGroove&&actualGroove.pass?actualGroove.left:null,
@@ -3913,14 +3914,18 @@ function detectOuterFrame(canvas, cropCanvas, options) {
       const forceOkByFinalGate = bestOuterGeometryOk;
       const forceOkByStrongCandidate = false;
       const outerOnlyOk = bestOuterGeometryOk;
-      const bestOk = bestOuterGeometryOk;
-      const partialMessage = false;
+      // v32.04: no QR-center TOP fallback; unresolved 180° direction = Invalid.
+      const orientationReliable=!!(qrOrientation&&qrOrientation.orientationReliable);
+      const bestOk=bestOuterGeometryOk&&orientationReliable;
+      const partialMessage=false;
 
-      let failReason = '';
+      let failReason='';
       if(!bestOuterGeometryOk) {
         failReason='multi-anchor-consensus-fail-' + anchorVotes + '-of-3';
+      } else if(!orientationReliable) {
+        failReason='qr-corner-orientation-unavailable';
       } else {
-        failReason = anchorVotes===3 ? 'PASS-3-of-3' : 'PASS-2-of-3-FALLBACK';
+        failReason=anchorVotes===3?'PASS-3-of-3':'PASS-2-of-3-FALLBACK';
       }
 
 let dbg='';
@@ -3929,9 +3934,10 @@ dbg += '<b>Debug Summary</b><br>';
 if(best.qrPlaneGeometry){
   const qpg=best.qrPlaneGeometry;
   dbg += `<b>QR Perspective Reference: ${qpg.pass?'PASS':'LOW / FALLBACK ALLOWED'}</b><br>`;
-  dbg += `QR-plane ratio=${Number(qpg.ratio||0).toFixed(3)} / target=3.333 / orth=${Number(qpg.orth||0).toFixed(3)} / parallel=${Number(qpg.tbParallel||0).toFixed(3)},${Number(qpg.lrParallel||0).toFixed(3)}<br>`;
+  dbg += `QR-plane ratio=${Number(qpg.ratio||0).toFixed(3)} / target=3.500 / orth=${Number(qpg.orth||0).toFixed(3)} / parallel=${Number(qpg.tbParallel||0).toFixed(3)},${Number(qpg.lrParallel||0).toFixed(3)}<br>`;
 }
 dbg += `<b>Geometry Consensus: ${geometryConfidence} / ${anchorVotes} of 3</b><br>`;
+dbg += `<b>Rotation Orientation: ${qrOrientation.orientationReliable?'PASS':'FAIL'}</b> / Source=${qrOrientation.orientationSource} / Topology=${qrOrientation.topologySource||'-'}<br>`;
 dbg += `Anchor A OUTER=${outerAnchorPass?'PASS':'FAIL'} / Anchor B QR=${qrAnchorPass?'PASS':'LOW'} / Anchor C INNER=${innerAnchorPass?'PASS':'FAIL'}<br>`;
 if(anchorVotes===2 && !qrAnchorPass){
   dbg += '<b>Fallback Mode: QR perspective LOW; continuing with OUTER + INNER</b><br>';
@@ -3972,7 +3978,7 @@ if (best && best.templateImageSupport) dbg += 'QR Template Image Support: edge='
 if (best && best.edgeSnap && best.edgeSnap.applied) {
   dbg += 'Edge Snap: APPLIED / L ' + best.edgeSnap.oldL.toFixed(1) + '→' + best.edgeSnap.newL.toFixed(1) + ' / W ' + best.edgeSnap.oldW.toFixed(1) + '→' + best.edgeSnap.newW.toFixed(1) + '<br>';
   if (best.edgeSnap.hard70x20) {
-    dbg += `<b>70x20 HARD Gate: PASS / ratio=${Number(best.edgeSnap.physicalRatio||0).toFixed(3)} / allowed=${Number(best.edgeSnap.physicalRatioMin||0).toFixed(2)}–${Number(best.edgeSnap.physicalRatioMax||0).toFixed(2)} / target=3.333</b><br>`;
+    dbg += `<b>70x20 HARD Gate: PASS / ratio=${Number(best.edgeSnap.physicalRatio||0).toFixed(3)} / allowed=${Number(best.edgeSnap.physicalRatioMin||0).toFixed(2)}–${Number(best.edgeSnap.physicalRatioMax||0).toFixed(2)} / target=3.500</b><br>`;
     dbg += `Perspective Sides: top=${Number(best.edgeSnap.topPx||0).toFixed(1)} / bottom=${Number(best.edgeSnap.bottomPx||0).toFixed(1)} / left=${Number(best.edgeSnap.leftPx||0).toFixed(1)} / right=${Number(best.edgeSnap.rightPx||0).toFixed(1)} px<br>`;
   }
   if (best.edgeSnap.outerArchitecture) {
