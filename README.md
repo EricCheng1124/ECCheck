@@ -1,3 +1,17 @@
+# ASAP Check v32.06
+
+## QR corner normalization / orientation trust
+- Native BarcodeDetector cornerPoints are normalized to geometric TL->TR->BR->BL for geometry only.
+- Native corners are NOT trusted as QR logical orientation, avoiding browser/device corner-order ambiguity.
+- jsQR logical corners remain TL->TR->BR->BL by finder-pattern semantics and are the only formal QR orientation source.
+- If trusted logical QR orientation is unavailable, formal rotation classification returns Invalid instead of guessing.
+- Multi-card duplicate handling continues to prefer jsQR geometry over native geometry.
+- v32.05 rotation gates, fixed 400x1400 warp, 70x20 geometry and all C/T thresholds are unchanged.
+
+# ASAP Check v32.05
+
+Rotation reinforcement: QR-axis alignment, mandatory QR-plane 70:20 validation, and post-warp groove 25..44 mm validation. QR center remains excluded from TOP/BOTTOM and C/T coordinates. Existing CT thresholds are unchanged.
+
 # ASAP Check v32.04
 
 ## Rotation fixes

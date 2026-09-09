@@ -81,7 +81,7 @@
   };
 
   // v31.71: multi-card extension built directly on the stable v31.70 single-card core.
-  const BUILD_VERSION = 'v32.04';
+  const BUILD_VERSION = 'v32.06';
   const MULTI_MAX_CARDS = 8;
 
   function unlock() {
@@ -522,6 +522,19 @@
     return null;
   }
 
+  function normalizeQrCornersTLTRBRBL(points) {
+    const p=(points||[]).slice(0,4).map(v=>({x:Number(v.x),y:Number(v.y)}));
+    if(p.length!==4 || p.some(v=>!Number.isFinite(v.x)||!Number.isFinite(v.y))) return [];
+    const c={x:p.reduce((s,v)=>s+v.x,0)/4,y:p.reduce((s,v)=>s+v.y,0)/4};
+    const cyc=p.slice().sort((u,v)=>Math.atan2(u.y-c.y,u.x-c.x)-Math.atan2(v.y-c.y,v.x-c.x));
+    let k=0,best=Infinity;
+    cyc.forEach((v,i)=>{const score=v.x+v.y;if(score<best){best=score;k=i;}});
+    const q=[...cyc.slice(k),...cyc.slice(0,k)];
+    // Ensure TL,TR,BR,BL winding in image coordinates.
+    if(q[1].x<q[3].x) return [q[0],q[3],q[2],q[1]];
+    return q;
+  }
+
   function qrGeometryFromJsQr(code) {
     if (!code || !code.location) return null;
     const keys = ['topLeftCorner', 'topRightCorner', 'bottomRightCorner', 'bottomLeftCorner'];
@@ -531,6 +544,9 @@
     if (!points.length) return null;
     return {
       points,
+      orientationPoints: points.slice(),
+      orientationTrusted: points.length===4,
+      cornerOrder: 'jsqr-logical-TL-TR-BR-BL',
       center: {
         x: points.reduce((s, p) => s + p.x, 0) / points.length,
         y: points.reduce((s, p) => s + p.y, 0) / points.length
@@ -540,12 +556,20 @@
 
   function qrGeometryFromNative(code) {
     if (!code) return null;
-    const points = Array.from(code.cornerPoints || []).map(p => ({ x: p.x, y: p.y }));
-    if (points.length) {
-      return { points, center: { x: points.reduce((s,p)=>s+p.x,0)/points.length, y: points.reduce((s,p)=>s+p.y,0)/points.length } };
+    const rawPoints=Array.from(code.cornerPoints||[]).map(p=>({x:p.x,y:p.y}));
+    const points=normalizeQrCornersTLTRBRBL(rawPoints);
+    if(points.length){
+      return {
+        points,
+        orientationPoints: [],
+        orientationTrusted: false,
+        cornerOrder: 'native-normalized-geometric-only',
+        center:{x:points.reduce((s,p)=>s+p.x,0)/points.length,y:points.reduce((s,p)=>s+p.y,0)/points.length}
+      };
     }
-    const b = code.boundingBox;
-    return b ? { points: [], center: { x: b.x + b.width/2, y: b.y + b.height/2 } } : null;
+    const b=code.boundingBox;
+    return b?{points:[],orientationPoints:[],orientationTrusted:false,cornerOrder:'native-box-only',
+      center:{x:b.x+b.width/2,y:b.y+b.height/2}}:null;
   }
 
   async function tryNativeQrDetector() {
@@ -661,7 +685,7 @@
         const keys=['topLeftCorner','topRightCorner','bottomRightCorner','bottomLeftCorner'];
         const points=keys.map(k=>code.location[k]).filter(Boolean).map(p=>({x:x+p.x*inv,y:y+p.y*inv}));
         if (!points.length) return null;
-        return {raw:code.data, geometry:{points,center:{x:points.reduce((a,p)=>a+p.x,0)/points.length,y:points.reduce((a,p)=>a+p.y,0)/points.length}}};
+        return {raw:code.data, geometry:{points,orientationPoints:points.slice(),orientationTrusted:points.length===4,cornerOrder:'jsqr-logical-TL-TR-BR-BL',center:{x:points.reduce((a,p)=>a+p.x,0)/points.length,y:points.reduce((a,p)=>a+p.y,0)/points.length}}};
       }
     }
     return null;
@@ -1180,7 +1204,7 @@ function renderCombinedDetectionView() {
     return Object.assign({}, DEFAULT_OPTIONS, {
       qrRequired: true,
       qrCenter: lastQrGeometry && lastQrGeometry.center ? lastQrGeometry.center : null,
-      qrPoints: lastQrGeometry && Array.isArray(lastQrGeometry.points) ? lastQrGeometry.points : []
+      qrPoints: lastQrGeometry && lastQrGeometry.orientationTrusted && Array.isArray(lastQrGeometry.orientationPoints) ? lastQrGeometry.orientationPoints : []
     });
   }
 
@@ -1483,7 +1507,7 @@ function renderCombinedDetectionView() {
         const r=window.AsapOuterDetector.detectOuterFrame(canvas,cropCanvas,Object.assign({},DEFAULT_OPTIONS,{
           qrRequired:true,
           qrCenter:qrCodes[0].geometry.center,
-          qrPoints:Array.isArray(qrCodes[0].geometry.points)?qrCodes[0].geometry.points:[],
+          qrPoints:qrCodes[0].geometry.orientationTrusted&&Array.isArray(qrCodes[0].geometry.orientationPoints)?qrCodes[0].geometry.orientationPoints:[],
           qrGeometryBackup:false
         }));
         setResult(r);
@@ -1503,7 +1527,7 @@ function renderCombinedDetectionView() {
         const opts=Object.assign({},DEFAULT_OPTIONS,{
           qrRequired:true,
           qrCenter:q.geometry.center,
-          qrPoints:Array.isArray(q.geometry.points)?q.geometry.points:[],
+          qrPoints:q.geometry.orientationTrusted&&Array.isArray(q.geometry.orientationPoints)?q.geometry.orientationPoints:[],
           otherQrCenters,
           qrGeometryBackup:false
         });
